@@ -481,142 +481,188 @@ export function MainLayout() {
   const mobileSidebarToggleLabel = sidebarOpen
     ? t('sidebar.toggle_collapse', { defaultValue: 'Close navigation' })
     : t('sidebar.toggle_expand', { defaultValue: 'Open navigation' });
+  const normalizedLocationPath =
+    location.pathname.length > 1 && location.pathname.endsWith('/')
+      ? location.pathname.slice(0, -1)
+      : location.pathname;
+  const currentPath = normalizedLocationPath === '/dashboard' ? '/' : normalizedLocationPath;
+  const activeNavItem =
+    [...navItems]
+      .sort((a, b) => b.path.length - a.path.length)
+      .find((item) =>
+        item.path === '/'
+          ? currentPath === '/'
+          : currentPath === item.path || currentPath.startsWith(`${item.path}/`)
+      ) ?? navItems[0];
+  const currentRouteLabel = activeNavItem?.label ?? fullBrandName;
 
   return (
     <div className={`app-shell ${sidebarCollapsed ? 'sidebar-is-collapsed' : ''}`}>
       <header className="main-header" ref={headerRef}>
-        <div className="mobile-sidebar-actions">
-          <Button
-            className="mobile-menu-btn"
-            variant="ghost"
-            size="sm"
-            onClick={() => setSidebarOpen((prev) => !prev)}
-            title={mobileSidebarToggleLabel}
-            aria-label={mobileSidebarToggleLabel}
-          >
-            {sidebarOpen ? headerIcons.close : headerIcons.menu}
-          </Button>
-        </div>
+        <div className="navbar">
+          <div className="navbar-left">
+            <button
+              type="button"
+              className="hamburger-container"
+              onClick={() => {
+                if (window.matchMedia('(max-width: 768px)').matches) {
+                  setSidebarOpen((prev) => !prev);
+                  return;
+                }
+                setSidebarCollapsed((prev) => !prev);
+              }}
+              title={mobileSidebarToggleLabel}
+              aria-label={mobileSidebarToggleLabel}
+            >
+              {sidebarOpen
+                ? headerIcons.close
+                : sidebarCollapsed
+                  ? headerIcons.chevronRight
+                  : headerIcons.chevronLeft}
+            </button>
 
-        <div className="header-actions floating-actions">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={handleRefreshAll}
-            title={t('header.refresh_all')}
-          >
-            {headerIcons.refresh}
-          </Button>
-          <div className={`language-menu ${languageMenuOpen ? 'open' : ''}`} ref={languageMenuRef}>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={toggleLanguageMenu}
-              title={t('language.switch')}
-              aria-label={t('language.switch')}
-              aria-haspopup="menu"
-              aria-expanded={languageMenuOpen}
+            <nav
+              className="app-breadcrumb"
+              aria-label={t('common.navigation', { defaultValue: 'Navigation' })}
             >
-              {headerIcons.language}
-            </Button>
-            {languageMenuOpen && (
-              <div
-                className="notification entering language-menu-popover"
-                role="menu"
-                aria-label={t('language.switch')}
-              >
-                {LANGUAGE_ORDER.map((lang) => (
-                  <button
-                    key={lang}
-                    type="button"
-                    className={`language-menu-option ${language === lang ? 'active' : ''}`}
-                    onClick={() => handleLanguageSelect(lang)}
-                    role="menuitemradio"
-                    aria-checked={language === lang}
-                  >
-                    <span>{t(LANGUAGE_LABEL_KEYS[lang])}</span>
-                    {language === lang ? <span className="language-menu-check">✓</span> : null}
-                  </button>
-                ))}
-              </div>
-            )}
+              <span className="breadcrumb-item">{currentRouteLabel}</span>
+            </nav>
           </div>
-          <div className={`theme-menu ${themeMenuOpen ? 'open' : ''}`} ref={themeMenuRef}>
+
+          <div className="navbar-right">
             <Button
               variant="ghost"
               size="sm"
-              onClick={toggleThemeMenu}
-              title={t('theme.switch')}
-              aria-label={t('theme.switch')}
-              aria-haspopup="menu"
-              aria-expanded={themeMenuOpen}
+              onClick={handleRefreshAll}
+              title={t('header.refresh_all')}
+              aria-label={t('header.refresh_all')}
             >
-              {theme === 'auto'
-                ? headerIcons.autoTheme
-                : theme === 'dark'
-                  ? headerIcons.moon
-                  : theme === 'white'
-                    ? headerIcons.whiteTheme
-                    : headerIcons.sun}
+              {headerIcons.refresh}
             </Button>
-            {themeMenuOpen && (
-              <div
-                className="notification entering theme-menu-popover"
-                role="menu"
-                aria-label={t('theme.switch')}
+
+            <div
+              className={`language-menu ${languageMenuOpen ? 'open' : ''}`}
+              ref={languageMenuRef}
+            >
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={toggleLanguageMenu}
+                title={t('language.switch')}
+                aria-label={t('language.switch')}
+                aria-haspopup="menu"
+                aria-expanded={languageMenuOpen}
               >
-                {THEME_CARDS.map((tc) => (
-                  <button
-                    key={tc.key}
-                    type="button"
-                    className={`theme-card ${theme === tc.key ? 'active' : ''}`}
-                    onClick={() => handleThemeSelect(tc.key)}
-                    role="menuitemradio"
-                    aria-checked={theme === tc.key}
-                  >
-                    <div
-                      className="theme-card-preview"
-                      style={{
-                        background: tc.colors.bg,
-                        border: `1px solid ${tc.colors.border}`,
-                      }}
+                {headerIcons.language}
+              </Button>
+              {languageMenuOpen && (
+                <div
+                  className="notification entering language-menu-popover"
+                  role="menu"
+                  aria-label={t('language.switch')}
+                >
+                  {LANGUAGE_ORDER.map((lang) => (
+                    <button
+                      key={lang}
+                      type="button"
+                      className={`language-menu-option ${language === lang ? 'active' : ''}`}
+                      onClick={() => handleLanguageSelect(lang)}
+                      role="menuitemradio"
+                      aria-checked={language === lang}
+                    >
+                      <span>{t(LANGUAGE_LABEL_KEYS[lang])}</span>
+                      {language === lang ? <span className="language-menu-check">✓</span> : null}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className={`theme-menu ${themeMenuOpen ? 'open' : ''}`} ref={themeMenuRef}>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={toggleThemeMenu}
+                title={t('theme.switch')}
+                aria-label={t('theme.switch')}
+                aria-haspopup="menu"
+                aria-expanded={themeMenuOpen}
+              >
+                {theme === 'auto'
+                  ? headerIcons.autoTheme
+                  : theme === 'dark'
+                    ? headerIcons.moon
+                    : theme === 'white'
+                      ? headerIcons.whiteTheme
+                      : headerIcons.sun}
+              </Button>
+              {themeMenuOpen && (
+                <div
+                  className="notification entering theme-menu-popover"
+                  role="menu"
+                  aria-label={t('theme.switch')}
+                >
+                  {THEME_CARDS.map((tc) => (
+                    <button
+                      key={tc.key}
+                      type="button"
+                      className={`theme-card ${theme === tc.key ? 'active' : ''}`}
+                      onClick={() => handleThemeSelect(tc.key)}
+                      role="menuitemradio"
+                      aria-checked={theme === tc.key}
                     >
                       <div
-                        className="theme-card-header"
+                        className="theme-card-preview"
                         style={{
-                          background: tc.colors.card,
-                          borderBottom: `1px solid ${tc.colors.border}`,
+                          background: tc.colors.bg,
+                          border: `1px solid ${tc.colors.border}`,
                         }}
-                      />
-                      <div className="theme-card-body">
+                      >
                         <div
-                          className="theme-card-sidebar"
+                          className="theme-card-header"
                           style={{
                             background: tc.colors.card,
-                            borderRight: `1px solid ${tc.colors.border}`,
+                            borderBottom: `1px solid ${tc.colors.border}`,
                           }}
                         />
-                        <div className="theme-card-content" style={{ background: tc.colors.bg }}>
+                        <div className="theme-card-body">
                           <div
-                            className="theme-card-line"
-                            style={{ background: tc.colors.textMuted }}
+                            className="theme-card-sidebar"
+                            style={{
+                              background: tc.colors.card,
+                              borderRight: `1px solid ${tc.colors.border}`,
+                            }}
                           />
-                          <div
-                            className="theme-card-line short"
-                            style={{ background: tc.colors.textMuted }}
-                          />
+                          <div className="theme-card-content" style={{ background: tc.colors.bg }}>
+                            <div
+                              className="theme-card-line"
+                              style={{ background: tc.colors.textMuted }}
+                            />
+                            <div
+                              className="theme-card-line short"
+                              style={{ background: tc.colors.textMuted }}
+                            />
+                          </div>
                         </div>
                       </div>
-                    </div>
-                    <span className="theme-card-label">{t(tc.labelKey)}</span>
-                  </button>
-                ))}
-              </div>
-            )}
+                      <span className="theme-card-label">{t(tc.labelKey)}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <button
+              type="button"
+              className="avatar-wrapper"
+              onClick={logout}
+              title={t('header.logout')}
+            >
+              <span className="navbar-avatar">{abbrBrandName.charAt(0) || 'C'}</span>
+              <span className="user-name">{abbrBrandName}</span>
+              <span className="avatar-action">{headerIcons.logout}</span>
+            </button>
           </div>
-          <Button variant="ghost" size="sm" onClick={logout} title={t('header.logout')}>
-            {headerIcons.logout}
-          </Button>
         </div>
       </header>
 
@@ -638,23 +684,9 @@ export function MainLayout() {
               <img src={INLINE_LOGO_JPEG} alt="CPAMC logo" className="sidebar-brand-logo" />
               {showSidebarLabels && <span className="sidebar-brand-title">{abbrBrandName}</span>}
             </div>
-            <button
-              type="button"
-              className="sidebar-collapse-inline"
-              onClick={() => setSidebarCollapsed((prev) => !prev)}
-              title={
-                sidebarCollapsed
-                  ? t('sidebar.expand', { defaultValue: '展开' })
-                  : t('sidebar.collapse', { defaultValue: '收起' })
-              }
-              aria-label={
-                sidebarCollapsed
-                  ? t('sidebar.expand', { defaultValue: '展开' })
-                  : t('sidebar.collapse', { defaultValue: '收起' })
-              }
-            >
-              {sidebarCollapsed ? headerIcons.chevronRight : headerIcons.chevronLeft}
-            </button>
+            {!showSidebarLabels && (
+              <span className="sidebar-brand-short">{abbrBrandName.charAt(0) || 'C'}</span>
+            )}
           </div>
 
           <div className="nav-section">
@@ -662,6 +694,7 @@ export function MainLayout() {
               <NavLink
                 key={item.path}
                 to={item.path}
+                end={item.path === '/'}
                 className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
                 onClick={() => setSidebarOpen(false)}
                 title={showSidebarLabels ? undefined : item.label}
