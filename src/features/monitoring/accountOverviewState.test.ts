@@ -181,6 +181,7 @@ describe('accountOverviewState', () => {
       customStartInput: '',
       deferredSearch: '',
       selectedAccount: 'all',
+      selectedApiKeyHash: 'all',
       selectedChannel: 'all',
       selectedModel: 'all',
       selectedProvider: 'all',
@@ -202,6 +203,7 @@ describe('accountOverviewState', () => {
       customStartInput: '',
       deferredSearch: '',
       selectedAccount: 'all',
+      selectedApiKeyHash: 'all',
       selectedChannel: 'all',
       selectedModel: 'all',
       selectedProvider: 'all',
@@ -213,6 +215,12 @@ describe('accountOverviewState', () => {
       shouldResetAccountOverviewPage(previous, {
         ...previous,
         deferredSearch: 'abc',
+      })
+    ).toBe(true);
+    expect(
+      shouldResetAccountOverviewPage(previous, {
+        ...previous,
+        selectedApiKeyHash: 'hash-a',
       })
     ).toBe(true);
     expect(

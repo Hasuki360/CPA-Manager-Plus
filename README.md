@@ -7,7 +7,8 @@ A single-file Web UI for **CLI Proxy API (CPA)** plus an optional **Usage Servic
 Since v6.10.0, CPA no longer includes built-in usage statistics. This project now supports usage analytics through a long-running Usage Service that consumes the CPA usage queue, persists request events to SQLite, and exposes panel-compatible usage APIs.
 
 - **CPA Main project**: https://github.com/router-for-me/CLIProxyAPI
-- **Recommended CPA version**: >= v6.10.8
+- **Recommended CPA version**: >= v7.1.0
+- **Minimum CPA version for HTTP usage queue**: >= v6.10.8
 
 ## Panel Preview
 
@@ -44,7 +45,7 @@ Request statistics require the CPA usage queue:
 - CPA Management must be enabled because the usage queue uses the same availability and Management Key as `/v0/management`.
 - Request monitoring requires CPA usage publishing: set `usage-statistics-enabled: true`, or submit `{ "value": true }` to `PUT /usage-statistics-enabled`. CPA Manager Plus enables this automatically when request monitoring is enabled during setup or configuration save.
 - Disabling CPAM request monitoring only stops the Usage Service collector. It does not automatically disable CPA usage publishing or clear the CPA usage queue. If CPA usage publishing remains enabled, re-enabling request monitoring within the queue retention window may collect events retained while the collector was stopped.
-- CPA `v6.10.8+` is preferred because it exposes the HTTP usage queue endpoint `/v0/management/usage-queue`, which can pass through regular HTTP reverse proxies.
+- CPA `v7.1.0+` is recommended for current panel capabilities. CPA `v6.10.8+` already exposes the HTTP usage queue endpoint `/v0/management/usage-queue`, which can pass through regular HTTP reverse proxies.
 - Older CPA versions use the RESP queue protocol. Usage Service falls back to RESP in `auto` mode when the HTTP queue endpoint is unavailable. RESP listens on the CPA API port, usually `8317`, and cannot pass through a regular HTTP reverse proxy.
 - CPA keeps queue items in memory for `redis-usage-queue-retention-seconds`, default `60` seconds and maximum `3600` seconds. Keep Usage Service running continuously.
 - Usage Service `pollIntervalMs` must be less than or equal to the CPA queue retention window converted to milliseconds. Saves are rejected when the collector would poll too slowly and risk expired queue items.

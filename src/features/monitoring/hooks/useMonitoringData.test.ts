@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildAccountRows,
+  buildApiKeyRows,
   buildApiKeyDisplayMap,
   buildMonitoringAuthMetaMap,
+  buildRangeFilteredRows,
   type MonitoringEventRow,
 } from './useMonitoringData';
 import { sha256Hex } from '@/utils/apiKeyHash';
@@ -93,5 +95,110 @@ describe('buildApiKeyDisplayMap', () => {
 
     expect(map.get(apiKeyHash)?.label).toBe('Team A');
     expect(map.get(apiKeyHash)?.masked).toMatch(/^sk/);
+  });
+
+  it('masks key-like aliases before display', () => {
+    const apiKey = 'sk-alias-test-key';
+    const apiKeyHash = sha256Hex(apiKey);
+    const map = buildApiKeyDisplayMap(
+      [apiKey],
+      [{ apiKeyHash, alias: 'sk-proj-secret-value-123456', updatedAtMs: 1 }]
+    );
+
+    expect(map.get(apiKeyHash)?.label).toMatch(/^sk/);
+    expect(map.get(apiKeyHash)?.label).toContain('**');
+    expect(map.get(apiKeyHash)?.label).not.toContain('secret-value');
+  });
+});
+
+describe('buildApiKeyRows', () => {
+  it('groups usage by client api key and aggregates model spend', () => {
+    const rows = buildApiKeyRows([
+      createMonitoringEventRow({
+        id: 'row-1',
+        apiKeyHash: 'hash-a',
+        apiKeyLabel: 'Team A',
+        apiKeyMasked: 'sk********aa',
+        model: 'gpt-4.1',
+        totalTokens: 18,
+        totalCost: 0.12,
+      }),
+      createMonitoringEventRow({
+        id: 'row-2',
+        apiKeyHash: 'hash-a',
+        apiKeyLabel: 'Team A',
+        apiKeyMasked: 'sk********aa',
+        model: 'gpt-4.1',
+        failed: true,
+        totalTokens: 7,
+        totalCost: 0.03,
+      }),
+    ]);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      apiKeyHash: 'hash-a',
+      apiKeyLabel: 'Team A',
+      totalCalls: 2,
+      successCalls: 1,
+      failureCalls: 1,
+      totalTokens: 25,
+      totalCost: 0.15,
+    });
+    expect(rows[0].models[0]).toMatchObject({
+      model: 'gpt-4.1',
+      totalCalls: 2,
+      failureCalls: 1,
+    });
+  });
+
+  it('keeps unknown client keys separated by source and channel', () => {
+    const rows = buildApiKeyRows([
+      createMonitoringEventRow({
+        id: 'unknown-1',
+        apiKeyHash: '',
+        apiKeyLabel: '-',
+        apiKeyMasked: '-',
+        sourceKey: 'source:a',
+        authIndex: 'auth-a',
+        channel: 'channel-a',
+      }),
+      createMonitoringEventRow({
+        id: 'unknown-2',
+        apiKeyHash: '',
+        apiKeyLabel: '-',
+        apiKeyMasked: '-',
+        sourceKey: 'source:b',
+        authIndex: 'auth-b',
+        channel: 'channel-b',
+      }),
+    ]);
+
+    expect(rows).toHaveLength(2);
+    expect(rows.every((row) => row.isUnknown)).toBe(true);
+  });
+});
+
+describe('buildRangeFilteredRows', () => {
+  it('matches a raw api key search through its hash without breaking text search', () => {
+    const rows = [
+      createMonitoringEventRow({
+        id: 'hash-a',
+        apiKeyHash: 'hash-a',
+        searchText: 'hash-a team a',
+      }),
+      createMonitoringEventRow({
+        id: 'hash-b',
+        apiKeyHash: 'hash-b',
+        searchText: 'hash-b team b',
+      }),
+    ];
+
+    expect(buildRangeFilteredRows(rows, 'all', null, 'team b', '').map((row) => row.id)).toEqual([
+      'hash-b',
+    ]);
+    expect(
+      buildRangeFilteredRows(rows, 'all', null, 'unmatched raw key', 'hash-a').map((row) => row.id)
+    ).toEqual(['hash-a']);
   });
 });

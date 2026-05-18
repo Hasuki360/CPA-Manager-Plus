@@ -7,7 +7,8 @@
 CPA 自 v6.10.0 起不再内置用量统计。当前方案通过常驻 Usage Service 消费 CPA 的用量队列，把请求级事件写入 SQLite，并向面板提供兼容的用量查询接口。
 
 - **CPA 主项目**: https://github.com/router-for-me/CLIProxyAPI
-- **推荐 CPA 版本**: >= v6.10.8
+- **推荐 CPA 版本**: >= v7.1.0
+- **HTTP 用量队列最低 CPA 版本**: >= v6.10.8
 
 ## 面板预览
 
@@ -44,7 +45,7 @@ CPA 自 v6.10.0 起不再内置用量统计。当前方案通过常驻 Usage Ser
 - CPA 必须启用 Management，因为用量队列与 `/v0/management` 使用相同的可用性条件和 Management Key。
 - 使用请求监控时，CPA 必须启用用量发布：配置 `usage-statistics-enabled: true`，或通过 `PUT /usage-statistics-enabled` 提交 `{ "value": true }`。CPA Manager Plus 初始化或保存启用请求监控时会自动打开该开关。
 - 关闭 CPAM 请求监控只会停止 Usage Service 采集器，不会自动关闭 CPA 用量发布或清空 CPA 用量队列。如果 CPA 用量发布仍开启，在队列保留时间内再次启用请求监控，可能会采集到关闭采集器期间保留的数据。
-- CPA `v6.10.8+` 推荐使用 HTTP 用量队列接口 `/v0/management/usage-queue`，可通过普通 HTTP 反代访问。
+- 推荐使用 CPA `v7.1.0+` 以匹配当前面板能力；CPA `v6.10.8+` 已提供 HTTP 用量队列接口 `/v0/management/usage-queue`，可通过普通 HTTP 反代访问。
 - 旧版 CPA 使用 RESP 队列协议。Usage Service 在 `auto` 模式下，如果 HTTP 队列接口不可用，会回退到 RESP。RESP 监听在 CPA API 端口，通常是 `8317`，不能通过普通 HTTP 反代转发。
 - CPA 在内存中保留队列项的时间由 `redis-usage-queue-retention-seconds` 控制，默认 `60` 秒，最大 `3600` 秒。Usage Service 应保持常驻运行。
 - Usage Service 的 `pollIntervalMs` 必须小于等于 CPA 队列保留时间换算后的毫秒值；否则服务会拒绝保存，避免空闲轮询过慢导致队列项过期。
