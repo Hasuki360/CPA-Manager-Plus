@@ -1,0 +1,189 @@
+import type { TFunction } from 'i18next';
+import { Button } from '@/components/ui/Button';
+import {
+  type CodexInspectionAction,
+  type CodexInspectionResultItem,
+  type CodexInspectionRunResult,
+} from '@/features/monitoring/codexInspection';
+import {
+  ACTION_FILTERS,
+  formatActionLabel,
+  formatCurrentStateLabel,
+  formatPercent,
+  type ActionFilter,
+} from '@/features/monitoring/model/codexInspectionPresentation';
+import { Panel } from '@/features/monitoring/components/CodexInspectionPanels';
+import styles from '../CodexInspectionPage.module.scss';
+
+type CodexInspectionResultsPanelProps = {
+  result: CodexInspectionRunResult | null;
+  filteredResults: CodexInspectionResultItem[];
+  actionableResults: CodexInspectionResultItem[];
+  pendingActionCount: number;
+  filterCounts: Record<ActionFilter, number>;
+  actionFilter: ActionFilter;
+  executing: boolean;
+  isInspectionInFlight: boolean;
+  t: TFunction;
+  onActionFilterChange: (filter: ActionFilter) => void;
+  onExecutePlanned: () => void;
+  onExecuteSingle: (item: CodexInspectionResultItem) => void;
+  filterLabel: (filter: ActionFilter) => string;
+};
+
+const actionToneClass: Record<CodexInspectionAction, string> = {
+  keep: styles.actionKeep,
+  delete: styles.actionDelete,
+  disable: styles.actionDisable,
+  enable: styles.actionEnable,
+};
+
+export function CodexInspectionResultsPanel({
+  result,
+  filteredResults,
+  actionableResults,
+  pendingActionCount,
+  filterCounts,
+  actionFilter,
+  executing,
+  isInspectionInFlight,
+  t,
+  onActionFilterChange,
+  onExecutePlanned,
+  onExecuteSingle,
+  filterLabel,
+}: CodexInspectionResultsPanelProps) {
+  return (
+    <Panel
+      title={t('monitoring.codex_inspection_results_title')}
+      subtitle={t('monitoring.codex_inspection_results_desc')}
+      extra={
+        <div className={styles.resultsHeaderActions}>
+          <Button
+            variant={pendingActionCount > 0 ? 'danger' : 'primary'}
+            size="sm"
+            onClick={onExecutePlanned}
+            loading={executing}
+            disabled={!result || isInspectionInFlight || executing || pendingActionCount === 0}
+          >
+            {executing
+              ? t('monitoring.codex_inspection_executing')
+              : t('monitoring.codex_inspection_execute_now')}
+          </Button>
+        </div>
+      }
+    >
+      {result ? (
+        <>
+          <div className={styles.filterRow}>
+            <div className={styles.segmentedControl}>
+              {ACTION_FILTERS.map((filter) => {
+                const count = filterCounts[filter];
+                const isActive = actionFilter === filter;
+                return (
+                  <button
+                    key={filter}
+                    type="button"
+                    className={`${styles.segmentButton} ${isActive ? styles.segmentButtonActive : ''}`}
+                    onClick={() => onActionFilterChange(filter)}
+                  >
+                    <span>{filterLabel(filter)}</span>
+                    <span className={styles.segmentCount}>{count}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className={styles.tableWrap}>
+            <table className={styles.table}>
+              <colgroup>
+                <col className={styles.accountColumn} />
+                <col className={styles.stateColumn} />
+                <col className={styles.httpColumn} />
+                <col className={styles.usageColumn} />
+                <col className={styles.actionColumn} />
+                <col className={styles.operationColumn} />
+              </colgroup>
+              <thead>
+                <tr>
+                  <th>{t('monitoring.account_label')}</th>
+                  <th>{t('monitoring.codex_inspection_current_state')}</th>
+                  <th>{t('monitoring.codex_inspection_http_status')}</th>
+                  <th>{t('monitoring.codex_inspection_used_percent')}</th>
+                  <th>{t('monitoring.codex_inspection_next_action')}</th>
+                  <th>{t('common.action')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredResults.length > 0 ? (
+                  filteredResults.map((item) => (
+                    <tr key={item.key}>
+                      <td>
+                        <div className={styles.primaryCell}>
+                          <span className={styles.primaryAccount}>{item.displayAccount}</span>
+                          <small className={styles.primaryFile}>
+                            {item.fileName}
+                            {item.authIndex ? (
+                              <span className={styles.primaryIndex}>{` \u00b7 #${item.authIndex}`}</span>
+                            ) : null}
+                          </small>
+                          {item.actionReason ? (
+                            <small className={styles.primaryReason}>{item.actionReason}</small>
+                          ) : null}
+                          {item.error ? (
+                            <small className={styles.primaryError}>{item.error}</small>
+                          ) : null}
+                        </div>
+                      </td>
+                      <td>
+                        <span
+                          className={`${styles.stateChip} ${
+                            item.disabled ? styles.stateDisabled : styles.stateEnabled
+                          }`}
+                        >
+                          {formatCurrentStateLabel(item, t)}
+                        </span>
+                      </td>
+                      <td className={styles.monoCell}>
+                        {item.statusCode === null ? '--' : item.statusCode}
+                      </td>
+                      <td className={styles.monoCell}>{formatPercent(item.usedPercent)}</td>
+                      <td>
+                        <span className={`${styles.actionBadge} ${actionToneClass[item.action]}`}>
+                          {formatActionLabel(item.action, t)}
+                        </span>
+                      </td>
+                      <td>
+                        <Button
+                          size="sm"
+                          variant={item.action === 'delete' ? 'danger' : 'secondary'}
+                          onClick={() => onExecuteSingle(item)}
+                          disabled={isInspectionInFlight || executing}
+                        >
+                          {formatActionLabel(item.action, t)}
+                        </Button>
+                      </td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={6}>
+                      <div className={styles.emptyBlockSmall}>
+                        {actionableResults.length === 0
+                          ? t('monitoring.codex_inspection_no_pending_actions')
+                          : t('monitoring.codex_inspection_no_pending_actions')}
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </>
+      ) : (
+        <div className={styles.emptyBlock}>{t('monitoring.codex_inspection_empty')}</div>
+      )}
+    </Panel>
+  );
+}

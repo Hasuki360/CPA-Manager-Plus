@@ -6,13 +6,10 @@ import { Card } from '@/components/ui/Card';
 import { Input } from '@/components/ui/Input';
 import { Modal } from '@/components/ui/Modal';
 import {
-  IconChevronDown,
-  IconChevronUp,
   IconCheck,
   IconCrosshair,
   IconExternalLink,
   IconBot,
-  IconRefreshCw,
   IconSettings,
   IconShield,
   IconTimer,
@@ -35,7 +32,6 @@ import {
   loadCodexInspectionConfigurableSettings,
   saveCodexInspectionLastRun,
   saveCodexInspectionConfigurableSettings,
-  type CodexInspectionAction,
   type CodexInspectionAutoActionMode,
   type CodexInspectionConfigurableSettings,
   type CodexInspectionLogLevel,
@@ -44,19 +40,17 @@ import {
   type CodexInspectionRunResult,
   type CodexInspectionSession,
 } from '@/features/monitoring/codexInspection';
-import { Panel, SettingsSection } from '@/features/monitoring/components/CodexInspectionPanels';
+import { CodexInspectionLogsPanel } from '@/features/monitoring/components/CodexInspectionLogsPanel';
+import { SettingsSection } from '@/features/monitoring/components/CodexInspectionPanels';
+import { CodexInspectionResultsPanel } from '@/features/monitoring/components/CodexInspectionResultsPanel';
 import {
-  ACTION_FILTERS,
   countActions,
   createCompletedProgressSnapshot,
   createIdleProgressSnapshot,
   filterByAction,
   formatActionLabel,
   formatAutoActionModeLabel,
-  formatCurrentStateLabel,
-  formatPercent,
   formatTime,
-  formatTimestamp,
   toSettingsDraft,
   type ActionFilter,
   type ExecutionTriggerSource,
@@ -69,20 +63,6 @@ import {
 } from '@/features/monitoring/model/codexInspectionPresentation';
 import { useAuthStore, useConfigStore, useNotificationStore } from '@/stores';
 import styles from './CodexInspectionPage.module.scss';
-
-const actionToneClass: Record<CodexInspectionAction, string> = {
-  keep: styles.actionKeep,
-  delete: styles.actionDelete,
-  disable: styles.actionDisable,
-  enable: styles.actionEnable,
-};
-
-const levelClassMap: Record<CodexInspectionLogLevel, string> = {
-  info: styles.logInfo,
-  success: styles.logSuccess,
-  warning: styles.logWarning,
-  error: styles.logError,
-};
 
 export function CodexInspectionPage() {
   const { t, i18n } = useTranslation();
@@ -943,198 +923,32 @@ export function CodexInspectionPage() {
         ))}
       </section>
 
-      <Panel
-        title={t('monitoring.codex_inspection_results_title')}
-        subtitle={t('monitoring.codex_inspection_results_desc')}
-        extra={
-          <div className={styles.resultsHeaderActions}>
-            <Button
-              variant={pendingActionCount > 0 ? 'danger' : 'primary'}
-              size="sm"
-              onClick={handleExecutePlanned}
-              loading={executing}
-              disabled={!result || isInspectionInFlight || executing || pendingActionCount === 0}
-            >
-              {executing
-                ? t('monitoring.codex_inspection_executing')
-                : t('monitoring.codex_inspection_execute_now')}
-            </Button>
-          </div>
-        }
-      >
-        {result ? (
-          <>
-            <div className={styles.filterRow}>
-              <div className={styles.segmentedControl}>
-                {ACTION_FILTERS.map((filter) => {
-                  const count = filterCounts[filter];
-                  const isActive = actionFilter === filter;
-                  return (
-                    <button
-                      key={filter}
-                      type="button"
-                      className={`${styles.segmentButton} ${isActive ? styles.segmentButtonActive : ''}`}
-                      onClick={() => setActionFilter(filter)}
-                    >
-                      <span>{filterLabel(filter)}</span>
-                      <span className={styles.segmentCount}>{count}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
+      <CodexInspectionResultsPanel
+        result={result}
+        filteredResults={filteredResults}
+        actionableResults={actionableResults}
+        pendingActionCount={pendingActionCount}
+        filterCounts={filterCounts}
+        actionFilter={actionFilter}
+        executing={executing}
+        isInspectionInFlight={isInspectionInFlight}
+        t={t}
+        onActionFilterChange={setActionFilter}
+        onExecutePlanned={handleExecutePlanned}
+        onExecuteSingle={handleExecuteSingle}
+        filterLabel={filterLabel}
+      />
 
-            <div className={styles.tableWrap}>
-              <table className={styles.table}>
-                <colgroup>
-                  <col className={styles.accountColumn} />
-                  <col className={styles.stateColumn} />
-                  <col className={styles.httpColumn} />
-                  <col className={styles.usageColumn} />
-                  <col className={styles.actionColumn} />
-                  <col className={styles.operationColumn} />
-                </colgroup>
-                <thead>
-                  <tr>
-                    <th>{t('monitoring.account_label')}</th>
-                    <th>{t('monitoring.codex_inspection_current_state')}</th>
-                    <th>{t('monitoring.codex_inspection_http_status')}</th>
-                    <th>{t('monitoring.codex_inspection_used_percent')}</th>
-                    <th>{t('monitoring.codex_inspection_next_action')}</th>
-                    <th>{t('common.action')}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredResults.length > 0 ? (
-                    filteredResults.map((item) => (
-                      <tr key={item.key}>
-                        <td>
-                          <div className={styles.primaryCell}>
-                            <span className={styles.primaryAccount}>{item.displayAccount}</span>
-                            <small className={styles.primaryFile}>
-                              {item.fileName}
-                              {item.authIndex ? (
-                                <span className={styles.primaryIndex}>{` · #${item.authIndex}`}</span>
-                              ) : null}
-                            </small>
-                            {item.actionReason ? (
-                              <small className={styles.primaryReason}>{item.actionReason}</small>
-                            ) : null}
-                            {item.error ? (
-                              <small className={styles.primaryError}>{item.error}</small>
-                            ) : null}
-                          </div>
-                        </td>
-                        <td>
-                          <span
-                            className={`${styles.stateChip} ${
-                              item.disabled ? styles.stateDisabled : styles.stateEnabled
-                            }`}
-                          >
-                            {formatCurrentStateLabel(item, t)}
-                          </span>
-                        </td>
-                        <td className={styles.monoCell}>
-                          {item.statusCode === null ? '--' : item.statusCode}
-                        </td>
-                        <td className={styles.monoCell}>{formatPercent(item.usedPercent)}</td>
-                        <td>
-                          <span className={`${styles.actionBadge} ${actionToneClass[item.action]}`}>
-                            {formatActionLabel(item.action, t)}
-                          </span>
-                        </td>
-                        <td>
-                          <Button
-                            size="sm"
-                            variant={item.action === 'delete' ? 'danger' : 'secondary'}
-                            onClick={() => handleExecuteSingle(item)}
-                            disabled={isInspectionInFlight || executing}
-                          >
-                            {formatActionLabel(item.action, t)}
-                          </Button>
-                        </td>
-                      </tr>
-                    ))
-                  ) : (
-                    <tr>
-                      <td colSpan={6}>
-                        <div className={styles.emptyBlockSmall}>
-                          {actionableResults.length === 0
-                            ? t('monitoring.codex_inspection_no_pending_actions')
-                            : t('monitoring.codex_inspection_no_pending_actions')}
-                        </div>
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </>
-        ) : (
-          <div className={styles.emptyBlock}>{t('monitoring.codex_inspection_empty')}</div>
-        )}
-      </Panel>
-
-      <Panel
-        title={t('monitoring.codex_inspection_logs_title')}
-        subtitle={t('monitoring.codex_inspection_logs_desc')}
-        extra={
-          <div className={styles.logActions}>
-            <button
-              type="button"
-              className={styles.iconButton}
-              onClick={handleJumpToLatest}
-              disabled={logs.length === 0}
-              aria-label={t('monitoring.codex_inspection_logs_jump_latest')}
-              title={t('monitoring.codex_inspection_logs_jump_latest')}
-            >
-              <IconRefreshCw size={14} />
-            </button>
-            <button
-              type="button"
-              className={styles.iconButton}
-              onClick={handleClearLogs}
-              disabled={logs.length === 0}
-              aria-label={t('monitoring.codex_inspection_logs_clear')}
-              title={t('monitoring.codex_inspection_logs_clear')}
-            >
-              <IconTrash2 size={14} />
-            </button>
-            <button
-              type="button"
-              className={styles.foldButton}
-              onClick={() => setLogsCollapsed((previous) => !previous)}
-              disabled={logs.length === 0}
-            >
-              {logsCollapsed ? <IconChevronDown size={14} /> : <IconChevronUp size={14} />}
-              <span>
-                {logsCollapsed
-                  ? t('monitoring.codex_inspection_expand_logs')
-                  : t('monitoring.codex_inspection_fold_logs')}
-              </span>
-            </button>
-          </div>
-        }
-      >
-        {!logsCollapsed ? (
-          <div ref={logListRef} className={styles.logList}>
-            {logs.length > 0 ? (
-              logs.map((entry) => (
-                <div key={entry.id} className={`${styles.logRow} ${levelClassMap[entry.level]}`}>
-                  <span className={styles.logTime}>{formatTimestamp(entry.timestamp, i18n.language)}</span>
-                  <span className={styles.logMessage}>{entry.message}</span>
-                </div>
-              ))
-            ) : (
-              <div className={styles.emptyBlockSmall}>{t('monitoring.codex_inspection_logs_empty')}</div>
-            )}
-          </div>
-        ) : (
-          <div className={styles.logCollapsedBar}>
-            <span>{t('monitoring.codex_inspection_logs_collapsed', { count: logs.length })}</span>
-          </div>
-        )}
-      </Panel>
+      <CodexInspectionLogsPanel
+        logs={logs}
+        logsCollapsed={logsCollapsed}
+        logListRef={logListRef}
+        locale={i18n.language}
+        t={t}
+        onJumpToLatest={handleJumpToLatest}
+        onClearLogs={handleClearLogs}
+        onToggleCollapsed={() => setLogsCollapsed((previous) => !previous)}
+      />
 
       <Modal
         open={isSettingsModalOpen}
