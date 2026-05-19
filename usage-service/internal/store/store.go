@@ -161,6 +161,10 @@ func (s *Store) RecentFailuresBetween(ctx context.Context, fromMs, toMs int64, l
 	return s.UsageEvents.RecentFailuresBetween(ctx, fromMs, toMs, limit)
 }
 
+func (s *Store) HourlyTimelineBetween(ctx context.Context, fromMs, toMs int64) ([]TimelinePoint, error) {
+	return s.UsageEvents.HourlyTimelineBetween(ctx, fromMs, toMs)
+}
+
 func (s *Store) AggregateWithFilter(ctx context.Context, filter AnalyticsFilter) (Aggregate, error) {
 	return s.UsageEvents.AggregateWithFilter(ctx, filter)
 }

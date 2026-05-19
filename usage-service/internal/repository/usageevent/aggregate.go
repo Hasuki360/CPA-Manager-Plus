@@ -209,3 +209,36 @@ func (r *repository) RecentFailuresBetween(ctx context.Context, fromMs, toMs int
 	}
 	return results, rows.Err()
 }
+
+// HourlyTimelineBetween returns hourly buckets relative to fromMs over [fromMs, toMs).
+func (r *repository) HourlyTimelineBetween(ctx context.Context, fromMs, toMs int64) ([]TimelinePoint, error) {
+	rows, err := r.db.QueryContext(ctx, `select
+	cast((timestamp_ms - ?) / 3600000 as integer) as hour_index,
+	count(*),
+	coalesce(sum(total_tokens), 0),
+	sum(case when failed = 0 then 1 else 0 end),
+	sum(case when failed = 1 then 1 else 0 end)
+from usage_events
+where timestamp_ms >= ? and timestamp_ms < ?
+group by hour_index
+order by hour_index`, fromMs, fromMs, toMs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	points := make([]TimelinePoint, 0)
+	for rows.Next() {
+		var hourIndex int64
+		var point TimelinePoint
+		if err := rows.Scan(&hourIndex, &point.Calls, &point.Tokens, &point.Success, &point.Failure); err != nil {
+			return nil, err
+		}
+		if hourIndex < 0 {
+			continue
+		}
+		point.BucketMS = fromMs + hourIndex*60*60*1000
+		points = append(points, point)
+	}
+	return points, rows.Err()
+}

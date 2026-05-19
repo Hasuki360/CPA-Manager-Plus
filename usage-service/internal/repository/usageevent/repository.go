@@ -17,6 +17,7 @@ type Repository interface {
 	TopModelsBetween(ctx context.Context, fromMs, toMs int64, limit int) ([]ModelStat, error)
 	ModelStatsBetween(ctx context.Context, fromMs, toMs int64) ([]ModelStat, error)
 	RecentFailuresBetween(ctx context.Context, fromMs, toMs int64, limit int) ([]RecentFailure, error)
+	HourlyTimelineBetween(ctx context.Context, fromMs, toMs int64) ([]TimelinePoint, error)
 	AggregateWithFilter(ctx context.Context, filter AnalyticsFilter) (Aggregate, error)
 	ModelStatsWithFilter(ctx context.Context, filter AnalyticsFilter, limit int) ([]ModelStat, error)
 	TimelineWithFilter(ctx context.Context, filter AnalyticsFilter, granularity string) ([]TimelinePoint, error)

@@ -90,6 +90,30 @@ func TestSummaryAggregatesCostsAndWindows(t *testing.T) {
 		resp.RecentFailures[0].DurationMS == nil || *resp.RecentFailures[0].DurationMS != 200 {
 		t.Fatalf("recent failures = %#v", resp.RecentFailures)
 	}
+	if len(resp.TrafficTimeline) != 24 || resp.TrafficTimeline[0].Calls != 3 ||
+		resp.TrafficTimeline[0].Tokens != 1_750_100 ||
+		math.Abs(resp.TrafficTimeline[0].FailureRate-(1.0/3.0)) > 0.000001 {
+		t.Fatalf("traffic timeline = %#v", resp.TrafficTimeline)
+	}
+	if len(resp.HourlyActivity) != 24 || resp.HourlyActivity[0].Intensity != 1 {
+		t.Fatalf("hourly activity = %#v", resp.HourlyActivity)
+	}
+	if len(resp.TokenMix) != 4 || resp.TokenMix[0].Key != "input" ||
+		resp.TokenMix[0].Tokens != 1_000_000 {
+		t.Fatalf("token mix = %#v", resp.TokenMix)
+	}
+	if len(resp.ModelCostRank) != 1 || resp.ModelCostRank[0].Model != "gpt-a" ||
+		resp.ModelCostRank[0].CostShare != 1 {
+		t.Fatalf("model cost rank = %#v", resp.ModelCostRank)
+	}
+	if len(resp.ChannelHealth) != 1 || resp.ChannelHealth[0].AuthIndex != "auth-1" ||
+		resp.ChannelHealth[0].Failures != 1 || resp.ChannelHealth[0].Tone != "bad" {
+		t.Fatalf("channel health = %#v", resp.ChannelHealth)
+	}
+	if len(resp.FailureSources) != 1 || resp.FailureSources[0].SourceHash != "source-hash" ||
+		resp.FailureSources[0].Failures != 1 {
+		t.Fatalf("failure sources = %#v", resp.FailureSources)
+	}
 }
 
 func newDashboardTestStore(t *testing.T) *store.Store {
