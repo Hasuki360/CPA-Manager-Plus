@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useReducer } from 'react';
 import { isMap, parse as parseYaml, parseDocument } from 'yaml';
 import type {
+  DisableImageGenerationMode,
   VisualConfigValues,
   VisualConfigValidationErrors,
 } from '@/types/visualConfig';
@@ -149,6 +150,24 @@ function setIntFromStringInDoc(doc: YamlDocument, path: YamlPath, value: unknown
   }
 }
 
+function setDisableImageGenerationInDoc(
+  doc: YamlDocument,
+  path: YamlPath,
+  value: DisableImageGenerationMode
+): void {
+  if (value === 'chat') {
+    doc.setIn(path, 'chat');
+    return;
+  }
+
+  if (value === 'true') {
+    doc.setIn(path, true);
+    return;
+  }
+
+  if (docHas(doc, path)) doc.setIn(path, false);
+}
+
 function getNonNegativeIntegerError(value: string): 'non_negative_integer' | undefined {
   const trimmed = value.trim();
   if (!trimmed) return undefined;
@@ -174,11 +193,22 @@ function getRedisUsageQueueRetentionError(
   return parsed >= 0 && parsed <= 3600 ? undefined : 'retention_seconds_range';
 }
 
+function parseDisableImageGenerationMode(raw: unknown): DisableImageGenerationMode {
+  if (raw === true) return 'true';
+  if (typeof raw === 'string') {
+    const normalized = raw.trim().toLowerCase();
+    if (normalized === 'true') return 'true';
+    if (normalized === 'chat') return 'chat';
+  }
+  return 'false';
+}
+
 export function getVisualConfigValidationErrors(
   values: VisualConfigValues
 ): VisualConfigValidationErrors {
   return {
     port: getPortError(values.port),
+    errorLogsMaxFiles: getNonNegativeIntegerError(values.errorLogsMaxFiles),
     logsMaxTotalSizeMb: getNonNegativeIntegerError(values.logsMaxTotalSizeMb),
     redisUsageQueueRetentionSeconds: getRedisUsageQueueRetentionError(
       values.redisUsageQueueRetentionSeconds
@@ -186,6 +216,7 @@ export function getVisualConfigValidationErrors(
     requestRetry: getNonNegativeIntegerError(values.requestRetry),
     maxRetryCredentials: getNonNegativeIntegerError(values.maxRetryCredentials),
     maxRetryInterval: getNonNegativeIntegerError(values.maxRetryInterval),
+    authAutoRefreshWorkers: getNonNegativeIntegerError(values.authAutoRefreshWorkers),
     'streaming.keepaliveSeconds': getNonNegativeIntegerError(values.streaming.keepaliveSeconds),
     'streaming.bootstrapRetries': getNonNegativeIntegerError(values.streaming.bootstrapRetries),
     'streaming.nonstreamKeepaliveInterval': getNonNegativeIntegerError(
@@ -267,6 +298,34 @@ function getNextDirtyFields(
       nextDirtyFields.add(key);
     }
   };
+  const updateScalarDirty = (key: keyof VisualConfigValues) => {
+    if (Object.prototype.hasOwnProperty.call(patch, key)) {
+      updateDirty(key, nextValues[key] === baselineValues[key]);
+    }
+  };
+
+  (
+    [
+      'rmDisableAutoUpdatePanel',
+      'errorLogsMaxFiles',
+      'passthroughHeaders',
+      'disableCooling',
+      'disableImageGeneration',
+      'authAutoRefreshWorkers',
+      'enableGeminiCliEndpoint',
+      'antigravitySignatureCacheEnabled',
+      'antigravitySignatureBypassStrict',
+      'claudeHeaderUserAgent',
+      'claudeHeaderPackageVersion',
+      'claudeHeaderRuntimeVersion',
+      'claudeHeaderOs',
+      'claudeHeaderArch',
+      'claudeHeaderTimeout',
+      'claudeHeaderStabilizeDeviceProfile',
+      'codexHeaderUserAgent',
+      'codexHeaderBetaFeatures',
+    ] as Array<keyof VisualConfigValues>
+  ).forEach(updateScalarDirty);
 
   if (Object.prototype.hasOwnProperty.call(patch, 'host')) {
     updateDirty('host', nextValues.host === baselineValues.host);
@@ -529,6 +588,8 @@ export function useVisualConfig() {
       const routing = asRecord(parsed.routing);
       const payload = asRecord(parsed.payload);
       const streaming = asRecord(parsed.streaming);
+      const claudeHeaderDefaults = asRecord(parsed['claude-header-defaults']);
+      const codexHeaderDefaults = asRecord(parsed['codex-header-defaults']);
 
       const newValues: VisualConfigValues = {
         host: typeof parsed.host === 'string' ? parsed.host : '',
@@ -544,6 +605,7 @@ export function useVisualConfig() {
             ? remoteManagement['secret-key']
             : '',
         rmDisableControlPanel: Boolean(remoteManagement?.['disable-control-panel']),
+        rmDisableAutoUpdatePanel: Boolean(remoteManagement?.['disable-auto-update-panel']),
         rmPanelRepo:
           typeof remoteManagement?.['panel-github-repository'] === 'string'
             ? remoteManagement['panel-github-repository']
@@ -561,6 +623,7 @@ export function useVisualConfig() {
         ),
         loggingToFile: Boolean(parsed['logging-to-file']),
         logsMaxTotalSizeMb: String(parsed['logs-max-total-size-mb'] ?? ''),
+        errorLogsMaxFiles: String(parsed['error-logs-max-files'] ?? ''),
         redisUsageQueueRetentionSeconds: String(
           parsed['redis-usage-queue-retention-seconds'] ??
             parsed.redisUsageQueueRetentionSeconds ??
@@ -569,10 +632,47 @@ export function useVisualConfig() {
 
         proxyUrl: typeof parsed['proxy-url'] === 'string' ? parsed['proxy-url'] : '',
         forceModelPrefix: Boolean(parsed['force-model-prefix']),
+        passthroughHeaders: Boolean(parsed['passthrough-headers']),
         requestRetry: String(parsed['request-retry'] ?? ''),
         maxRetryCredentials: String(parsed['max-retry-credentials'] ?? ''),
         maxRetryInterval: String(parsed['max-retry-interval'] ?? ''),
+        disableCooling: Boolean(parsed['disable-cooling']),
+        disableImageGeneration: parseDisableImageGenerationMode(parsed['disable-image-generation']),
+        authAutoRefreshWorkers: String(parsed['auth-auto-refresh-workers'] ?? ''),
         wsAuth: Boolean(parsed['ws-auth']),
+        enableGeminiCliEndpoint: Boolean(parsed['enable-gemini-cli-endpoint']),
+        antigravitySignatureCacheEnabled: Boolean(
+          parsed['antigravity-signature-cache-enabled'] ?? true
+        ),
+        antigravitySignatureBypassStrict: Boolean(parsed['antigravity-signature-bypass-strict']),
+        claudeHeaderUserAgent:
+          typeof claudeHeaderDefaults?.['user-agent'] === 'string'
+            ? claudeHeaderDefaults['user-agent']
+            : '',
+        claudeHeaderPackageVersion:
+          typeof claudeHeaderDefaults?.['package-version'] === 'string'
+            ? claudeHeaderDefaults['package-version']
+            : '',
+        claudeHeaderRuntimeVersion:
+          typeof claudeHeaderDefaults?.['runtime-version'] === 'string'
+            ? claudeHeaderDefaults['runtime-version']
+            : '',
+        claudeHeaderOs: typeof claudeHeaderDefaults?.os === 'string' ? claudeHeaderDefaults.os : '',
+        claudeHeaderArch:
+          typeof claudeHeaderDefaults?.arch === 'string' ? claudeHeaderDefaults.arch : '',
+        claudeHeaderTimeout:
+          typeof claudeHeaderDefaults?.timeout === 'string' ? claudeHeaderDefaults.timeout : '',
+        claudeHeaderStabilizeDeviceProfile: Boolean(
+          claudeHeaderDefaults?.['stabilize-device-profile']
+        ),
+        codexHeaderUserAgent:
+          typeof codexHeaderDefaults?.['user-agent'] === 'string'
+            ? codexHeaderDefaults['user-agent']
+            : '',
+        codexHeaderBetaFeatures:
+          typeof codexHeaderDefaults?.['beta-features'] === 'string'
+            ? codexHeaderDefaults['beta-features']
+            : '',
 
         quotaSwitchProject: Boolean(quotaExceeded?.['switch-project'] ?? true),
         quotaSwitchPreviewModel: Boolean(quotaExceeded?.['switch-preview-model'] ?? true),
@@ -646,6 +746,7 @@ export function useVisualConfig() {
           values.rmAllowRemote ||
           values.rmSecretKey.trim() ||
           values.rmDisableControlPanel ||
+          values.rmDisableAutoUpdatePanel ||
           values.rmPanelRepo.trim()
         ) {
           ensureMapInDoc(doc, ['remote-management']);
@@ -655,6 +756,11 @@ export function useVisualConfig() {
             doc,
             ['remote-management', 'disable-control-panel'],
             values.rmDisableControlPanel
+          );
+          setBooleanInDoc(
+            doc,
+            ['remote-management', 'disable-auto-update-panel'],
+            values.rmDisableAutoUpdatePanel
           );
           setStringInDoc(doc, ['remote-management', 'panel-github-repository'], values.rmPanelRepo);
           if (docHas(doc, ['remote-management', 'panel-repo'])) {
@@ -681,6 +787,7 @@ export function useVisualConfig() {
         setBooleanInDoc(doc, ['usage-statistics-enabled'], values.usageStatisticsEnabled);
         setBooleanInDoc(doc, ['logging-to-file'], values.loggingToFile);
         setIntFromStringInDoc(doc, ['logs-max-total-size-mb'], values.logsMaxTotalSizeMb);
+        setIntFromStringInDoc(doc, ['error-logs-max-files'], values.errorLogsMaxFiles);
         if (
           shouldWriteManagedField(
             doc,
@@ -698,10 +805,85 @@ export function useVisualConfig() {
 
         setStringInDoc(doc, ['proxy-url'], values.proxyUrl);
         setBooleanInDoc(doc, ['force-model-prefix'], values.forceModelPrefix);
+        setBooleanInDoc(doc, ['passthrough-headers'], values.passthroughHeaders);
         setIntFromStringInDoc(doc, ['request-retry'], values.requestRetry);
         setIntFromStringInDoc(doc, ['max-retry-credentials'], values.maxRetryCredentials);
         setIntFromStringInDoc(doc, ['max-retry-interval'], values.maxRetryInterval);
+        setBooleanInDoc(doc, ['disable-cooling'], values.disableCooling);
+        setDisableImageGenerationInDoc(
+          doc,
+          ['disable-image-generation'],
+          values.disableImageGeneration
+        );
+        setIntFromStringInDoc(doc, ['auth-auto-refresh-workers'], values.authAutoRefreshWorkers);
         setBooleanInDoc(doc, ['ws-auth'], values.wsAuth);
+        setBooleanInDoc(doc, ['enable-gemini-cli-endpoint'], values.enableGeminiCliEndpoint);
+        if (
+          docHas(doc, ['antigravity-signature-cache-enabled']) ||
+          !values.antigravitySignatureCacheEnabled
+        ) {
+          doc.setIn(
+            ['antigravity-signature-cache-enabled'],
+            values.antigravitySignatureCacheEnabled
+          );
+        }
+        setBooleanInDoc(
+          doc,
+          ['antigravity-signature-bypass-strict'],
+          values.antigravitySignatureBypassStrict
+        );
+
+        if (
+          docHas(doc, ['claude-header-defaults']) ||
+          values.claudeHeaderUserAgent.trim() ||
+          values.claudeHeaderPackageVersion.trim() ||
+          values.claudeHeaderRuntimeVersion.trim() ||
+          values.claudeHeaderOs.trim() ||
+          values.claudeHeaderArch.trim() ||
+          values.claudeHeaderTimeout.trim() ||
+          values.claudeHeaderStabilizeDeviceProfile
+        ) {
+          ensureMapInDoc(doc, ['claude-header-defaults']);
+          setStringInDoc(
+            doc,
+            ['claude-header-defaults', 'user-agent'],
+            values.claudeHeaderUserAgent
+          );
+          setStringInDoc(
+            doc,
+            ['claude-header-defaults', 'package-version'],
+            values.claudeHeaderPackageVersion
+          );
+          setStringInDoc(
+            doc,
+            ['claude-header-defaults', 'runtime-version'],
+            values.claudeHeaderRuntimeVersion
+          );
+          setStringInDoc(doc, ['claude-header-defaults', 'os'], values.claudeHeaderOs);
+          setStringInDoc(doc, ['claude-header-defaults', 'arch'], values.claudeHeaderArch);
+          setStringInDoc(doc, ['claude-header-defaults', 'timeout'], values.claudeHeaderTimeout);
+          setBooleanInDoc(
+            doc,
+            ['claude-header-defaults', 'stabilize-device-profile'],
+            values.claudeHeaderStabilizeDeviceProfile
+          );
+          deleteIfMapEmpty(doc, ['claude-header-defaults']);
+        }
+
+        if (
+          docHas(doc, ['codex-header-defaults']) ||
+          values.codexHeaderUserAgent.trim() ||
+          values.codexHeaderBetaFeatures.trim()
+        ) {
+          ensureMapInDoc(doc, ['codex-header-defaults']);
+          setStringInDoc(doc, ['codex-header-defaults', 'user-agent'], values.codexHeaderUserAgent);
+          setStringInDoc(
+            doc,
+            ['codex-header-defaults', 'beta-features'],
+            values.codexHeaderBetaFeatures
+          );
+          deleteIfMapEmpty(doc, ['codex-header-defaults']);
+        }
 
         if (
           docHas(doc, ['quota-exceeded']) ||

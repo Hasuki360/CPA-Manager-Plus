@@ -12,6 +12,7 @@ import { Select } from '@/components/ui/Select';
 import styles from './VisualConfigEditor.module.scss';
 import type {
   PayloadFilterRule,
+  PayloadHeaderEntry,
   PayloadModelEntry,
   PayloadParamEntry,
   PayloadParamValidationErrorCode,
@@ -152,10 +153,11 @@ function buildProtocolOptions(
 
   for (const rule of rules) {
     for (const model of rule.models) {
-      const protocol = model.protocol;
-      if (!protocol || !protocol.trim() || seen.has(protocol)) continue;
-      seen.add(protocol);
-      options.push({ value: protocol, label: protocol });
+      [model.protocol, model.fromProtocol].forEach((protocol) => {
+        if (!protocol || !protocol.trim() || seen.has(protocol)) return;
+        seen.add(protocol);
+        options.push({ value: protocol, label: protocol });
+      });
     }
   }
 
@@ -223,6 +225,219 @@ const StringListEditor = memo(function StringListEditor({
   );
 });
 
+const PayloadHeadersEditor = memo(function PayloadHeadersEditor({
+  value,
+  disabled,
+  onChange,
+}: {
+  value: PayloadHeaderEntry[];
+  disabled?: boolean;
+  onChange: (next: PayloadHeaderEntry[]) => void;
+}) {
+  const { t } = useTranslation();
+  const headers = value ?? [];
+
+  const addHeader = () => onChange([...headers, { id: makeClientId(), name: '', value: '' }]);
+  const removeHeader = (index: number) => onChange(headers.filter((_, i) => i !== index));
+  const updateHeader = (index: number, patch: Partial<PayloadHeaderEntry>) =>
+    onChange(headers.map((header, i) => (i === index ? { ...header, ...patch } : header)));
+
+  return (
+    <div className={styles.payloadAdvancedList}>
+      {headers.map((header, index) => (
+        <div key={header.id} className={styles.payloadHeaderRow}>
+          <ExpandableInput
+            placeholder={t('config_management.visual.payload_rules.header_name')}
+            ariaLabel={t('config_management.visual.payload_rules.header_name')}
+            value={header.name}
+            onChange={(name) => updateHeader(index, { name })}
+            disabled={disabled}
+          />
+          <ExpandableInput
+            placeholder={t('config_management.visual.payload_rules.header_value')}
+            ariaLabel={t('config_management.visual.payload_rules.header_value')}
+            value={header.value}
+            onChange={(nextValue) => updateHeader(index, { value: nextValue })}
+            disabled={disabled}
+          />
+          <Button variant="ghost" size="sm" onClick={() => removeHeader(index)} disabled={disabled}>
+            {t('config_management.visual.common.delete')}
+          </Button>
+        </div>
+      ))}
+      <div className={styles.actionRow}>
+        <Button variant="secondary" size="sm" onClick={addHeader} disabled={disabled}>
+          {t('config_management.visual.payload_rules.add_header')}
+        </Button>
+      </div>
+    </div>
+  );
+});
+
+const PayloadConditionsEditor = memo(function PayloadConditionsEditor({
+  value,
+  disabled,
+  labelKey,
+  onChange,
+}: {
+  value: PayloadParamEntry[];
+  disabled?: boolean;
+  labelKey: string;
+  onChange: (next: PayloadParamEntry[]) => void;
+}) {
+  const { t } = useTranslation();
+  const conditions = value ?? [];
+  const payloadValueTypeOptions = useMemo(
+    () =>
+      VISUAL_CONFIG_PAYLOAD_VALUE_TYPE_OPTIONS.map((option) => ({
+        value: option.value,
+        label: t(option.labelKey, { defaultValue: option.defaultLabel }),
+      })),
+    [t]
+  );
+  const booleanValueOptions = useMemo(
+    () => [
+      { value: 'true', label: t('config_management.visual.payload_rules.boolean_true') },
+      { value: 'false', label: t('config_management.visual.payload_rules.boolean_false') },
+    ],
+    [t]
+  );
+
+  const addCondition = () =>
+    onChange([...conditions, { id: makeClientId(), path: '', valueType: 'string', value: '' }]);
+  const removeCondition = (index: number) => onChange(conditions.filter((_, i) => i !== index));
+  const updateCondition = (index: number, patch: Partial<PayloadParamEntry>) =>
+    onChange(
+      conditions.map((condition, i) => (i === index ? { ...condition, ...patch } : condition))
+    );
+
+  const getValuePlaceholder = (valueType: PayloadParamValueType) => {
+    switch (valueType) {
+      case 'string':
+        return t('config_management.visual.payload_rules.value_string');
+      case 'number':
+        return t('config_management.visual.payload_rules.value_number');
+      case 'boolean':
+        return t('config_management.visual.payload_rules.value_boolean');
+      case 'json':
+        return t('config_management.visual.payload_rules.value_json');
+      default:
+        return t('config_management.visual.payload_rules.value_default');
+    }
+  };
+
+  const renderValueEditor = (condition: PayloadParamEntry, index: number) => {
+    if (condition.valueType === 'boolean') {
+      return (
+        <Select
+          value={
+            condition.value.toLowerCase() === 'true' ||
+            condition.value.toLowerCase() === 'false'
+              ? condition.value.toLowerCase()
+              : ''
+          }
+          options={booleanValueOptions}
+          placeholder={t('config_management.visual.payload_rules.value_boolean')}
+          disabled={disabled}
+          ariaLabel={t('config_management.visual.payload_rules.condition_value')}
+          onChange={(nextValue) => updateCondition(index, { value: nextValue })}
+        />
+      );
+    }
+
+    if (condition.valueType === 'json') {
+      return (
+        <textarea
+          className={`input ${styles.payloadJsonInput}`}
+          placeholder={getValuePlaceholder(condition.valueType)}
+          aria-label={t('config_management.visual.payload_rules.condition_value')}
+          value={condition.value}
+          onChange={(event) => updateCondition(index, { value: event.target.value })}
+          disabled={disabled}
+        />
+      );
+    }
+
+    return (
+      <ExpandableInput
+        placeholder={getValuePlaceholder(condition.valueType)}
+        ariaLabel={t('config_management.visual.payload_rules.condition_value')}
+        value={condition.value}
+        onChange={(nextValue) => updateCondition(index, { value: nextValue })}
+        disabled={disabled}
+      />
+    );
+  };
+
+  return (
+    <div className={styles.payloadAdvancedList}>
+      <div className={styles.blockLabel}>{t(labelKey)}</div>
+      {conditions.map((condition, index) => {
+        const paramError = getValidationMessage(t, getPayloadParamValidationError(condition));
+
+        return (
+          <div key={condition.id} className={styles.payloadRuleParamGroup}>
+            <div className={styles.payloadRuleParamRow}>
+              <ExpandableInput
+                placeholder={t('config_management.visual.payload_rules.condition_path')}
+                ariaLabel={t('config_management.visual.payload_rules.condition_path')}
+                value={condition.path}
+                onChange={(path) => updateCondition(index, { path })}
+                disabled={disabled}
+              />
+              <Select
+                value={condition.valueType}
+                options={payloadValueTypeOptions}
+                disabled={disabled}
+                ariaLabel={t('config_management.visual.payload_rules.param_type')}
+                onChange={(nextValue) =>
+                  updateCondition(index, {
+                    valueType: nextValue as PayloadParamValueType,
+                    value:
+                      nextValue === 'boolean'
+                        ? 'true'
+                        : nextValue === 'json' && condition.value.trim() === ''
+                          ? '{}'
+                          : condition.value,
+                  })
+                }
+              />
+              {renderValueEditor(condition, index)}
+              <Button
+                variant="ghost"
+                size="sm"
+                className={styles.payloadRowActionButton}
+                onClick={() => removeCondition(index)}
+                disabled={disabled}
+              >
+                {t('config_management.visual.common.delete')}
+              </Button>
+            </div>
+            {paramError && (
+              <div className={`error-box ${styles.payloadParamError}`}>{paramError}</div>
+            )}
+          </div>
+        );
+      })}
+      <div className={styles.actionRow}>
+        <Button variant="secondary" size="sm" onClick={addCondition} disabled={disabled}>
+          {t('config_management.visual.payload_rules.add_condition')}
+        </Button>
+      </div>
+    </div>
+  );
+});
+
+const hasModelAdvancedFields = (model: PayloadModelEntry) =>
+  Boolean(
+    model.fromProtocol ||
+      (model.headers && model.headers.length > 0) ||
+      (model.match && model.match.length > 0) ||
+      (model.notMatch && model.notMatch.length > 0) ||
+      (model.exist && model.exist.length > 0) ||
+      (model.notExist && model.notExist.length > 0)
+  );
+
 export const PayloadRulesEditor = memo(function PayloadRulesEditor({
   value,
   disabled,
@@ -238,6 +453,12 @@ export const PayloadRulesEditor = memo(function PayloadRulesEditor({
 }) {
   const { t } = useTranslation();
   const rules = value;
+  const [manualExpandedModelIds, setManualExpandedModelIds] = useState<Set<string>>(
+    () => new Set()
+  );
+  const [collapsedAdvancedModelIds, setCollapsedAdvancedModelIds] = useState<Set<string>>(
+    () => new Set()
+  );
   const protocolOptions = useMemo(() => buildProtocolOptions(t, rules), [rules, t]);
   const payloadValueTypeOptions = useMemo(
     () =>
@@ -280,6 +501,31 @@ export const PayloadRulesEditor = memo(function PayloadRulesEditor({
     const rule = rules[ruleIndex];
     updateRule(ruleIndex, {
       models: rule.models.map((m, i) => (i === modelIndex ? { ...m, ...patch } : m)),
+    });
+  };
+
+  const toggleModelAdvanced = (model: PayloadModelEntry) => {
+    if (hasModelAdvancedFields(model)) {
+      setCollapsedAdvancedModelIds((current) => {
+        const next = new Set(current);
+        if (next.has(model.id)) {
+          next.delete(model.id);
+        } else {
+          next.add(model.id);
+        }
+        return next;
+      });
+      return;
+    }
+
+    setManualExpandedModelIds((current) => {
+      const next = new Set(current);
+      if (next.has(model.id)) {
+        next.delete(model.id);
+      } else {
+        next.add(model.id);
+      }
+      return next;
     });
   };
 
@@ -415,74 +661,171 @@ export const PayloadRulesEditor = memo(function PayloadRulesEditor({
             <div className={styles.blockLabel}>
               {t('config_management.visual.payload_rules.models')}
             </div>
-            {(rule.models.length ? rule.models : []).map((model, modelIndex) => (
-              <div
-                key={model.id}
-                className={[
-                  styles.payloadRuleModelRow,
-                  protocolFirst ? styles.payloadRuleModelRowProtocolFirst : '',
-                ]
-                  .filter(Boolean)
-                  .join(' ')}
-              >
-                {protocolFirst ? (
-                  <>
-                    <Select
-                      value={model.protocol ?? ''}
-                      options={protocolOptions}
+            {(rule.models.length ? rule.models : []).map((model, modelIndex) => {
+              const modelHasAdvanced = hasModelAdvancedFields(model);
+              const advancedExpanded =
+                (modelHasAdvanced && !collapsedAdvancedModelIds.has(model.id)) ||
+                manualExpandedModelIds.has(model.id);
+
+              return (
+                <div key={model.id} className={styles.payloadModelBlock}>
+                  <div
+                    className={[
+                      styles.payloadRuleModelRow,
+                      protocolFirst ? styles.payloadRuleModelRowProtocolFirst : '',
+                    ]
+                      .filter(Boolean)
+                      .join(' ')}
+                  >
+                    {protocolFirst ? (
+                      <>
+                        <Select
+                          value={model.protocol ?? ''}
+                          options={protocolOptions}
+                          disabled={disabled}
+                          ariaLabel={t('config_management.visual.payload_rules.provider_type')}
+                          onChange={(nextValue) =>
+                            updateModel(ruleIndex, modelIndex, {
+                              protocol: (nextValue || undefined) as PayloadModelEntry['protocol'],
+                            })
+                          }
+                        />
+                        <ExpandableInput
+                          placeholder={t('config_management.visual.payload_rules.model_name')}
+                          ariaLabel={t('config_management.visual.payload_rules.model_name')}
+                          value={model.name}
+                          onChange={(nextValue) =>
+                            updateModel(ruleIndex, modelIndex, { name: nextValue })
+                          }
+                          disabled={disabled}
+                        />
+                      </>
+                    ) : (
+                      <>
+                        <ExpandableInput
+                          placeholder={t('config_management.visual.payload_rules.model_name')}
+                          ariaLabel={t('config_management.visual.payload_rules.model_name')}
+                          value={model.name}
+                          onChange={(nextValue) =>
+                            updateModel(ruleIndex, modelIndex, { name: nextValue })
+                          }
+                          disabled={disabled}
+                        />
+                        <Select
+                          value={model.protocol ?? ''}
+                          options={protocolOptions}
+                          disabled={disabled}
+                          ariaLabel={t('config_management.visual.payload_rules.provider_type')}
+                          onChange={(nextValue) =>
+                            updateModel(ruleIndex, modelIndex, {
+                              protocol: (nextValue || undefined) as PayloadModelEntry['protocol'],
+                            })
+                          }
+                        />
+                      </>
+                    )}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className={styles.payloadRowActionButton}
+                      onClick={() => toggleModelAdvanced(model)}
                       disabled={disabled}
-                      ariaLabel={t('config_management.visual.payload_rules.provider_type')}
-                      onChange={(nextValue) =>
-                        updateModel(ruleIndex, modelIndex, {
-                          protocol: (nextValue || undefined) as PayloadModelEntry['protocol'],
-                        })
-                      }
-                    />
-                    <ExpandableInput
-                      placeholder={t('config_management.visual.payload_rules.model_name')}
-                      ariaLabel={t('config_management.visual.payload_rules.model_name')}
-                      value={model.name}
-                      onChange={(nextValue) =>
-                        updateModel(ruleIndex, modelIndex, { name: nextValue })
-                      }
+                    >
+                      {advancedExpanded
+                        ? t('config_management.visual.payload_rules.hide_advanced')
+                        : t('config_management.visual.payload_rules.advanced')}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className={styles.payloadRowActionButton}
+                      onClick={() => removeModel(ruleIndex, modelIndex)}
                       disabled={disabled}
-                    />
-                  </>
-                ) : (
-                  <>
-                    <ExpandableInput
-                      placeholder={t('config_management.visual.payload_rules.model_name')}
-                      ariaLabel={t('config_management.visual.payload_rules.model_name')}
-                      value={model.name}
-                      onChange={(nextValue) =>
-                        updateModel(ruleIndex, modelIndex, { name: nextValue })
-                      }
-                      disabled={disabled}
-                    />
-                    <Select
-                      value={model.protocol ?? ''}
-                      options={protocolOptions}
-                      disabled={disabled}
-                      ariaLabel={t('config_management.visual.payload_rules.provider_type')}
-                      onChange={(nextValue) =>
-                        updateModel(ruleIndex, modelIndex, {
-                          protocol: (nextValue || undefined) as PayloadModelEntry['protocol'],
-                        })
-                      }
-                    />
-                  </>
-                )}
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className={styles.payloadRowActionButton}
-                  onClick={() => removeModel(ruleIndex, modelIndex)}
-                  disabled={disabled}
-                >
-                  {t('config_management.visual.common.delete')}
-                </Button>
-              </div>
-            ))}
+                    >
+                      {t('config_management.visual.common.delete')}
+                    </Button>
+                  </div>
+
+                  {advancedExpanded ? (
+                    <div className={styles.payloadModelAdvanced}>
+                      <div className={styles.payloadAdvancedGrid}>
+                        <div className={styles.payloadAdvancedField}>
+                          <div className={styles.blockLabel}>
+                            {t('config_management.visual.payload_rules.from_protocol')}
+                          </div>
+                          <Select
+                            value={model.fromProtocol ?? ''}
+                            options={protocolOptions}
+                            disabled={disabled}
+                            ariaLabel={t('config_management.visual.payload_rules.from_protocol')}
+                            onChange={(nextValue) =>
+                              updateModel(ruleIndex, modelIndex, {
+                                fromProtocol: (nextValue ||
+                                  undefined) as PayloadModelEntry['fromProtocol'],
+                              })
+                            }
+                          />
+                        </div>
+                      </div>
+                      <div className={styles.payloadAdvancedField}>
+                        <div className={styles.blockLabel}>
+                          {t('config_management.visual.payload_rules.headers')}
+                        </div>
+                        <PayloadHeadersEditor
+                          value={model.headers ?? []}
+                          disabled={disabled}
+                          onChange={(headers) => updateModel(ruleIndex, modelIndex, { headers })}
+                        />
+                      </div>
+                      <PayloadConditionsEditor
+                        value={model.match ?? []}
+                        disabled={disabled}
+                        labelKey="config_management.visual.payload_rules.match"
+                        onChange={(match) => updateModel(ruleIndex, modelIndex, { match })}
+                      />
+                      <PayloadConditionsEditor
+                        value={model.notMatch ?? []}
+                        disabled={disabled}
+                        labelKey="config_management.visual.payload_rules.notMatch"
+                        onChange={(notMatch) => updateModel(ruleIndex, modelIndex, { notMatch })}
+                      />
+                      <div className={styles.payloadAdvancedGrid}>
+                        <div className={styles.payloadAdvancedField}>
+                          <div className={styles.blockLabel}>
+                            {t('config_management.visual.payload_rules.exist')}
+                          </div>
+                          <StringListEditor
+                            value={model.exist ?? []}
+                            disabled={disabled}
+                            placeholder={t('config_management.visual.payload_rules.condition_path')}
+                            inputAriaLabel={t(
+                              'config_management.visual.payload_rules.condition_path'
+                            )}
+                            onChange={(exist) => updateModel(ruleIndex, modelIndex, { exist })}
+                          />
+                        </div>
+                        <div className={styles.payloadAdvancedField}>
+                          <div className={styles.blockLabel}>
+                            {t('config_management.visual.payload_rules.notExist')}
+                          </div>
+                          <StringListEditor
+                            value={model.notExist ?? []}
+                            disabled={disabled}
+                            placeholder={t('config_management.visual.payload_rules.condition_path')}
+                            inputAriaLabel={t(
+                              'config_management.visual.payload_rules.condition_path'
+                            )}
+                            onChange={(notExist) =>
+                              updateModel(ruleIndex, modelIndex, { notExist })
+                            }
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
             <div className={styles.actionRow}>
               <Button
                 variant="secondary"

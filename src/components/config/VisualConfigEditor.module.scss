@@ -667,13 +667,47 @@
 
 .payloadRuleModelRow {
   display: grid;
-  grid-template-columns: 1fr 160px auto;
+  grid-template-columns: 1fr 160px auto auto;
   gap: 8px;
   align-items: center;
 }
 
 .payloadRuleModelRowProtocolFirst {
-  grid-template-columns: 160px 1fr auto;
+  grid-template-columns: 160px 1fr auto auto;
+}
+
+.payloadModelBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.payloadModelAdvanced {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-left: 12px;
+  border-left: 2px solid color-mix(in srgb, var(--border-color) 75%, transparent);
+}
+
+.payloadAdvancedGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.payloadAdvancedField,
+.payloadAdvancedList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.payloadHeaderRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
 }
 
 .payloadRuleParamRow {
@@ -722,7 +756,9 @@
   .payloadRuleModelRow,
   .payloadRuleModelRowProtocolFirst,
   .payloadRuleParamRow,
-  .payloadFilterModelRow {
+  .payloadFilterModelRow,
+  .payloadAdvancedGrid,
+  .payloadHeaderRow {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -759,7 +795,8 @@
   .blockHeaderRow :global(.btn),
   .ruleCardHeader :global(.btn),
   .actionRow :global(.btn),
-  .stringListRow :global(.btn) {
+  .stringListRow :global(.btn),
+  .payloadHeaderRow :global(.btn) {
     width: 100%;
     justify-content: center;
   }

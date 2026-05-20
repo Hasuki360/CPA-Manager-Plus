@@ -1,5 +1,6 @@
 import type {
   PayloadFilterRule,
+  PayloadHeaderEntry,
   PayloadModelEntry,
   PayloadParamEntry,
   PayloadParamValidationErrorCode,
@@ -44,8 +45,14 @@ export function getPayloadParamValidationError(
 }
 
 export function hasPayloadParamValidationErrors(rules: PayloadRule[]): boolean {
-  return rules.some((rule) =>
-    rule.params.some((param) => Boolean(getPayloadParamValidationError(param)))
+  return rules.some(
+    (rule) =>
+      rule.params.some((param) => Boolean(getPayloadParamValidationError(param))) ||
+      rule.models.some(
+        (model) =>
+          (model.match ?? []).some((param) => Boolean(getPayloadParamValidationError(param))) ||
+          (model.notMatch ?? []).some((param) => Boolean(getPayloadParamValidationError(param)))
+      )
   );
 }
 
@@ -59,7 +66,19 @@ function arePayloadModelEntriesEqual(
     const a = left[i];
     const b = right[i];
     if (!a || !b) return false;
-    if (a.id !== b.id || a.name !== b.name || a.protocol !== b.protocol) return false;
+    if (
+      a.id !== b.id ||
+      a.name !== b.name ||
+      a.protocol !== b.protocol ||
+      a.fromProtocol !== b.fromProtocol
+    ) {
+      return false;
+    }
+    if (!arePayloadHeaderEntriesEqual(a.headers, b.headers)) return false;
+    if (!arePayloadParamEntriesEqual(a.match ?? [], b.match ?? [])) return false;
+    if (!arePayloadParamEntriesEqual(a.notMatch ?? [], b.notMatch ?? [])) return false;
+    if (!areStringArraysEqual(a.exist, b.exist)) return false;
+    if (!areStringArraysEqual(a.notExist, b.notExist)) return false;
   }
   return true;
 }
@@ -77,6 +96,34 @@ function arePayloadParamEntriesEqual(
     if (a.id !== b.id || a.path !== b.path || a.valueType !== b.valueType || a.value !== b.value) {
       return false;
     }
+  }
+  return true;
+}
+
+function arePayloadHeaderEntriesEqual(
+  left: PayloadHeaderEntry[] | undefined,
+  right: PayloadHeaderEntry[] | undefined
+): boolean {
+  const leftEntries = left ?? [];
+  const rightEntries = right ?? [];
+  if (leftEntries === rightEntries) return true;
+  if (leftEntries.length !== rightEntries.length) return false;
+  for (let i = 0; i < leftEntries.length; i += 1) {
+    const a = leftEntries[i];
+    const b = rightEntries[i];
+    if (!a || !b) return false;
+    if (a.id !== b.id || a.name !== b.name || a.value !== b.value) return false;
+  }
+  return true;
+}
+
+function areStringArraysEqual(left: string[] | undefined, right: string[] | undefined): boolean {
+  const leftItems = left ?? [];
+  const rightItems = right ?? [];
+  if (leftItems === rightItems) return true;
+  if (leftItems.length !== rightItems.length) return false;
+  for (let i = 0; i < leftItems.length; i += 1) {
+    if (leftItems[i] !== rightItems[i]) return false;
   }
   return true;
 }
@@ -152,26 +199,84 @@ function parsePayloadProtocol(raw: unknown): PayloadModelEntry['protocol'] {
   return raw.trim() ? raw : undefined;
 }
 
+function parsePayloadHeaders(raw: unknown, idPrefix: string): PayloadHeaderEntry[] {
+  const record = asRecord(raw);
+  if (!record) return [];
+
+  return Object.entries(record).map(([name, value], index) => ({
+    id: `${idPrefix}-header-${index}`,
+    name,
+    value: String(value ?? ''),
+  }));
+}
+
+function parsePayloadConditions(raw: unknown, idPrefix: string): PayloadParamEntry[] {
+  if (!Array.isArray(raw)) return [];
+
+  const entries: PayloadParamEntry[] = [];
+  raw.forEach((item, itemIndex) => {
+    const record = asRecord(item);
+    if (!record) {
+      if (typeof item === 'string') {
+        entries.push({
+          id: `${idPrefix}-condition-${itemIndex}-0`,
+          path: item,
+          valueType: 'string',
+          value: '',
+        });
+      }
+      return;
+    }
+
+    Object.entries(record).forEach(([path, value], valueIndex) => {
+      const parsedValue = parsePayloadParamValue(value);
+      entries.push({
+        id: `${idPrefix}-condition-${itemIndex}-${valueIndex}`,
+        path,
+        valueType: parsedValue.valueType,
+        value: parsedValue.value,
+      });
+    });
+  });
+
+  return entries;
+}
+
+function parseStringList(raw: unknown): string[] {
+  return Array.isArray(raw) ? raw.map((item) => String(item ?? '').trim()).filter(Boolean) : [];
+}
+
+function parsePayloadModelEntries(raw: unknown, idPrefix: string): PayloadRule['models'] {
+  if (!Array.isArray(raw)) return [];
+
+  return raw.map((model, modelIndex) => {
+    const modelRecord = asRecord(model);
+    const nameRaw =
+      typeof model === 'string' ? model : (modelRecord?.name ?? modelRecord?.id ?? '');
+    const name = typeof nameRaw === 'string' ? nameRaw : String(nameRaw ?? '');
+    const modelId = `${idPrefix}-${modelIndex}`;
+
+    return {
+      id: modelId,
+      name,
+      protocol: parsePayloadProtocol(modelRecord?.protocol),
+      fromProtocol: parsePayloadProtocol(modelRecord?.['from-protocol']),
+      headers: parsePayloadHeaders(modelRecord?.headers, modelId),
+      match: parsePayloadConditions(modelRecord?.match, `${modelId}-match`),
+      notMatch: parsePayloadConditions(modelRecord?.['not-match'], `${modelId}-not-match`),
+      exist: parseStringList(modelRecord?.exist),
+      notExist: parseStringList(modelRecord?.['not-exist']),
+    };
+  });
+}
+
 export function parsePayloadRules(rules: unknown): PayloadRule[] {
   if (!Array.isArray(rules)) return [];
 
   return rules.map((rule, index) => {
     const record = asRecord(rule) ?? {};
 
-    const modelsRaw = record.models;
-    const models = Array.isArray(modelsRaw)
-      ? modelsRaw.map((model, modelIndex) => {
-          const modelRecord = asRecord(model);
-          const nameRaw =
-            typeof model === 'string' ? model : (modelRecord?.name ?? modelRecord?.id ?? '');
-          const name = typeof nameRaw === 'string' ? nameRaw : String(nameRaw ?? '');
-          return {
-            id: `model-${index}-${modelIndex}`,
-            name,
-            protocol: parsePayloadProtocol(modelRecord?.protocol),
-          };
-        })
-      : [];
+    const models = parsePayloadModelEntries(record.models, `model-${index}`);
 
     const paramsRecord = asRecord(record.params);
     const params = paramsRecord
@@ -196,20 +301,7 @@ export function parsePayloadFilterRules(rules: unknown): PayloadFilterRule[] {
   return rules.map((rule, index) => {
     const record = asRecord(rule) ?? {};
 
-    const modelsRaw = record.models;
-    const models = Array.isArray(modelsRaw)
-      ? modelsRaw.map((model, modelIndex) => {
-          const modelRecord = asRecord(model);
-          const nameRaw =
-            typeof model === 'string' ? model : (modelRecord?.name ?? modelRecord?.id ?? '');
-          const name = typeof nameRaw === 'string' ? nameRaw : String(nameRaw ?? '');
-          return {
-            id: `filter-model-${index}-${modelIndex}`,
-            name,
-            protocol: parsePayloadProtocol(modelRecord?.protocol),
-          };
-        })
-      : [];
+    const models = parsePayloadModelEntries(record.models, `filter-model-${index}`);
 
     const paramsRaw = record.params;
     const params = Array.isArray(paramsRaw) ? paramsRaw.map(String) : [];
@@ -224,20 +316,7 @@ export function parseRawPayloadRules(rules: unknown): PayloadRule[] {
   return rules.map((rule, index) => {
     const record = asRecord(rule) ?? {};
 
-    const modelsRaw = record.models;
-    const models = Array.isArray(modelsRaw)
-      ? modelsRaw.map((model, modelIndex) => {
-          const modelRecord = asRecord(model);
-          const nameRaw =
-            typeof model === 'string' ? model : (modelRecord?.name ?? modelRecord?.id ?? '');
-          const name = typeof nameRaw === 'string' ? nameRaw : String(nameRaw ?? '');
-          return {
-            id: `raw-model-${index}-${modelIndex}`,
-            name,
-            protocol: parsePayloadProtocol(modelRecord?.protocol),
-          };
-        })
-      : [];
+    const models = parsePayloadModelEntries(record.models, `raw-model-${index}`);
 
     const paramsRecord = asRecord(record.params);
     const params = paramsRecord
@@ -253,34 +332,88 @@ export function parseRawPayloadRules(rules: unknown): PayloadRule[] {
   });
 }
 
+function serializePayloadParamEntryValue(param: PayloadParamEntry): unknown {
+  if (param.valueType === 'number') {
+    const num = Number(param.value);
+    return Number.isFinite(num) ? num : param.value;
+  }
+  if (param.valueType === 'boolean') {
+    return param.value === 'true';
+  }
+  if (param.valueType === 'json') {
+    try {
+      return JSON.parse(param.value);
+    } catch {
+      return param.value;
+    }
+  }
+  return param.value;
+}
+
+function serializePayloadHeadersForYaml(headers?: PayloadHeaderEntry[]): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const header of headers ?? []) {
+    const name = header.name.trim();
+    if (!name) continue;
+    result[name] = header.value;
+  }
+  return result;
+}
+
+function serializePayloadConditionsForYaml(
+  conditions?: PayloadParamEntry[]
+): Array<Record<string, unknown>> {
+  const result: Array<Record<string, unknown>> = [];
+  for (const condition of conditions ?? []) {
+    const path = condition.path.trim();
+    if (!path) continue;
+    result.push({ [path]: serializePayloadParamEntryValue(condition) });
+  }
+  return result;
+}
+
+function serializeStringListForYaml(items?: string[]): string[] {
+  return (items ?? []).map((item) => item.trim()).filter(Boolean);
+}
+
+function serializePayloadModelsForYaml(
+  models: PayloadRule['models']
+): Array<Record<string, unknown>> {
+  return (models || [])
+    .filter((model) => model.name?.trim())
+    .map((model) => {
+      const obj: Record<string, unknown> = { name: model.name.trim() };
+      if (model.protocol) obj.protocol = model.protocol;
+      if (model.fromProtocol) obj['from-protocol'] = model.fromProtocol;
+
+      const headers = serializePayloadHeadersForYaml(model.headers);
+      if (Object.keys(headers).length > 0) obj.headers = headers;
+
+      const match = serializePayloadConditionsForYaml(model.match);
+      if (match.length > 0) obj.match = match;
+
+      const notMatch = serializePayloadConditionsForYaml(model.notMatch);
+      if (notMatch.length > 0) obj['not-match'] = notMatch;
+
+      const exist = serializeStringListForYaml(model.exist);
+      if (exist.length > 0) obj.exist = exist;
+
+      const notExist = serializeStringListForYaml(model.notExist);
+      if (notExist.length > 0) obj['not-exist'] = notExist;
+
+      return obj;
+    });
+}
+
 export function serializePayloadRulesForYaml(rules: PayloadRule[]): Array<Record<string, unknown>> {
   return rules
     .map((rule) => {
-      const models = (rule.models || [])
-        .filter((m) => m.name?.trim())
-        .map((m) => {
-          const obj: Record<string, unknown> = { name: m.name.trim() };
-          if (m.protocol) obj.protocol = m.protocol;
-          return obj;
-        });
+      const models = serializePayloadModelsForYaml(rule.models);
 
       const params: Record<string, unknown> = {};
       for (const param of rule.params || []) {
         if (!param.path?.trim()) continue;
-        let value: unknown = param.value;
-        if (param.valueType === 'number') {
-          const num = Number(param.value);
-          value = Number.isFinite(num) ? num : param.value;
-        } else if (param.valueType === 'boolean') {
-          value = param.value === 'true';
-        } else if (param.valueType === 'json') {
-          try {
-            value = JSON.parse(param.value);
-          } catch {
-            value = param.value;
-          }
-        }
-        params[param.path.trim()] = value;
+        params[param.path.trim()] = serializePayloadParamEntryValue(param);
       }
 
       return { models, params };
@@ -293,13 +426,7 @@ export function serializePayloadFilterRulesForYaml(
 ): Array<Record<string, unknown>> {
   return rules
     .map((rule) => {
-      const models = (rule.models || [])
-        .filter((m) => m.name?.trim())
-        .map((m) => {
-          const obj: Record<string, unknown> = { name: m.name.trim() };
-          if (m.protocol) obj.protocol = m.protocol;
-          return obj;
-        });
+      const models = serializePayloadModelsForYaml(rule.models);
 
       const params = (Array.isArray(rule.params) ? rule.params : [])
         .map((path) => String(path).trim())
@@ -315,13 +442,7 @@ export function serializeRawPayloadRulesForYaml(
 ): Array<Record<string, unknown>> {
   return rules
     .map((rule) => {
-      const models = (rule.models || [])
-        .filter((m) => m.name?.trim())
-        .map((m) => {
-          const obj: Record<string, unknown> = { name: m.name.trim() };
-          if (m.protocol) obj.protocol = m.protocol;
-          return obj;
-        });
+      const models = serializePayloadModelsForYaml(rule.models);
 
       const params: Record<string, unknown> = {};
       for (const param of rule.params || []) {
@@ -349,6 +470,11 @@ export const VISUAL_CONFIG_PROTOCOL_OPTIONS = [
     value: 'openai-response',
     labelKey: 'config_management.visual.payload_rules.provider_openai_response',
     defaultLabel: 'OpenAI Response',
+  },
+  {
+    value: 'responses',
+    labelKey: 'config_management.visual.payload_rules.provider_responses',
+    defaultLabel: 'Responses',
   },
   {
     value: 'gemini',
