@@ -204,6 +204,30 @@ export interface DashboardHourlyActivityPoint {
   intensity: number;
 }
 
+export interface DashboardTodayRequestHealthTimelinePoint {
+  bucket_ms: number;
+  calls: number;
+  tokens: number;
+  success: number;
+  failure: number;
+  success_rate: number;
+  failure_rate: number;
+  tone: 'future' | 'empty' | 'good' | 'warn' | 'bad' | string;
+  intensity: number;
+  future: boolean;
+}
+
+export interface DashboardTodayRequestHealthTimeline {
+  from_ms: number;
+  to_ms: number;
+  bucket_ms: number;
+  success_calls: number;
+  failure_calls: number;
+  total_calls: number;
+  success_rate: number;
+  points: DashboardTodayRequestHealthTimelinePoint[];
+}
+
 export interface DashboardTokenMixSegment {
   key: 'input' | 'output' | 'reasoning' | 'cached' | string;
   tokens: number;
@@ -221,6 +245,9 @@ export interface DashboardModelCostRank {
 
 export interface DashboardChannelHealth {
   auth_index: string;
+  auth_label?: string;
+  account?: string;
+  channel?: string;
   calls: number;
   failures: number;
   failure_rate: number;
@@ -234,6 +261,10 @@ export interface DashboardChannelHealth {
 export interface DashboardFailureSource {
   source_hash: string;
   auth_index: string;
+  auth_label?: string;
+  account?: string;
+  channel?: string;
+  source?: string;
   calls: number;
   failures: number;
   failure_rate: number;
@@ -248,6 +279,11 @@ export interface DashboardRecentFailure {
   api_key_hash: string;
   source_hash: string;
   auth_index: string;
+  auth_label?: string;
+  account?: string;
+  channel?: string;
+  api_key_alias?: string;
+  source?: string;
   endpoint: string;
   duration_ms: number | null;
 }
@@ -261,6 +297,7 @@ export interface DashboardSummaryResponse {
   model_cost_rank?: DashboardModelCostRank[];
   traffic_timeline?: DashboardTrafficPoint[];
   hourly_activity?: DashboardHourlyActivityPoint[];
+  today_request_health_timeline?: DashboardTodayRequestHealthTimeline;
   token_mix?: DashboardTokenMixSegment[];
   channel_health?: DashboardChannelHealth[];
   failure_sources?: DashboardFailureSource[];

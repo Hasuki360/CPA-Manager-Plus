@@ -1,136 +1,76 @@
-@use '../../../styles/mixins.scss' as *;
-
-.card {
-  display: flex;
-  flex-direction: column;
-  gap: $spacing-md;
-  min-height: 320px;
-  padding: $spacing-lg;
-  border: 1px solid var(--glass-border);
-  border-radius: var(--app-radius-lg);
+.dataCard {
   background: var(--glass-bg);
-  box-shadow: var(--glass-shadow);
-  backdrop-filter: blur(var(--app-blur));
-  -webkit-backdrop-filter: blur(var(--app-blur));
-}
-
-.header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: $spacing-sm;
-
-  h2 {
-    margin: 0;
-    font-size: 15px;
-    color: var(--text-primary);
-  }
-}
-
-.badgeOk,
-.badgeError {
-  display: inline-flex;
-  align-items: center;
-  max-width: 50%;
-  min-height: 24px;
-  padding: 2px 8px;
-  border-radius: $radius-full;
-  overflow: hidden;
-  font-size: 11px;
-  font-weight: 700;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.badgeOk {
-  color: var(--success-badge-text);
-  background: var(--success-badge-bg);
-  border: 1px solid var(--success-badge-border);
-}
-
-.badgeError {
-  color: var(--error-text);
-  background: var(--error-bg);
-  border: 1px solid var(--error-border);
-}
-
-.statusGrid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: $spacing-sm;
-}
-
-.statusTile {
-  display: grid;
-  grid-template-columns: 32px minmax(0, 1fr);
-  grid-template-rows: auto auto;
-  column-gap: $spacing-sm;
-  align-items: center;
-  min-height: 64px;
-  padding: $spacing-sm;
-  border: 1px solid var(--border-color);
+  backdrop-filter: var(--glass-backdrop-filter);
+  border: 1px solid var(--glass-border);
   border-radius: var(--app-radius-md);
-  background: color-mix(in srgb, var(--bg-secondary) 82%, transparent);
-
-  span {
-    min-width: 0;
-    overflow: hidden;
-    color: var(--text-secondary);
-    font-size: 11px;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  strong {
-    min-width: 0;
-    overflow: hidden;
-    color: var(--text-primary);
-    font-size: 16px;
-    line-height: 1.2;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-variant-numeric: tabular-nums;
-  }
-}
-
-.tileIcon {
-  grid-row: 1 / 3;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  border-radius: var(--app-radius-md);
-  color: var(--primary-color);
-  background: var(--app-accent-soft);
-}
-
-.detailList {
+  padding: 16px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 20px;
+  min-width: 0;
 
-  div {
+  .cardHeader {
     display: flex;
-    align-items: center;
     justify-content: space-between;
-    gap: $spacing-sm;
-    min-height: 24px;
-    font-size: 12px;
-  }
-
-  span {
-    color: var(--text-secondary);
-  }
-
-  strong {
+    align-items: center;
+    gap: 10px;
     min-width: 0;
-    overflow: hidden;
-    color: var(--text-primary);
-    font-weight: 600;
-    text-align: right;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    h3 { font-size: 16px; font-weight: 600; margin: 0; }
+    .moreBtn {
+      color: var(--color-primary);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      &:hover { text-decoration: underline; }
+    }
+  }
+
+  .statusList {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .statusItem {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 13px;
+
+    .label { color: var(--text-tertiary); }
+    .value {
+      font-weight: 600;
+      color: var(--text-primary);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+      overflow: hidden;
+      text-align: right;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .statusText { color: var(--text-primary); }
+    .statusOk { color: #10b981; }
+    .statusWarn { color: #f59e0b; }
+    .statusDot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #10b981;
+      display: inline-block;
+    }
+
+    .statusWarn .statusDot {
+      background: #f59e0b;
+    }
+  }
+}
+
+@media (max-width: 560px) {
+  .dataCard {
+    padding: 12px;
   }
 }
 
@@ -138,21 +78,19 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
-  margin-top: auto;
-  padding: $spacing-sm;
-  border: 1px solid var(--error-border);
-  border-radius: var(--app-radius-md);
-  background: var(--error-bg);
+  padding: 10px 12px;
+  border: 1px solid rgba(245, 158, 11, 0.24);
+  border-radius: var(--app-radius-sm);
+  background: rgba(245, 158, 11, 0.08);
   font-size: 12px;
 
   span {
-    color: var(--error-text);
-    font-weight: 700;
+    color: var(--text-tertiary);
   }
 
   strong {
-    color: var(--error-text);
-    font-weight: 500;
-    word-break: break-word;
+    color: #f59e0b;
+    font-weight: 600;
+    overflow-wrap: anywhere;
   }
 }

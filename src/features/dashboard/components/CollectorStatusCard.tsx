@@ -1,10 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { IconCheck, IconInbox, IconSatellite, IconTimer } from '@/components/ui/icons';
-import {
-  usageServiceApi,
-  type UsageServiceStatus,
-} from '@/services/api/usageService';
+import type { UsageServiceStatus } from '@/services/api/usageService';
 import styles from './CollectorStatusCard.module.scss';
 
 interface CollectorStatusCardProps {
@@ -12,141 +7,83 @@ interface CollectorStatusCardProps {
   serviceBase: string;
   managementKey?: string;
   refreshSignal?: number;
+  status: UsageServiceStatus | null;
+  loading: boolean;
+  error: string;
 }
-
-const REFRESH_INTERVAL_MS = 60_000;
 
 const formatCount = (value: number | undefined) =>
   Number.isFinite(value) ? Number(value).toLocaleString() : '-';
 
 const formatTimestamp = (value: number | undefined, locale: string) => {
   if (!value || !Number.isFinite(value)) return '-';
-  return new Date(value).toLocaleString(locale);
+  return new Date(value).toLocaleTimeString(locale, {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
 };
 
 export function CollectorStatusCard({
   enabled,
-  serviceBase,
-  managementKey,
-  refreshSignal,
+  status,
+  loading,
+  error,
 }: CollectorStatusCardProps) {
   const { t, i18n } = useTranslation();
-  const [status, setStatus] = useState<UsageServiceStatus | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-
-  const refresh = useCallback(async () => {
-    if (!enabled || !serviceBase) {
-      setStatus(null);
-      return;
-    }
-
-    setLoading(true);
-    setError('');
-    try {
-      const response = await usageServiceApi.getStatus(serviceBase, managementKey);
-      setStatus(response);
-    } catch (err) {
-      setStatus(null);
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoading(false);
-    }
-  }, [enabled, managementKey, serviceBase]);
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
-
-  useEffect(() => {
-    if (!refreshSignal) return;
-    void refresh();
-  }, [refresh, refreshSignal]);
-
-  useEffect(() => {
-    if (!enabled) return;
-    const timer = window.setInterval(() => {
-      void refresh();
-    }, REFRESH_INTERVAL_MS);
-    return () => window.clearInterval(timer);
-  }, [enabled, refresh]);
-
   const collector = status?.collector;
+  const lastError = collector?.lastError || error;
+  const queueStatus = !enabled
+    ? t('dashboard.health_status_disabled')
+    : error
+      ? t('dashboard.collector_unavailable')
+      : lastError
+        ? t('dashboard.health_status_warning')
+        : status
+          ? t('dashboard.health_status_normal')
+          : '-';
+
   const rows = [
-    {
-      key: 'events',
-      label: t('dashboard.collector_events'),
-      value: loading && !status ? '...' : formatCount(status?.events),
-      icon: <IconInbox size={18} />,
-    },
-    {
-      key: 'deadLetters',
-      label: t('dashboard.collector_dead_letters'),
-      value: loading && !status ? '...' : formatCount(status?.deadLetters ?? collector?.deadLetters),
-      icon: <IconShieldStatus />,
-    },
-    {
-      key: 'mode',
-      label: t('dashboard.collector_mode'),
-      value: collector?.mode || collector?.collector || '-',
-      icon: <IconSatellite size={18} />,
-    },
-    {
-      key: 'queue',
-      label: t('dashboard.collector_queue'),
-      value: collector?.queue || '-',
-      icon: <IconCheck size={18} />,
-    },
+    { label: t('dashboard.collector_mode'), value: collector?.mode || collector?.collector || '-' },
+    { label: t('dashboard.health_queue_status'), value: queueStatus, isStatus: true },
+    { label: t('dashboard.collector_events'), value: formatCount(status?.events) },
+    { label: t('dashboard.collector_dead_letters'), value: formatCount(status?.deadLetters ?? collector?.deadLetters) },
+    { label: t('dashboard.collector_last_consumed'), value: formatTimestamp(collector?.lastConsumedAt, i18n.language) },
+    { label: t('dashboard.collector_last_inserted'), value: formatTimestamp(collector?.lastInsertedAt, i18n.language) },
+    { label: t('dashboard.collector_total_inserted'), value: formatCount(collector?.totalInserted) },
+    { label: t('dashboard.collector_total_skipped'), value: formatCount(collector?.totalSkipped) },
   ];
 
   return (
-    <section className={styles.card}>
-      <div className={styles.header}>
-        <h2>{t('dashboard.collector_status_title')}</h2>
-        <span className={error ? styles.badgeError : styles.badgeOk}>
-          {error ? t('dashboard.collector_unavailable') : collector?.mode || '-'}
-        </span>
+    <section className={styles.dataCard}>
+      <div className={styles.cardHeader}>
+        <h3>{t('dashboard.collector_status_title')}</h3>
       </div>
-
-      <div className={styles.statusGrid}>
-        {rows.map((row) => (
-          <div key={row.key} className={styles.statusTile}>
-            <div className={styles.tileIcon}>{row.icon}</div>
-            <span>{row.label}</span>
-            <strong>{row.value}</strong>
+      <div className={styles.statusList}>
+        {rows.map((row, i) => (
+          <div key={i} className={styles.statusItem}>
+            <span className={styles.label}>{row.label}</span>
+            <span
+              className={`${styles.value} ${
+                row.isStatus
+                  ? `${styles.statusText} ${
+                      !enabled || error || lastError ? styles.statusWarn : styles.statusOk
+                    }`
+                  : ''
+              }`}
+            >
+              {loading && !status ? '...' : row.value}
+              {row.isStatus && <span className={styles.statusDot} />}
+            </span>
           </div>
         ))}
       </div>
-
-      <div className={styles.detailList}>
-        <div>
-          <span>{t('dashboard.collector_last_consumed')}</span>
-          <strong>{formatTimestamp(collector?.lastConsumedAt, i18n.language)}</strong>
-        </div>
-        <div>
-          <span>{t('dashboard.collector_last_inserted')}</span>
-          <strong>{formatTimestamp(collector?.lastInsertedAt, i18n.language)}</strong>
-        </div>
-        <div>
-          <span>{t('dashboard.collector_total_inserted')}</span>
-          <strong>{formatCount(collector?.totalInserted)}</strong>
-        </div>
-        <div>
-          <span>{t('dashboard.collector_total_skipped')}</span>
-          <strong>{formatCount(collector?.totalSkipped)}</strong>
-        </div>
-      </div>
-
-      {(collector?.lastError || error) && (
+      {lastError ? (
         <div className={styles.errorLine}>
           <span>{t('dashboard.collector_last_error')}</span>
-          <strong>{collector?.lastError || error}</strong>
+          <strong>{lastError}</strong>
         </div>
-      )}
+      ) : null}
     </section>
   );
-}
-
-function IconShieldStatus() {
-  return <IconTimer size={18} />;
 }

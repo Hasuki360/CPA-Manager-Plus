@@ -1,187 +1,206 @@
-@use '../../../styles/mixins.scss' as *;
+.metricsGrid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 12px;
 
-.card {
-  display: flex;
-  flex-direction: column;
-  gap: $spacing-md;
-  min-height: 320px;
-  padding: $spacing-lg;
-  border: 1px solid var(--glass-border);
-  border-radius: var(--app-radius-lg);
+  @media (max-width: 1440px) { grid-template-columns: repeat(3, 1fr); }
+  @media (max-width: 768px) { grid-template-columns: repeat(2, 1fr); }
+  @media (max-width: 480px) { grid-template-columns: 1fr; }
+}
+
+.metricCard {
   background: var(--glass-bg);
-  box-shadow: var(--glass-shadow);
-  backdrop-filter: blur(var(--app-blur));
-  -webkit-backdrop-filter: blur(var(--app-blur));
-}
-
-.header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: $spacing-sm;
-
-  h2 {
-    margin: 0;
-    font-size: 15px;
-    color: var(--text-primary);
-  }
-
-  span {
-    display: block;
-    margin-top: 2px;
-    font-size: 11px;
-    color: var(--text-tertiary);
-    font-variant-numeric: tabular-nums;
-  }
-}
-
-.metricGrid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: $spacing-sm;
-}
-
-.metric {
-  display: grid;
-  grid-template-columns: 32px minmax(0, 1fr);
-  grid-template-rows: auto auto;
-  column-gap: $spacing-sm;
-  align-items: center;
-  min-height: 64px;
-  padding: $spacing-sm;
-  border: 1px solid var(--border-color);
+  backdrop-filter: var(--glass-backdrop-filter);
+  border: 1px solid var(--glass-border);
   border-radius: var(--app-radius-md);
-  background: color-mix(in srgb, var(--bg-secondary) 82%, transparent);
-}
-
-.metricIcon {
-  grid-row: 1 / 3;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  border-radius: var(--app-radius-md);
-  color: var(--primary-color);
-  background: var(--app-accent-soft);
-}
-
-.metricLabel {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--text-secondary);
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.metricValue {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--text-primary);
-  font-size: 17px;
-  line-height: 1.2;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-}
-
-.modelList {
+  padding: 16px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  margin-top: auto;
+  gap: 12px;
+  position: relative;
+  overflow: hidden;
+  min-width: 0;
+  transition: all 0.3s ease;
+
+  &:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 16px rgba(0, 0, 0, 0.1);
+    border-color: var(--accent-color);
+  }
+
+  .metricHeader {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    z-index: 1;
+
+    .metricIcon {
+      width: 32px;
+      height: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: color-mix(in srgb, var(--accent-color), transparent 90%);
+      color: var(--accent-color);
+      border-radius: 8px;
+    }
+
+    .metricLabel {
+      font-size: 12px;
+      color: var(--text-tertiary);
+      font-weight: 500;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  }
+
+  .metricBody {
+    display: flex;
+    flex-direction: column;
+    z-index: 1;
+
+    .metricValue {
+      font-size: 24px;
+      font-weight: 700;
+      color: var(--text-primary);
+      font-variant-numeric: tabular-nums;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .metricSubValue {
+      font-size: 11px;
+      margin-top: 4px;
+      font-weight: 500;
+      color: var(--text-tertiary);
+    }
+  }
+
+  .metricBgChart {
+    position: absolute;
+    bottom: -5px;
+    left: 0;
+    width: 100%;
+    height: 30px;
+    opacity: 0.5;
+    z-index: 0;
+  }
 }
 
-.modelRank {
+// Model Rank Card
+.rankCard {
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-backdrop-filter);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--app-radius-md);
+  padding: 16px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  margin-top: auto;
-}
+  gap: 20px;
+  min-width: 0;
 
-.rankTitle {
-  color: var(--text-secondary);
-  font-size: 12px;
-  font-weight: 700;
-}
+  .rankHeader {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    h3 { font-size: 16px; font-weight: 600; margin: 0; }
+    .moreBtn {
+      color: var(--color-primary);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      &:hover { text-decoration: underline; }
+    }
+  }
 
-.modelRankRow {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 4px $spacing-sm;
-  font-size: 12px;
+  .rankList {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
 
-  small {
-    color: var(--text-tertiary);
-    font-variant-numeric: tabular-nums;
+  .rankItem {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+
+    .rankIndex {
+      width: 24px;
+      height: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--app-surface-muted);
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--text-tertiary);
+
+      &[data-rank="1"] { background: #f59e0b; color: white; }
+      &[data-rank="2"] { background: #94a3b8; color: white; }
+      &[data-rank="3"] { background: #b45309; color: white; }
+    }
+
+    .rankInfo {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      min-width: 0;
+
+      .modelName {
+        font-size: 13px;
+        font-weight: 600;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .rankTrack {
+        height: 6px;
+        background: var(--app-surface-muted);
+        border-radius: 3px;
+        overflow: hidden;
+
+        .rankBar {
+          width: calc(var(--share) * 100%);
+          height: 100%;
+          background: var(--color-primary);
+          border-radius: 3px;
+        }
+      }
+    }
+
+    .rankValue {
+      text-align: right;
+      .cost { font-size: 13px; font-weight: 600; }
+      .share { font-size: 11px; color: var(--text-tertiary); }
+    }
   }
 }
 
-.modelRankMeta {
-  grid-column: 1 / 3;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: $spacing-sm;
-
-  span {
-    min-width: 0;
-    overflow: hidden;
-    color: var(--text-secondary);
-    text-overflow: ellipsis;
-    white-space: nowrap;
+@media (max-width: 560px) {
+  .metricCard,
+  .rankCard {
+    padding: 12px;
   }
 
-  strong {
-    color: var(--text-primary);
-    font-variant-numeric: tabular-nums;
+  .metricCard .metricBody .metricValue {
+    font-size: 22px;
   }
 }
 
-.modelRankTrack {
-  align-self: center;
-  height: 7px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: var(--bg-secondary);
-}
-
-.modelRankBar {
-  display: block;
-  width: calc(var(--share) * 100%);
-  height: 100%;
-  border-radius: inherit;
-  background: var(--primary-color);
-}
-
-.modelRow {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: $spacing-sm;
-  min-height: 30px;
-  font-size: 12px;
-  color: var(--text-secondary);
-
-  span {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  strong {
-    color: var(--text-primary);
-    font-variant-numeric: tabular-nums;
-  }
-}
-
-.error {
-  padding: $spacing-sm;
-  border: 1px solid var(--error-border);
-  border-radius: var(--app-radius-md);
-  background: var(--error-bg);
-  color: var(--error-text);
+.error,
+.empty {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-sm);
+  background: var(--app-surface-muted);
+  color: var(--text-tertiary);
   font-size: 12px;
 }

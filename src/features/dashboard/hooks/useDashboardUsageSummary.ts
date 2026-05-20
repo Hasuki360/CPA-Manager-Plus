@@ -21,6 +21,7 @@ export interface UseDashboardUsageSummaryReturn {
   modelCostRank: NonNullable<DashboardSummaryResponse['model_cost_rank']>;
   trafficTimeline: NonNullable<DashboardSummaryResponse['traffic_timeline']>;
   hourlyActivity: NonNullable<DashboardSummaryResponse['hourly_activity']>;
+  todayRequestHealthTimeline: NonNullable<DashboardSummaryResponse['today_request_health_timeline']> | null;
   tokenMix: NonNullable<DashboardSummaryResponse['token_mix']>;
   channelHealth: NonNullable<DashboardSummaryResponse['channel_health']>;
   failureSources: NonNullable<DashboardSummaryResponse['failure_sources']>;
@@ -103,6 +104,7 @@ export function useDashboardUsageSummary(): UseDashboardUsageSummaryReturn {
       modelCostRank: summary?.model_cost_rank ?? [],
       trafficTimeline: summary?.traffic_timeline ?? [],
       hourlyActivity: summary?.hourly_activity ?? [],
+      todayRequestHealthTimeline: summary?.today_request_health_timeline ?? null,
       tokenMix: summary?.token_mix ?? [],
       channelHealth: summary?.channel_health ?? [],
       failureSources: summary?.failure_sources ?? [],

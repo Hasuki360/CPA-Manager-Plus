@@ -18,6 +18,7 @@ import { classifyModels } from '@/utils/models';
 import { STORAGE_KEY_AUTH } from '@/utils/constants';
 import { compareVersions } from '@/utils/version';
 import { INLINE_LOGO_JPEG } from '@/assets/logoInline';
+import { readApiLatestVersion, readManagerLatestTag } from './versionChecks';
 import iconGemini from '@/assets/icons/gemini.svg';
 import iconClaude from '@/assets/icons/claude.svg';
 import iconOpenaiLight from '@/assets/icons/openai-light.svg';
@@ -262,8 +263,7 @@ export function SystemPage() {
     setCheckingAppVersion(true);
     try {
       const data = await versionApi.checkManagerLatest();
-      const latestRaw = data?.tag_name ?? data?.name ?? data?.latest_version ?? data?.latest ?? '';
-      const latest = typeof latestRaw === 'string' ? latestRaw : String(latestRaw ?? '');
+      const latest = readManagerLatestTag(data);
       const comparison = compareVersions(latest, __APP_VERSION__);
 
       if (!latest) {
@@ -297,8 +297,7 @@ export function SystemPage() {
     setCheckingVersion(true);
     try {
       const data = await versionApi.checkLatest();
-      const latestRaw = data?.['latest-version'] ?? data?.latest_version ?? data?.latest ?? '';
-      const latest = typeof latestRaw === 'string' ? latestRaw : String(latestRaw ?? '');
+      const latest = readApiLatestVersion(data);
       const comparison = compareVersions(latest, auth.serverVersion);
 
       if (!latest) {

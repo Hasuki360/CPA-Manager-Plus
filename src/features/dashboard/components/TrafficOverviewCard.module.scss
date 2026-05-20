@@ -1,183 +1,542 @@
-@use '../../../styles/mixins.scss' as *;
+.chartsGrid {
+  --dashboard-chart-card-min-height: clamp(280px, 20vw, 300px);
 
-.card {
+  display: grid;
+  grid-template-columns: minmax(380px, 1.24fr) minmax(460px, 1.34fr) minmax(240px, 0.62fr);
+  gap: var(--app-gap);
+  align-items: stretch;
+  min-width: 0;
+
+  @media (max-width: 1280px) {
+    --dashboard-chart-card-min-height: auto;
+
+    grid-template-columns: 1fr;
+  }
+}
+
+.chartCard {
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-backdrop-filter);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--app-radius-md);
+  padding: 16px;
   display: flex;
   flex-direction: column;
-  gap: $spacing-md;
-  min-height: 320px;
-  padding: $spacing-lg;
-  border: 1px solid var(--glass-border);
-  border-radius: var(--app-radius-lg);
-  background: var(--glass-bg);
-  box-shadow: var(--glass-shadow);
-  backdrop-filter: blur(var(--app-blur));
-  -webkit-backdrop-filter: blur(var(--app-blur));
+  gap: 16px;
+  min-width: 0;
+
+  .cardHeader {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+    h3 { font-size: 16px; font-weight: 600; margin: 0; }
+  }
 }
 
-.header {
+.activityCard,
+.healthTimelineCard,
+.tokenCard {
+  height: 100%;
+  min-height: var(--dashboard-chart-card-min-height);
+}
+
+.activityCard {
+  .chartFrame {
+    flex: 1 1 auto;
+  }
+}
+
+// 1. Bar Chart
+.legend {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: $spacing-sm;
-
-  h2 {
-    margin: 0;
-    color: var(--text-primary);
-    font-size: 15px;
-  }
-
-  span {
-    display: block;
-    margin-top: 2px;
+  gap: 16px;
+  .legendItem {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
     color: var(--text-tertiary);
-    font-size: 11px;
+    .dot { width: 8px; height: 8px; border-radius: 50%; }
   }
 }
 
-.timelineChart {
+.chartFrame {
   position: relative;
-  display: grid;
-  grid-template-columns: repeat(24, minmax(4px, 1fr));
-  align-items: end;
-  gap: 4px;
-  min-height: 126px;
-  padding: 8px 0;
-  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  padding: 6px 20px 0 22px;
+  min-height: 0;
 }
 
-.timelineColumn {
-  position: relative;
+.yAxisLeft,
+.yAxisRight {
+  position: absolute;
+  top: 8px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.yAxisLeft {
+  left: 0;
+}
+
+.yAxisRight {
+  right: 0;
+  color: #10b981;
+}
+
+.barChart {
+  flex: 1 1 auto;
+  min-height: clamp(170px, 15vw, 208px);
   display: flex;
   align-items: flex-end;
+  gap: 4px;
+  padding: 16px 0 6px;
+  border-bottom: 1px solid var(--app-border);
+  position: relative;
+
+  .barColumn {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    gap: 2px;
+    height: 100%;
+
+    .callBar {
+      height: calc(var(--calls-share) * 100%);
+      background: #3b82f6;
+      border-radius: 2px 2px 0 0;
+      min-height: 2px;
+      transition: height 0.3s ease;
+    }
+  }
+
+  .tokenLine {
+    position: absolute;
+    inset: 16px 0 6px;
+    width: 100%;
+    height: calc(100% - 22px);
+    overflow: visible;
+    pointer-events: none;
+
+    polyline {
+      fill: none;
+      stroke: #10b981;
+      stroke-width: 2.2;
+      vector-effect: non-scaling-stroke;
+    }
+  }
+
+  .empty {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 13px;
+    color: var(--text-muted);
+  }
+}
+
+.xAxis {
+  display: flex;
+  justify-content: space-between;
+  padding: 0 4px;
+  span { font-size: 11px; color: var(--text-muted); }
+}
+
+// 2. Request Health Timeline
+.healthTimelineCard {
+  gap: 12px;
+}
+
+.healthHeader {
+  align-items: flex-start !important;
+}
+
+.healthTitle {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+
+  h3 {
+    margin-top: 0 !important;
+  }
+
+  p {
+    margin: 6px 0 0;
+    color: var(--text-tertiary);
+    font-size: 12px;
+    line-height: 1.4;
+  }
+}
+
+.healthSummary {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 7px;
+  flex: 0 0 auto;
+  text-align: right;
+
+  strong {
+    padding: 6px 10px;
+    border-radius: 8px;
+    background: rgba(16, 185, 129, 0.12);
+    color: #34d399;
+    font-size: 13px;
+    font-weight: 800;
+    line-height: 1;
+  }
+}
+
+.healthCounts {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 600;
+
+  span {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+  }
+
+  i {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+  }
+}
+
+.healthMatrix {
+  position: relative;
+  display: flex;
+  flex-direction: column;
   justify-content: center;
-  gap: 2px;
-  height: 112px;
+  flex: 1;
+  gap: 3px;
+  min-height: 112px;
+  max-width: 100%;
+}
+
+.healthHourAxis {
+  display: grid;
+  grid-template-columns: 38px repeat(24, minmax(0, 1fr));
+  gap: 3px;
+  align-items: center;
+  min-height: 12px;
+
+  span {
+    color: var(--text-muted);
+    font-size: 10px;
+    line-height: 1;
+    text-align: center;
+  }
+}
+
+.healthDayRow {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  gap: 5px;
+  align-items: center;
   min-width: 0;
 }
 
-.callsBar,
-.tokensBar {
-  display: block;
-  width: min(10px, 45%);
-  min-height: 3px;
-  border-radius: 999px 999px 2px 2px;
+.healthDayLabel {
+  color: var(--text-tertiary);
+  font-size: 10px;
+  line-height: 1;
+  white-space: nowrap;
 }
 
-.callsBar {
-  height: max(3px, calc(var(--calls-share) * 100%));
-  background: var(--primary-color);
+.healthDayCells {
+  display: grid;
+  grid-template-columns: repeat(24, minmax(0, 1fr));
+  gap: 3px;
+  min-width: 0;
 }
 
-.tokensBar {
-  height: max(3px, calc(var(--tokens-share) * 100%));
-  background: var(--success-color);
-  opacity: 0.82;
+.healthCell {
+  width: 100%;
+  aspect-ratio: 1;
+  min-height: 6px;
+  border-radius: 2px;
+  background: var(--app-surface-muted);
 }
 
-.emptyOverlay {
+.healthEmpty,
+.healthBad,
+.healthWarn,
+.healthGood,
+.healthFuture {
+  display: inline-block;
+}
+
+.healthEmpty {
+  background: color-mix(in srgb, var(--app-surface-muted), #111827 12%);
+}
+
+.healthGood {
+  background: #22c55e;
+}
+
+.healthWarn {
+  background: #a3e635;
+}
+
+.healthBad {
+  background: #ef4444;
+}
+
+.healthFuture {
+  background: transparent;
+  border: 1px dashed var(--app-border);
+  opacity: 0.55;
+}
+
+.healthEmptyState {
   position: absolute;
   inset: 0;
   display: grid;
   place-items: center;
-  color: var(--text-secondary);
-  font-size: 13px;
-}
-
-.legend {
-  display: flex;
-  align-items: center;
-  gap: $spacing-md;
-  color: var(--text-secondary);
+  color: var(--text-tertiary);
   font-size: 12px;
 }
 
-.callsLegend,
-.tokensLegend {
-  display: inline-flex;
+.healthLegend {
+  display: flex;
   align-items: center;
-  gap: 6px;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 11px;
 
-  &::before {
-    content: '';
-    width: 10px;
-    height: 10px;
-    border-radius: 3px;
-    background: currentColor;
+  div {
+    display: inline-flex;
+    gap: 4px;
+  }
+
+  span {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  i {
+    width: 9px;
+    height: 9px;
+    border-radius: 2px;
   }
 }
 
-.callsLegend {
-  color: var(--primary-color);
-}
-
-.tokensLegend {
-  color: var(--success-color);
-}
-
-.activityStrip {
+// 3. Doughnut
+.doughnutSection {
+  position: relative;
   display: grid;
-  grid-template-columns: repeat(24, minmax(4px, 1fr));
-  gap: 4px;
-  min-height: 20px;
+  place-items: center;
+  flex: 1;
+  min-height: 0;
+  padding: 0;
 }
 
-.activityCell {
-  display: block;
-  height: 18px;
-  border-radius: 4px;
-  background: var(--primary-color);
-  opacity: calc(0.16 + var(--intensity) * 0.84);
+.doughnutChart {
+  width: min(100%, 260px);
+  aspect-ratio: 1;
+  position: relative;
+
+  svg {
+    width: 100%;
+    height: 100%;
+    transform: rotate(-90deg);
+  }
+
+  .doughnutTrack,
+  .doughnutSegment {
+    fill: none;
+    stroke-width: 12;
+  }
+
+  .doughnutTrack {
+    stroke: var(--app-surface-muted);
+  }
+
+  .doughnutSegment {
+    stroke: var(--color);
+    stroke-dasharray: var(--dash);
+    stroke-dashoffset: var(--offset);
+    stroke-linecap: butt;
+    cursor: pointer;
+    outline: none;
+    transition:
+      opacity 0.18s ease,
+      stroke-width 0.18s ease,
+      filter 0.18s ease;
+
+    &:hover,
+    &:focus-visible {
+      filter: drop-shadow(0 3px 8px rgba(15, 23, 42, 0.18));
+      opacity: 0.92;
+      stroke-width: 13;
+    }
+  }
+
+  .doughnutSegmentActive {
+    filter: drop-shadow(0 3px 8px rgba(15, 23, 42, 0.18));
+    opacity: 0.92;
+    stroke-width: 13;
+  }
+
+  .doughnutCenter {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+
+    .centerLabel { font-size: 11px; color: var(--text-tertiary); }
+    .centerValue { font-size: 16px; font-weight: 700; color: var(--text-primary); }
+  }
 }
 
-.tokenMix {
+.tokenTooltip {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  z-index: 2;
+  min-width: 112px;
+  padding: 8px 10px;
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--glass-bg), var(--app-bg) 20%);
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.16);
+  color: var(--text-primary);
+  pointer-events: none;
+  backdrop-filter: var(--glass-backdrop-filter);
+
+  strong {
+    display: block;
+    margin-top: 5px;
+    font-size: 16px;
+    line-height: 1.1;
+  }
+
+  > span:last-child {
+    display: block;
+    margin-top: 3px;
+    color: var(--text-tertiary);
+    font-size: 12px;
+    font-weight: 600;
+  }
+}
+
+.tokenTooltipLabel {
   display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: auto;
-}
-
-.sectionTitle {
-  color: var(--text-secondary);
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.tokenSegments {
-  display: flex;
-  width: 100%;
-  height: 12px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: var(--bg-secondary);
-}
-
-.tokenSegment {
-  width: calc(var(--share) * 100%);
+  align-items: center;
+  gap: 6px;
   min-width: 0;
-  background: var(--primary-color);
-}
-
-.token_input {
-  background: var(--primary-color);
-}
-
-.token_output {
-  background: var(--success-color);
-}
-
-.token_reasoning {
-  background: var(--warning-color);
-}
-
-.token_cached {
-  background: var(--info-color);
-}
-
-.tokenLabels {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 10px;
   color: var(--text-tertiary);
-  font-size: 11px;
-  line-height: 1.4;
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+
+  i {
+    width: 8px;
+    height: 8px;
+    flex: 0 0 auto;
+    border-radius: 2px;
+  }
+}
+
+.tokenEmptyState {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+@media (max-width: 480px) {
+  .doughnutChart {
+    width: min(100%, 240px);
+    justify-self: center;
+  }
+}
+
+@media (max-width: 1280px) and (min-width: 561px) {
+  .healthCell {
+    height: clamp(8px, 0.9vw, 12px);
+    aspect-ratio: auto;
+  }
+}
+
+@media (max-width: 560px) {
+  .chartCard {
+    padding: 12px;
+  }
+
+  .legend {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .chartFrame {
+    padding-left: 0;
+    padding-right: 0;
+  }
+
+  .yAxisLeft,
+  .yAxisRight {
+    display: none;
+  }
+
+  .xAxis span {
+    &:nth-child(even) {
+      display: none;
+    }
+  }
+
+  .healthHeader {
+    flex-direction: column;
+  }
+
+  .healthSummary {
+    align-items: flex-start;
+    text-align: left;
+  }
+
+  .healthHourAxis {
+    grid-template-columns: 34px repeat(24, minmax(0, 1fr));
+    gap: 2px;
+  }
+
+  .healthDayRow {
+    grid-template-columns: 34px minmax(0, 1fr);
+    gap: 4px;
+  }
+
+  .healthDayCells {
+    gap: 2px;
+  }
+
+  .healthDayLabel,
+  .healthHourAxis span {
+    font-size: 9px;
+  }
+
+  .doughnutChart {
+    width: min(100%, 240px);
+    height: auto;
+  }
 }

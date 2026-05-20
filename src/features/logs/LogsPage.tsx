@@ -1,5 +1,6 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
@@ -65,12 +66,15 @@ type TabType = 'logs' | 'errors';
 
 export function LogsPage() {
   const { t } = useTranslation();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { showNotification, showConfirmation } = useNotificationStore();
   const connectionStatus = useAuthStore((state) => state.connectionStatus);
   const config = useConfigStore((state) => state.config);
   const requestLogEnabled = config?.requestLog ?? false;
 
-  const [activeTab, setActiveTab] = useState<TabType>('logs');
+  const [activeTab, setActiveTab] = useState<TabType>(() =>
+    searchParams.get('tab') === 'errors' ? 'errors' : 'logs'
+  );
   const [logState, setLogState] = useState<LogState>({ buffer: [], visibleFrom: 0 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -106,6 +110,17 @@ export function LogsPage() {
   const latestTimestampRef = useRef<number>(0);
 
   const disableControls = connectionStatus !== 'connected';
+
+  const handleTabChange = (tab: TabType) => {
+    setActiveTab(tab);
+    const nextParams = new URLSearchParams(searchParams);
+    if (tab === 'errors') {
+      nextParams.set('tab', 'errors');
+    } else {
+      nextParams.delete('tab');
+    }
+    setSearchParams(nextParams, { replace: true });
+  };
 
   const loadLogs = async (incremental = false) => {
     if (connectionStatus !== 'connected') {
@@ -253,6 +268,11 @@ export function LogsPage() {
       );
     }
   };
+
+  useEffect(() => {
+    const tab = searchParams.get('tab') === 'errors' ? 'errors' : 'logs';
+    setActiveTab((current) => (current === tab ? current : tab));
+  }, [searchParams]);
 
   useEffect(() => {
     if (connectionStatus === 'connected') {
@@ -456,14 +476,14 @@ export function LogsPage() {
         <button
           type="button"
           className={`${styles.tabItem} ${activeTab === 'logs' ? styles.tabActive : ''}`}
-          onClick={() => setActiveTab('logs')}
+          onClick={() => handleTabChange('logs')}
         >
           {t('logs.log_content')}
         </button>
         <button
           type="button"
           className={`${styles.tabItem} ${activeTab === 'errors' ? styles.tabActive : ''}`}
-          onClick={() => setActiveTab('errors')}
+          onClick={() => handleTabChange('errors')}
         >
           {t('logs.error_logs_modal_title')}
         </button>
