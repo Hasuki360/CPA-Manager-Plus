@@ -29,10 +29,16 @@
   background: var(--surface-subtle-hover, #f1f7fe);
 }
 
-.trigger:focus,
+.trigger:focus {
+  outline: none;
+}
+
 .trigger:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary-color, #2563eb) 28%, transparent);
+  border-color: var(--focus-border, color-mix(in srgb, var(--primary-color, #409eff) 28%, transparent));
+  background: var(--focus-bg, var(--surface-subtle-hover, #f1f7fe));
+  color: var(--focus-text, var(--primary-color, #409eff));
+  box-shadow: inset 0 0 0 1px var(--focus-inset, color-mix(in srgb, var(--primary-color, #409eff) 22%, transparent));
 }
 
 .trigger:disabled {

@@ -29,8 +29,8 @@
   --app-text-primary: #2c3e50;
   --app-text-regular: #5f6c7b;
   --app-text-muted: #8b95a6;
-  --app-accent: #0a7edc;
-  --app-accent-soft: rgba(10, 126, 220, 0.12);
+  --app-accent: #409eff;
+  --app-accent-soft: rgba(64, 158, 255, 0.12);
   --surface-subtle: #f6faff;
   --surface-subtle-hover: #f1f7fe;
   --surface-subtle-strong: #eef6ff;
@@ -46,13 +46,13 @@
   --sidebar-bg-color: rgba(255, 255, 255, 0.54);
   --sidebar-text-color: var(--app-text-regular);
   --sidebar-active-text-color: var(--app-text-primary);
-  --sidebar-hover-bg-color: rgba(10, 126, 220, 0.08);
+  --sidebar-hover-bg-color: rgba(64, 158, 255, 0.08);
   --sidebar-logo-bg-color: rgba(255, 255, 255, 0.34);
   --sidebar-shadow: 2px 0 12px rgba(31, 38, 135, 0.12);
   --sidebar-width: 210px;
   --sidebar-collapsed-width-token: 54px;
 
-  --primary-gradient: linear-gradient(135deg, #0a7edc 0%, #32a6ff 100%);
+  --primary-gradient: #409eff;
   --glass-bg: #ffffff;
   --glass-bg-secondary: rgba(255, 255, 255, 0.58);
   --glass-border: rgba(255, 255, 255, 0.6);
@@ -85,15 +85,15 @@
   --border-color: var(--app-border);
   --border-secondary: rgba(15, 23, 42, 0.06);
   --border-primary: var(--app-border-strong);
-  --border-hover: rgba(10, 126, 220, 0.28);
+  --border-hover: rgba(64, 158, 255, 0.28);
 
-  --color-primary: #0a7edc;
-  --color-primary-light-3: #32a6ff;
-  --color-primary-light-5: #78c7ff;
-  --color-primary-light-7: #b9e1ff;
-  --color-primary-light-8: #d8efff;
-  --color-primary-light-9: #edf7ff;
-  --color-primary-dark-2: #075dba;
+  --color-primary: #409eff;
+  --color-primary-light-3: #79bbff;
+  --color-primary-light-5: #a0cfff;
+  --color-primary-light-7: #c6e2ff;
+  --color-primary-light-8: #d9ecff;
+  --color-primary-light-9: #ecf5ff;
+  --color-primary-dark-2: #337ecc;
 
   --color-success: #67c23a;
   --color-success-light-3: #95d475;
@@ -137,7 +137,11 @@
   --primary-contrast: #ffffff;
   --primary-soft: var(--color-primary-light-8);
   --primary-subtle: var(--color-primary-light-9);
-  --primary-ring: rgba(10, 126, 220, 0.22);
+  --primary-ring: rgba(64, 158, 255, 0.22);
+  --focus-bg: color-mix(in srgb, var(--primary-color) 6%, var(--bg-primary));
+  --focus-border: color-mix(in srgb, var(--primary-color) 28%, var(--border-color));
+  --focus-inset: color-mix(in srgb, var(--primary-color) 22%, transparent);
+  --focus-text: var(--primary-active);
 
   --success-color: var(--color-success);
   --quota-medium-color: var(--color-warning);
@@ -197,10 +201,10 @@
   --app-text-primary: #e5e5e5;
   --app-text-regular: #a3a3a3;
   --app-text-muted: #7a7a7a;
-  --app-accent-soft: rgba(50, 166, 255, 0.18);
+  --app-accent-soft: rgba(64, 158, 255, 0.18);
   --surface-subtle: rgba(255, 255, 255, 0.06);
-  --surface-subtle-hover: rgba(50, 166, 255, 0.12);
-  --surface-subtle-strong: rgba(50, 166, 255, 0.16);
+  --surface-subtle-hover: rgba(64, 158, 255, 0.12);
+  --surface-subtle-strong: rgba(64, 158, 255, 0.16);
   --border-subtle: rgba(255, 255, 255, 0.1);
   --border-subtle-dashed: rgba(255, 255, 255, 0.14);
 
@@ -238,15 +242,15 @@
   --border-color: var(--app-border);
   --border-secondary: rgba(255, 255, 255, 0.06);
   --border-primary: var(--app-border-strong);
-  --border-hover: rgba(50, 166, 255, 0.4);
+  --border-hover: rgba(64, 158, 255, 0.4);
 
-  --color-primary: #32a6ff;
-  --color-primary-light-3: #78c7ff;
+  --color-primary: #409eff;
+  --color-primary-light-3: #79bbff;
   --color-primary-light-5: #1d5f98;
-  --color-primary-light-7: #16436e;
-  --color-primary-light-8: #123456;
-  --color-primary-light-9: #102b46;
-  --color-primary-dark-2: #0a7edc;
+  --color-primary-light-7: #164a78;
+  --color-primary-light-8: #123a61;
+  --color-primary-light-9: #102f4f;
+  --color-primary-dark-2: #337ecc;
 
   --color-success-light-3: #4f7b33;
   --color-success-light-5: #244f24;
@@ -280,7 +284,7 @@
   --primary-color: var(--color-primary);
   --primary-hover: var(--color-primary-light-3);
   --primary-active: var(--color-primary);
-  --primary-ring: rgba(50, 166, 255, 0.28);
+  --primary-ring: rgba(64, 158, 255, 0.28);
   --count-badge-text: var(--color-primary-light-3);
   --shadow: none;
   --shadow-lg: none;
