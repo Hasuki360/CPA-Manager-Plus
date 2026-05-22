@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const sourceRoot = path.join(repoRoot, 'src');
+const sourceRoot = path.join(repoRoot, 'apps/web/src');
 const checkedRoots = ['features', 'components'];
 const sourceExtensions = new Set(['.ts', '.tsx']);
 

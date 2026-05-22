@@ -2,9 +2,9 @@
 
 [English](README.md)
 
-这是面向 **CLI Proxy API（CPA）** 的单文件 Web 管理面板，并提供可选的 **Usage Service** 用于持久化请求统计。
+这是面向 **CLI Proxy API（CPA）** 的单文件 Web 管理面板，并提供 **Manager Server** 用于持久化请求统计和托管面板。
 
-CPA 自 v6.10.0 起不再内置用量统计。当前方案通过常驻 Usage Service 消费 CPA 的用量队列，把请求级事件写入 SQLite，并向面板提供兼容的用量查询接口。
+CPA 自 v6.10.0 起不再内置用量统计。当前方案通过常驻 Manager Server 消费 CPA 的用量队列，把请求级事件写入 SQLite，并向面板提供兼容的用量查询接口。
 
 - **CPA 主项目**: https://github.com/router-for-me/CLIProxyAPI
 - **推荐 CPA 版本**: >= v7.1.0
@@ -21,11 +21,11 @@ CPA 自 v6.10.0 起不再内置用量统计。当前方案通过常驻 Usage Ser
 ## 提供什么
 
 - 面向 CPA Management API（`/v0/management`）的单文件 React 管理面板
-- Docker 化 Usage Service，用 SQLite 持久化请求统计
+- Docker 化 Manager Server，用 SQLite 持久化请求统计并托管内置面板
 - Windows/macOS/Linux 原生 `amd64` 和 `arm64` 运行包，内置管理面板
 - 两种部署模式：
-  - **完整 Docker 方案**：访问 Usage Service 内置面板，首次 setup 保存 CPA 连接，之后登录只需要 Management Key
-  - **CPA 控制面板方案**：继续使用 CPA 的 `/management.html`，然后在面板中配置单独部署的 Usage Service 地址
+  - **完整 Docker 方案**：访问 Manager Server 内置面板，首次 setup 保存 CPA 连接，之后登录只需要 Management Key
+  - **CPA 控制面板方案**：继续使用 CPA 的 `/management.html`，然后在面板中配置单独部署的 Manager Server 地址
 - 运行时监控、账号/模型/渠道拆解、模型价格、Token 费用估算、导入导出、认证文件管理、配额视图、日志、配置编辑和系统工具
 
 ## 选择部署模式
@@ -33,10 +33,10 @@ CPA 自 v6.10.0 起不再内置用量统计。当前方案通过常驻 Usage Ser
 | 模式 | 入口地址 | 用户需要配置 | 适用场景 |
 |---|---|---|---|
 | 完整 Docker 方案 | `http://<host>:18317/management.html` | 首次 setup：CPA 地址 + Management Key；之后登录：只填 Management Key | 新部署、单入口、最少浏览器/CORS 问题 |
-| CPA 控制面板方案 | `http://<cpa-host>:8317/management.html` | 先登录 CPA，再在「配置面板 -> CPA Manager Plus 配置」配置 Usage Service 地址 | 保留 CPA 自动载入面板的现有习惯 |
-| 前端开发方案 | Vite dev server 或 `dist/index.html` | CPA 地址，可选 Usage Service 地址 | 本地开发 |
+| CPA 控制面板方案 | `http://<cpa-host>:8317/management.html` | 先登录 CPA，再在「配置面板 -> CPA Manager Plus 配置」配置 Manager Server 地址 | 保留 CPA 自动载入面板的现有习惯 |
+| 前端开发方案 | Vite dev server 或 `apps/web/dist/index.html` | CPA 地址，可选 Manager Server 地址 | 本地开发 |
 
-完整 Docker 方案不内置 CPA 本体。CPA 仍然作为上游服务独立运行；Docker 镜像提供 Usage Service 和内置管理面板。
+完整 Docker 方案不内置 CPA 本体。CPA 仍然作为上游服务独立运行；Docker 镜像提供 Manager Server 和内置管理面板。
 
 ## CPA 前置条件
 
@@ -84,9 +84,9 @@ Usage Service
 
 当你希望保留 CPA 自动下载并托管面板的机制时，使用这个方案。该模式由 CPA 托管页面，因此不会显示 Usage Service 托管面板的 setup wizard。请求监控是可选能力；如果没有部署 Usage Service，面板会自动隐藏请求监控入口，直接访问监控页时会提示先部署并配置 Usage Service。需要请求监控时，先登录 CPA，再单独部署 Usage Service，然后在面板的「配置面板 -> CPA Manager Plus 配置」中启用并填写地址。
 
-### Usage Service 后端
+### Manager Server 后端
 
-Go 后端位于 `github.com/seakee/cpa-manager-plus/usage-service` 模块。请求链路按以下分层组织：
+Go 后端位于 `github.com/seakee/cpa-manager-plus/apps/manager-server` 模块。它仍保留兼容的 `/usage-service/*` 管理端点。请求链路按以下分层组织：
 
 ```text
 model -> repository -> service -> controller -> router
@@ -239,20 +239,20 @@ docker run -d \
 4. 启用并填写：
 
    ```text
-   http://<usage-service-host>:18317
+   http://<manager-server-host>:18317
    ```
 
 5. 保存 CPA Manager Plus 配置。
 
-面板会把当前 CPA 地址和 Management Key 发送给 Usage Service。之后监控页从 Usage Service 读取用量数据，其他管理功能仍然访问 CPA。
+面板会把当前 CPA 地址和 Management Key 发送给 Manager Server。之后监控页从 Manager Server 读取用量数据，其他管理功能仍然访问 CPA。
 
 ## 本地从源码构建
 
 ```bash
-docker compose -f docker-compose.usage.yml up --build
+docker compose -f docker-compose.manager.yml up --build
 ```
 
-该命令会构建 React 面板，并把它内置到 Go Usage Service 二进制中。
+该命令会构建 React 面板，并把它内置到 Go Manager Server 二进制中。
 
 ## Usage Service 配置项
 
@@ -362,10 +362,10 @@ npm run lint
 npm run build
 ```
 
-Usage Service：
+Manager Server：
 
 ```bash
-cd usage-service
+cd apps/manager-server
 go test ./...
 go test -race ./...
 go vet ./...
@@ -374,11 +374,11 @@ go run ./cmd/cpa-manager-plus
 
 ## 构建与发布
 
-- Vite 输出单文件 `dist/index.html`
+- Vite 输出单文件 `apps/web/dist/index.html`
 - 打 `vX.Y.Z` 标签会触发 `.github/workflows/release.yml`
-- 发布流程会上传 `dist/management.html`、原生运行包和 `checksums.txt` 到 GitHub Releases
+- 发布流程会上传 `apps/web/dist/management.html`、原生运行包和 `checksums.txt` 到 GitHub Releases
 - 原生运行包会发布 `linux`、`darwin`、`windows` 的 `amd64` 和 `arm64` 版本，包内已内置管理面板
-- 同一个 workflow 会构建 `Dockerfile.usage-service` 并推送 `seakee/cpa-manager-plus`
+- 同一个 workflow 会构建 `Dockerfile.manager-server` 并推送 `seakee/cpa-manager-plus`
 - Docker 镜像会发布 `linux/amd64` 和 `linux/arm64`
 - workflow 会把 `README.md` 同步到 Docker Hub overview
 - 必需 GitHub secrets：

@@ -2,9 +2,9 @@
 
 [中文文档](README_CN.md)
 
-A single-file Web UI for **CLI Proxy API (CPA)** plus an optional **Usage Service** for persistent usage analytics.
+A single-file Web UI for **CLI Proxy API (CPA)** plus a **Manager Server** for persistent usage analytics and panel hosting.
 
-Since v6.10.0, CPA no longer includes built-in usage statistics. This project now supports usage analytics through a long-running Usage Service that consumes the CPA usage queue, persists request events to SQLite, and exposes panel-compatible usage APIs.
+Since v6.10.0, CPA no longer includes built-in usage statistics. This project now supports usage analytics through a long-running Manager Server that consumes the CPA usage queue, persists request events to SQLite, and exposes panel-compatible usage APIs.
 
 - **CPA Main project**: https://github.com/router-for-me/CLIProxyAPI
 - **Recommended CPA version**: >= v7.1.0
@@ -21,11 +21,11 @@ Since v6.10.0, CPA no longer includes built-in usage statistics. This project no
 ## What This Provides
 
 - A single-file React management panel for CPA Management API (`/v0/management`)
-- A Dockerized Usage Service for SQLite-backed usage persistence
+- A Dockerized Manager Server for SQLite-backed usage persistence and built-in panel hosting
 - Native `amd64` and `arm64` packages for Windows, macOS, and Linux with the panel embedded
 - Two deployment modes:
-  - **Full Docker mode**: open the built-in panel from Usage Service; first setup saves the CPA connection, later logins only need the Management Key
-  - **CPA panel mode**: keep using CPA's `/management.html`, then configure a separately deployed Usage Service inside the panel
+  - **Full Docker mode**: open the built-in panel from Manager Server; first setup saves the CPA connection, later logins only need the Management Key
+  - **CPA panel mode**: keep using CPA's `/management.html`, then configure a separately deployed Manager Server inside the panel
 - Runtime monitoring, account/model/channel breakdowns, model pricing, estimated token cost, imports/exports, auth-file operations, quota views, logs, config editing, and system utilities
 
 ## Choose a Deployment Mode
@@ -33,10 +33,10 @@ Since v6.10.0, CPA no longer includes built-in usage statistics. This project no
 | Mode | Entry URL | What the user configures | Best for |
 |---|---|---|---|
 | Full Docker mode | `http://<host>:18317/management.html` | First setup: CPA URL + Management Key; later login: Management Key only | New deployments, one entry point, least browser/CORS complexity |
-| CPA panel mode | `http://<cpa-host>:8317/management.html` | Log in to CPA first, then set the Usage Service URL under **Configuration -> CPA Manager Plus Configuration** | Existing CPA automatic panel loading |
-| Frontend only | Vite dev server or `dist/index.html` | CPA URL, optionally Usage Service URL | Development |
+| CPA panel mode | `http://<cpa-host>:8317/management.html` | Log in to CPA first, then set the Manager Server URL under **Configuration -> CPA Manager Plus Configuration** | Existing CPA automatic panel loading |
+| Frontend only | Vite dev server or `apps/web/dist/index.html` | CPA URL, optionally Manager Server URL | Development |
 
-Full Docker mode does not bundle CPA itself. CPA still runs as the upstream service; the Docker image provides the Usage Service plus an embedded copy of this management panel.
+Full Docker mode does not bundle CPA itself. CPA still runs as the upstream service; the Docker image provides the Manager Server plus an embedded copy of this management panel.
 
 ## CPA Prerequisites
 
@@ -84,9 +84,9 @@ Usage Service
 
 Use this when CPA still auto-downloads and serves the panel. This mode is served by CPA, so it does not show the Usage Service-hosted setup wizard. Request monitoring is optional; when Usage Service is not deployed, the panel hides the request monitoring entry and direct visits to the monitoring page show a setup hint. To use request monitoring, log in to CPA first, deploy Usage Service separately, then open **Configuration -> CPA Manager Plus Configuration**, enable it, enter the Usage Service URL, and save.
 
-### Usage Service Backend
+### Manager Server Backend
 
-The Go backend lives under the `github.com/seakee/cpa-manager-plus/usage-service` module. Its request path follows a layered shape:
+The Go backend lives under the `github.com/seakee/cpa-manager-plus/apps/manager-server` module. It still exposes the compatible `/usage-service/*` management endpoints. Its request path follows a layered shape:
 
 ```text
 model -> repository -> service -> controller -> router
@@ -239,20 +239,20 @@ Then enter `http://host.docker.internal:8317` as the CPA URL during first setup.
 4. Enable it and enter:
 
    ```text
-   http://<usage-service-host>:18317
+   http://<manager-server-host>:18317
    ```
 
 5. Save the CPA Manager Plus configuration.
 
-The panel sends the current CPA URL and Management Key to Usage Service. After that, monitoring reads usage data from Usage Service while other management calls continue to use CPA.
+The panel sends the current CPA URL and Management Key to the Manager Server. After that, monitoring reads usage data from the Manager Server while other management calls continue to use CPA.
 
 ## Build Locally
 
 ```bash
-docker compose -f docker-compose.usage.yml up --build
+docker compose -f docker-compose.manager.yml up --build
 ```
 
-This builds the React panel and embeds it into the Go Usage Service binary.
+This builds the React panel and embeds it into the Go Manager Server binary.
 
 ## Usage Service Configuration
 
@@ -362,10 +362,10 @@ npm run lint
 npm run build
 ```
 
-Usage Service:
+Manager Server:
 
 ```bash
-cd usage-service
+cd apps/manager-server
 go test ./...
 go test -race ./...
 go vet ./...
@@ -374,11 +374,11 @@ go run ./cmd/cpa-manager-plus
 
 ## Build and Release
 
-- Vite builds a single-file `dist/index.html`.
+- Vite builds a single-file `apps/web/dist/index.html`.
 - Tagging `vX.Y.Z` triggers `.github/workflows/release.yml`.
-- The release workflow uploads `dist/management.html`, native packages, and `checksums.txt` to GitHub Releases.
+- The release workflow uploads `apps/web/dist/management.html`, native packages, and `checksums.txt` to GitHub Releases.
 - Native packages are published for `linux`, `darwin`, and `windows` on both `amd64` and `arm64`, with the management panel embedded.
-- The same workflow builds `Dockerfile.usage-service` and pushes `seakee/cpa-manager-plus`.
+- The same workflow builds `Dockerfile.manager-server` and pushes `seakee/cpa-manager-plus`.
 - The Docker image is published for `linux/amd64` and `linux/arm64`.
 - The workflow syncs `README.md` to the Docker Hub overview.
 - Required GitHub secrets:

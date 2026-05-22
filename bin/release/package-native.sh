@@ -4,8 +4,9 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 version="${VERSION:-dev}"
 out_dir="${OUT_DIR:-"${repo_root}/dist/native"}"
-web_html="${WEB_HTML:-"${repo_root}/dist/index.html"}"
+web_html="${WEB_HTML:-"${repo_root}/apps/web/dist/index.html"}"
 binary_name="cpa-manager-plus"
+server_src="${repo_root}/apps/manager-server"
 
 if [ ! -f "${web_html}" ]; then
   echo "missing ${web_html}; run npm run build first" >&2
@@ -19,8 +20,8 @@ trap 'rm -rf "${work_dir}"' EXIT
 rm -rf "${out_dir}"
 mkdir -p "${out_dir}"
 
-cp -R "${repo_root}/usage-service" "${work_dir}/usage-service"
-cp "${web_html}" "${work_dir}/usage-service/internal/httpapi/web/management.html"
+cp -R "${server_src}" "${work_dir}/manager-server"
+cp "${web_html}" "${work_dir}/manager-server/internal/httpapi/web/management.html"
 
 targets=(
   "linux amd64"
@@ -43,7 +44,7 @@ for target in "${targets[@]}"; do
 
   mkdir -p "${package_dir}"
   (
-    cd "${work_dir}/usage-service"
+    cd "${work_dir}/manager-server"
     CGO_ENABLED=0 GOOS="${goos}" GOARCH="${goarch}" go build -trimpath -ldflags "-s -w" -o "${package_dir}/${exe_name}" ./cmd/cpa-manager-plus
   )
 
