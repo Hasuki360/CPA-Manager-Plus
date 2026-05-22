@@ -2,6 +2,7 @@ package codexinspection
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -154,6 +155,160 @@ func TestRunFallsBackToManagementAPICallPath(t *testing.T) {
 	}
 	if legacyAPICalls != 1 || managementAPICalls != 1 {
 		t.Fatalf("api-call counts legacy=%d management=%d, want 1/1", legacyAPICalls, managementAPICalls)
+	}
+}
+
+func TestRunSendsDirectCodexAccountIDHeader(t *testing.T) {
+	var accountIDHeader string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/auth-files" && r.Method == http.MethodGet:
+			_, _ = w.Write([]byte(`{"files":[{"name":"auth-a.json","auth_index":"auth-1","provider":"codex","account_id":"acct-direct","account":"alice@example.com","status":"ok","state":"ready"}]}`))
+		case r.URL.Path == "/api-call" && r.Method == http.MethodPost:
+			var payload struct {
+				Header map[string]string `json:"header"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode api-call payload: %v", err)
+			}
+			accountIDHeader = payload.Header["Chatgpt-Account-Id"]
+			_, _ = w.Write([]byte(`{"status_code":200,"body":{"ok":true}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(upstream.Close)
+
+	db := newCodexInspectionTestStore(t)
+	if err := db.SaveManagerConfig(context.Background(), newCodexInspectionManagerConfig(upstream.URL)); err != nil {
+		t.Fatalf("save manager config: %v", err)
+	}
+	svc := newCodexInspectionTestService(t, db)
+
+	if _, err := svc.Run(context.Background(), RunRequest{
+		TriggerType: "manual",
+		TriggerKey:  "manual",
+	}); err != nil {
+		t.Fatalf("run inspection: %v", err)
+	}
+	if accountIDHeader != "acct-direct" {
+		t.Fatalf("Chatgpt-Account-Id = %q, want %q", accountIDHeader, "acct-direct")
+	}
+}
+
+func TestRunFallsBackToManagementAuthFileActionPath(t *testing.T) {
+	var legacyDeleteCalls int
+	var managementDeleteCalls int
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/auth-files" && r.Method == http.MethodGet:
+			http.NotFound(w, r)
+		case r.URL.Path == "/v0/management/auth-files" && r.Method == http.MethodGet:
+			_, _ = w.Write([]byte(`{"files":[{"name":"auth-a.json","auth_index":"auth-1","provider":"codex","account":"alice@example.com","status":"ok","state":"ready"}]}`))
+		case r.URL.Path == "/api-call" && r.Method == http.MethodPost:
+			http.NotFound(w, r)
+		case r.URL.Path == "/v0/management/api-call" && r.Method == http.MethodPost:
+			_, _ = w.Write([]byte(`{"status_code":401,"body":{"message":"unauthorized"}}`))
+		case r.URL.Path == "/auth-files" && r.Method == http.MethodDelete:
+			legacyDeleteCalls++
+			http.NotFound(w, r)
+		case r.URL.Path == "/v0/management/auth-files" && r.Method == http.MethodDelete:
+			managementDeleteCalls++
+			if r.URL.Query().Get("name") != "auth-a.json" {
+				t.Fatalf("delete name = %q, want auth-a.json", r.URL.Query().Get("name"))
+			}
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(upstream.Close)
+
+	db := newCodexInspectionTestStore(t)
+	if err := db.SaveManagerConfig(context.Background(), newCodexInspectionManagerConfig(upstream.URL)); err != nil {
+		t.Fatalf("save manager config: %v", err)
+	}
+	svc := newCodexInspectionTestService(t, db)
+
+	result, err := svc.Run(context.Background(), RunRequest{
+		TriggerType: "manual",
+		TriggerKey:  "manual",
+	})
+	if err != nil {
+		t.Fatalf("run inspection: %v", err)
+	}
+	if result.Run.DeleteCount != 1 {
+		t.Fatalf("delete count = %d, want 1", result.Run.DeleteCount)
+	}
+	if result.Run.Error != "" {
+		t.Fatalf("run error = %q", result.Run.Error)
+	}
+	if legacyDeleteCalls != 1 || managementDeleteCalls != 1 {
+		t.Fatalf("delete counts legacy=%d management=%d, want 1/1", legacyDeleteCalls, managementDeleteCalls)
+	}
+}
+
+func TestRunFallsBackToManagementAuthFileStatusActionPath(t *testing.T) {
+	var legacyPatchCalls int
+	var managementPatchCalls int
+	var patchedDisabled bool
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/auth-files" && r.Method == http.MethodGet:
+			http.NotFound(w, r)
+		case r.URL.Path == "/v0/management/auth-files" && r.Method == http.MethodGet:
+			_, _ = w.Write([]byte(`{"files":[{"name":"auth-a.json","auth_index":"auth-1","provider":"codex","account":"alice@example.com","status":"ok","state":"ready"}]}`))
+		case r.URL.Path == "/api-call" && r.Method == http.MethodPost:
+			http.NotFound(w, r)
+		case r.URL.Path == "/v0/management/api-call" && r.Method == http.MethodPost:
+			_, _ = w.Write([]byte(`{"status_code":402,"body":{"message":"limit reached"}}`))
+		case strings.HasPrefix(r.URL.Path, "/auth-files") && r.Method == http.MethodPatch:
+			legacyPatchCalls++
+			http.NotFound(w, r)
+		case r.URL.Path == "/v0/management/auth-files" && r.Method == http.MethodPatch:
+			managementPatchCalls++
+			var payload struct {
+				Name     string `json:"name"`
+				Disabled bool   `json:"disabled"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode patch payload: %v", err)
+			}
+			if payload.Name != "auth-a.json" {
+				t.Fatalf("patch name = %q, want auth-a.json", payload.Name)
+			}
+			patchedDisabled = payload.Disabled
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(upstream.Close)
+
+	db := newCodexInspectionTestStore(t)
+	if err := db.SaveManagerConfig(context.Background(), newCodexInspectionManagerConfig(upstream.URL)); err != nil {
+		t.Fatalf("save manager config: %v", err)
+	}
+	svc := newCodexInspectionTestService(t, db)
+
+	result, err := svc.Run(context.Background(), RunRequest{
+		TriggerType: "manual",
+		TriggerKey:  "manual",
+	})
+	if err != nil {
+		t.Fatalf("run inspection: %v", err)
+	}
+	if result.Run.DisableCount != 1 {
+		t.Fatalf("disable count = %d, want 1", result.Run.DisableCount)
+	}
+	if result.Run.Error != "" {
+		t.Fatalf("run error = %q", result.Run.Error)
+	}
+	if legacyPatchCalls != 2 || managementPatchCalls != 1 {
+		t.Fatalf("patch counts legacy=%d management=%d, want 2/1", legacyPatchCalls, managementPatchCalls)
+	}
+	if !patchedDisabled {
+		t.Fatal("management patch did not disable the auth file")
 	}
 }
 

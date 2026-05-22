@@ -622,17 +622,27 @@ func (s *Service) executeActions(
 func (s *Service) executeAction(ctx context.Context, setup store.Setup, item model.CodexInspectionResult) error {
 	switch item.Action {
 	case "delete":
-		endpoint := cpa.NormalizeBaseURL(setup.CPAUpstreamURL) + "/auth-files?name=" + url.QueryEscape(item.FileName)
-		req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
-		if err != nil {
+		if err, status := s.deleteAuthFile(ctx, setup, "/auth-files", item.FileName); err != nil {
+			if shouldFallbackManagement(status) {
+				return s.deleteAuthFileOnly(ctx, setup, "/v0/management/auth-files", item.FileName)
+			}
 			return err
 		}
-		return s.doCPAAction(req, setup.ManagementKey)
+		return nil
 	case "disable", "enable":
 		disabled := item.Action == "disable"
 		payload := map[string]any{"name": item.FileName, "disabled": disabled}
-		if err := s.patchAuthFile(ctx, setup, "/auth-files", payload); err != nil {
-			return s.patchAuthFile(ctx, setup, "/auth-files/status", payload)
+		if err, status := s.patchAuthFile(ctx, setup, "/auth-files", payload); err != nil {
+			if statusErr, statusCode := s.patchAuthFile(ctx, setup, "/auth-files/status", payload); statusErr == nil {
+				return nil
+			} else if shouldFallbackManagement(status) && shouldFallbackManagement(statusCode) {
+				if err := s.patchAuthFileOnly(ctx, setup, "/v0/management/auth-files", payload); err != nil {
+					return s.patchAuthFileOnly(ctx, setup, "/v0/management/auth-files/status", payload)
+				}
+				return nil
+			} else {
+				return statusErr
+			}
 		}
 		return nil
 	default:
@@ -640,10 +650,29 @@ func (s *Service) executeAction(ctx context.Context, setup store.Setup, item mod
 	}
 }
 
-func (s *Service) patchAuthFile(ctx context.Context, setup store.Setup, path string, payload map[string]any) error {
+func (s *Service) deleteAuthFileOnly(ctx context.Context, setup store.Setup, path string, fileName string) error {
+	err, _ := s.deleteAuthFile(ctx, setup, path, fileName)
+	return err
+}
+
+func (s *Service) deleteAuthFile(ctx context.Context, setup store.Setup, path string, fileName string) (error, int) {
+	endpoint := cpa.NormalizeBaseURL(setup.CPAUpstreamURL) + path + "?name=" + url.QueryEscape(fileName)
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
+	if err != nil {
+		return err, 0
+	}
+	return s.doCPAAction(req, setup.ManagementKey)
+}
+
+func (s *Service) patchAuthFileOnly(ctx context.Context, setup store.Setup, path string, payload map[string]any) error {
+	err, _ := s.patchAuthFile(ctx, setup, path, payload)
+	return err
+}
+
+func (s *Service) patchAuthFile(ctx context.Context, setup store.Setup, path string, payload map[string]any) (error, int) {
 	data, err := json.Marshal(payload)
 	if err != nil {
-		return err
+		return err, 0
 	}
 	req, err := http.NewRequestWithContext(
 		ctx,
@@ -652,30 +681,34 @@ func (s *Service) patchAuthFile(ctx context.Context, setup store.Setup, path str
 		bytes.NewReader(data),
 	)
 	if err != nil {
-		return err
+		return err, 0
 	}
 	req.Header.Set("Content-Type", "application/json")
 	return s.doCPAAction(req, setup.ManagementKey)
 }
 
-func (s *Service) doCPAAction(req *http.Request, managementKey string) error {
+func (s *Service) doCPAAction(req *http.Request, managementKey string) (error, int) {
 	req.Header.Set("Authorization", "Bearer "+managementKey)
 	res, err := s.client.Do(req)
 	if err != nil {
-		return err
+		return err, 0
 	}
 	defer res.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(res.Body, 1024*1024))
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return fmt.Errorf("%s %s", res.Status, truncate(string(body), maxStoredBodyText))
+		return fmt.Errorf("%s %s", res.Status, truncate(string(body), maxStoredBodyText)), res.StatusCode
 	}
 	var payload map[string]any
 	if err := json.Unmarshal(body, &payload); err == nil {
 		if failed, ok := payload["failed"].([]any); ok && len(failed) > 0 {
-			return fmt.Errorf("CPA action failed: %s", truncate(fmt.Sprint(failed[0]), maxStoredBodyText))
+			return fmt.Errorf("CPA action failed: %s", truncate(fmt.Sprint(failed[0]), maxStoredBodyText)), res.StatusCode
 		}
 	}
-	return nil
+	return nil, res.StatusCode
+}
+
+func shouldFallbackManagement(status int) bool {
+	return status == http.StatusNotFound || status == http.StatusMethodNotAllowed
 }
 
 type runLogger struct {
@@ -975,27 +1008,49 @@ func resolveCodexAccountID(file authFile) string {
 		attributes["chatgptAccountId"],
 		attributes["account_id"],
 		attributes["accountId"],
+	}
+	for _, candidate := range candidates {
+		if id := extractDirectCodexAccountID(candidate); id != "" {
+			return id
+		}
+	}
+	tokenCandidates := []any{
 		file["id_token"],
 		metadata["id_token"],
 		attributes["id_token"],
 	}
-	for _, candidate := range candidates {
-		if id := extractCodexAccountID(candidate); id != "" {
+	for _, candidate := range tokenCandidates {
+		if id := extractCodexAccountIDFromToken(candidate); id != "" {
 			return id
 		}
 	}
 	return ""
 }
 
-func extractCodexAccountID(value any) string {
+func extractDirectCodexAccountID(value any) string {
+	if direct := readPlainString(value); direct != "" {
+		return direct
+	}
 	if direct := readAccountIDCandidate(value); direct != "" {
 		return direct
 	}
+	return ""
+}
+
+func extractCodexAccountIDFromToken(value any) string {
 	payload := parseIDTokenPayload(value)
 	if payload == nil {
 		return ""
 	}
 	return readAccountIDCandidate(payload)
+}
+
+func readPlainString(value any) string {
+	text, ok := value.(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(text)
 }
 
 func readAccountIDCandidate(value any) string {
