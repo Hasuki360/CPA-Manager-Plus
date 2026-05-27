@@ -113,9 +113,13 @@ func TestSummaryAggregatesCostsAndWindows(t *testing.T) {
 		resp.RequestHealth.Points[7].Tone != "future" {
 		t.Fatalf("request health timeline points = %#v", resp.RequestHealth.Points[:8])
 	}
-	if len(resp.TokenMix) != 4 || resp.TokenMix[0].Key != "input" ||
+	if len(resp.TokenMix) != 6 || resp.TokenMix[0].Key != "input" ||
 		resp.TokenMix[0].Tokens != 1_000_000 {
 		t.Fatalf("token mix = %#v", resp.TokenMix)
+	}
+	if resp.TokenMix[4].Key != "cache_read" || resp.TokenMix[4].Tokens != 0 ||
+		resp.TokenMix[5].Key != "cache_creation" || resp.TokenMix[5].Tokens != 0 {
+		t.Fatalf("token mix cache fields = %#v", resp.TokenMix)
 	}
 	if len(resp.ModelCostRank) != 1 || resp.ModelCostRank[0].Model != "gpt-a" ||
 		resp.ModelCostRank[0].CostShare != 1 {

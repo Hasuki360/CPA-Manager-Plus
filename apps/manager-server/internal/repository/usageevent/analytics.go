@@ -7,6 +7,11 @@ import (
 	"strings"
 )
 
+const (
+	compatCachedExpr  = "max(max(cached_tokens, cache_tokens) - max(cache_read_tokens, 0) - max(cache_creation_tokens, 0), 0)"
+	compatCachedFExpr = "max(max(f.cached_tokens, f.cache_tokens) - max(f.cache_read_tokens, 0) - max(f.cache_creation_tokens, 0), 0)"
+)
+
 type AnalyticsFilter struct {
 	FromMS            int64
 	ToMS              int64
@@ -36,17 +41,19 @@ type HourlyPoint struct {
 }
 
 type ChannelModelStat struct {
-	AuthIndex    string
-	Model        string
-	BillingModel string
-	Calls        int64
-	SuccessCalls int64
-	FailureCalls int64
-	InputTokens  int64
-	OutputTokens int64
-	CachedTokens int64
-	TotalTokens  int64
-	AvgLatencyMS sql.NullFloat64
+	AuthIndex           string
+	Model               string
+	BillingModel        string
+	Calls               int64
+	SuccessCalls        int64
+	FailureCalls        int64
+	InputTokens         int64
+	OutputTokens        int64
+	CachedTokens        int64
+	CacheReadTokens     int64
+	CacheCreationTokens int64
+	TotalTokens         int64
+	AvgLatencyMS        sql.NullFloat64
 }
 
 type FailureSourceStat struct {
@@ -59,23 +66,25 @@ type FailureSourceStat struct {
 }
 
 type TaskBucket struct {
-	BucketKey    string
-	Total        int64
-	Success      int64
-	Failure      int64
-	FirstMS      int64
-	LastMS       int64
-	Source       string
-	SourceHash   string
-	AuthIndex    string
-	Models       string
-	Endpoints    string
-	InputTokens  int64
-	OutputTokens int64
-	CachedTokens int64
-	TotalTokens  int64
-	AvgLatencyMS sql.NullFloat64
-	MaxLatencyMS sql.NullInt64
+	BucketKey           string
+	Total               int64
+	Success             int64
+	Failure             int64
+	FirstMS             int64
+	LastMS              int64
+	Source              string
+	SourceHash          string
+	AuthIndex           string
+	Models              string
+	Endpoints           string
+	InputTokens         int64
+	OutputTokens        int64
+	CachedTokens        int64
+	CacheReadTokens     int64
+	CacheCreationTokens int64
+	TotalTokens         int64
+	AvgLatencyMS        sql.NullFloat64
+	MaxLatencyMS        sql.NullInt64
 }
 
 type EventPageItem struct {
@@ -95,13 +104,18 @@ type EventPageItem struct {
 	AuthLabelSnapshot     string
 	AuthProviderSnapshot  string
 	AuthProjectIDSnapshot string
+	ReasoningEffort       string
 	InputTokens           int64
 	OutputTokens          int64
 	CachedTokens          int64
+	CacheReadTokens       int64
+	CacheCreationTokens   int64
 	ReasoningTokens       int64
 	TotalTokens           int64
 	LatencyMS             sql.NullInt64
 	Failed                bool
+	FailStatusCode        sql.NullInt64
+	FailSummary           string
 }
 
 type EventsPage struct {
@@ -119,7 +133,9 @@ func (r *repository) AggregateWithFilter(ctx context.Context, filter AnalyticsFi
 	coalesce(sum(input_tokens), 0),
 	coalesce(sum(output_tokens), 0),
 	coalesce(sum(reasoning_tokens), 0),
-	coalesce(sum(case when cached_tokens > cache_tokens then cached_tokens else cache_tokens end), 0),
+	coalesce(sum(`+compatCachedExpr+`), 0),
+	coalesce(sum(cache_read_tokens), 0),
+	coalesce(sum(cache_creation_tokens), 0),
 	coalesce(sum(total_tokens), 0),
 	avg(nullif(latency_ms, 0)),
 	coalesce(sum(case when total_tokens = 0 and failed = 0 then 1 else 0 end), 0)
@@ -135,6 +151,8 @@ from usage_events `+where, args...)
 		&agg.OutputTokens,
 		&agg.ReasoningTokens,
 		&agg.CachedTokens,
+		&agg.CacheReadTokens,
+		&agg.CacheCreationTokens,
 		&agg.TotalTokens,
 		&agg.AvgLatencyMS,
 		&agg.ZeroTokenCalls,
@@ -156,7 +174,9 @@ func (r *repository) ModelStatsWithFilter(ctx context.Context, filter AnalyticsF
 	coalesce(sum(input_tokens), 0),
 	coalesce(sum(output_tokens), 0),
 	coalesce(sum(reasoning_tokens), 0),
-	coalesce(sum(case when cached_tokens > cache_tokens then cached_tokens else cache_tokens end), 0),
+	coalesce(sum(` + compatCachedExpr + `), 0),
+	coalesce(sum(cache_read_tokens), 0),
+	coalesce(sum(cache_creation_tokens), 0),
 	coalesce(sum(total_tokens), 0)
 from usage_events ` + where + `
 group by model, billing_model
@@ -180,7 +200,9 @@ select
 	coalesce(sum(f.input_tokens), 0),
 	coalesce(sum(f.output_tokens), 0),
 	coalesce(sum(f.reasoning_tokens), 0),
-	coalesce(sum(case when f.cached_tokens > f.cache_tokens then f.cached_tokens else f.cache_tokens end), 0),
+	coalesce(sum(` + compatCachedFExpr + `), 0),
+	coalesce(sum(f.cache_read_tokens), 0),
+	coalesce(sum(f.cache_creation_tokens), 0),
 	coalesce(sum(f.total_tokens), 0)
 from filtered f
 join top_models t on t.model = f.model
@@ -206,6 +228,8 @@ order by max(t.model_calls) desc, f.model, calls desc`
 			&stat.OutputTokens,
 			&stat.ReasoningTokens,
 			&stat.CachedTokens,
+			&stat.CacheReadTokens,
+			&stat.CacheCreationTokens,
 			&stat.TotalTokens,
 		); err != nil {
 			return nil, err
@@ -283,7 +307,9 @@ func (r *repository) ChannelModelStatsWithFilter(ctx context.Context, filter Ana
 	sum(case when failed = 1 then 1 else 0 end),
 	coalesce(sum(input_tokens), 0),
 	coalesce(sum(output_tokens), 0),
-	coalesce(sum(case when cached_tokens > cache_tokens then cached_tokens else cache_tokens end), 0),
+	coalesce(sum(`+compatCachedExpr+`), 0),
+	coalesce(sum(cache_read_tokens), 0),
+	coalesce(sum(cache_creation_tokens), 0),
 	coalesce(sum(total_tokens), 0),
 	avg(nullif(latency_ms, 0))
 from usage_events `+where+`
@@ -307,6 +333,8 @@ order by count(*) desc`, args...)
 			&stat.InputTokens,
 			&stat.OutputTokens,
 			&stat.CachedTokens,
+			&stat.CacheReadTokens,
+			&stat.CacheCreationTokens,
 			&stat.TotalTokens,
 			&stat.AvgLatencyMS,
 		); err != nil {
@@ -362,7 +390,9 @@ func (r *repository) TaskBucketsWithFilter(ctx context.Context, filter Analytics
 	coalesce(group_concat(distinct endpoint), ''),
 	coalesce(sum(input_tokens), 0),
 	coalesce(sum(output_tokens), 0),
-	coalesce(sum(case when cached_tokens > cache_tokens then cached_tokens else cache_tokens end), 0),
+	coalesce(sum(`+compatCachedExpr+`), 0),
+	coalesce(sum(cache_read_tokens), 0),
+	coalesce(sum(cache_creation_tokens), 0),
 	coalesce(sum(total_tokens), 0),
 	avg(nullif(latency_ms, 0)),
 	max(latency_ms)
@@ -393,6 +423,8 @@ limit 500`, args...)
 			&bucket.InputTokens,
 			&bucket.OutputTokens,
 			&bucket.CachedTokens,
+			&bucket.CacheReadTokens,
+			&bucket.CacheCreationTokens,
 			&bucket.TotalTokens,
 			&bucket.AvgLatencyMS,
 			&bucket.MaxLatencyMS,
@@ -474,13 +506,18 @@ func (r *repository) EventsPageWithFilter(ctx context.Context, filter AnalyticsF
 	coalesce(auth_label_snapshot, ''),
 	coalesce(auth_provider_snapshot, ''),
 	coalesce(auth_project_id_snapshot, ''),
+	coalesce(reasoning_effort, ''),
 	input_tokens,
 	output_tokens,
-	case when cached_tokens > cache_tokens then cached_tokens else cache_tokens end,
+	`+compatCachedExpr+`,
+	cache_read_tokens,
+	cache_creation_tokens,
 	reasoning_tokens,
 	total_tokens,
 	latency_ms,
-	failed
+	failed,
+	fail_status_code,
+	coalesce(fail_summary, '')
 from usage_events `+where+`
 order by timestamp_ms desc, id desc
 limit ?`, args...)
@@ -510,13 +547,18 @@ limit ?`, args...)
 			&item.AuthLabelSnapshot,
 			&item.AuthProviderSnapshot,
 			&item.AuthProjectIDSnapshot,
+			&item.ReasoningEffort,
 			&item.InputTokens,
 			&item.OutputTokens,
 			&item.CachedTokens,
+			&item.CacheReadTokens,
+			&item.CacheCreationTokens,
 			&item.ReasoningTokens,
 			&item.TotalTokens,
 			&item.LatencyMS,
 			&failed,
+			&item.FailStatusCode,
+			&item.FailSummary,
 		); err != nil {
 			return EventsPage{}, err
 		}
@@ -582,11 +624,11 @@ func analyticsWhere(filter AnalyticsFilter) (string, []any) {
 	if query != "" {
 		like := "%" + query + "%"
 		if hash != "" {
-			conditions = append(conditions, `(lower(coalesce(model, '')) like ? or lower(coalesce(resolved_model, '')) like ? or lower(coalesce(endpoint, '')) like ? or lower(coalesce(source, '')) like ? or lower(coalesce(source_hash, '')) like ? or lower(coalesce(api_key_hash, '')) like ? or lower(coalesce(auth_project_id_snapshot, '')) like ? or lower(coalesce(api_key_hash, '')) = ?)`)
-			args = append(args, like, like, like, like, like, like, like, hash)
+			conditions = append(conditions, `(lower(coalesce(model, '')) like ? or lower(coalesce(resolved_model, '')) like ? or lower(coalesce(endpoint, '')) like ? or lower(coalesce(source, '')) like ? or lower(coalesce(source_hash, '')) like ? or lower(coalesce(api_key_hash, '')) like ? or lower(coalesce(auth_project_id_snapshot, '')) like ? or lower(coalesce(reasoning_effort, '')) like ? or lower(coalesce(fail_summary, '')) like ? or lower(coalesce(api_key_hash, '')) = ?)`)
+			args = append(args, like, like, like, like, like, like, like, like, like, hash)
 		} else {
-			conditions = append(conditions, `(lower(coalesce(model, '')) like ? or lower(coalesce(resolved_model, '')) like ? or lower(coalesce(endpoint, '')) like ? or lower(coalesce(source, '')) like ? or lower(coalesce(source_hash, '')) like ? or lower(coalesce(api_key_hash, '')) like ? or lower(coalesce(auth_project_id_snapshot, '')) like ?)`)
-			args = append(args, like, like, like, like, like, like, like)
+			conditions = append(conditions, `(lower(coalesce(model, '')) like ? or lower(coalesce(resolved_model, '')) like ? or lower(coalesce(endpoint, '')) like ? or lower(coalesce(source, '')) like ? or lower(coalesce(source_hash, '')) like ? or lower(coalesce(api_key_hash, '')) like ? or lower(coalesce(auth_project_id_snapshot, '')) like ? or lower(coalesce(reasoning_effort, '')) like ? or lower(coalesce(fail_summary, '')) like ?)`)
+			args = append(args, like, like, like, like, like, like, like, like, like)
 		}
 	} else if hash != "" {
 		conditions = append(conditions, "lower(coalesce(api_key_hash, '')) = ?")

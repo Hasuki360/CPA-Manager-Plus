@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/model"
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usage"
 )
 
 type Repository interface {
@@ -56,10 +57,10 @@ func (r *repository) InsertBatch(ctx context.Context, events []model.UsageEvent)
 		request_id, event_hash, timestamp_ms, timestamp, provider, model, endpoint, method, path,
 		auth_type, auth_index, source, source_hash, api_key_hash,
 		account_snapshot, auth_label_snapshot, auth_file_snapshot, auth_provider_snapshot, auth_project_id_snapshot, auth_snapshot_at_ms,
-		requested_model, resolved_model,
-		input_tokens, output_tokens, reasoning_tokens, cached_tokens, cache_tokens, total_tokens,
-		latency_ms, failed, raw_json, created_at_ms
-	) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		requested_model, resolved_model, reasoning_effort,
+		input_tokens, output_tokens, reasoning_tokens, cached_tokens, cache_tokens, cache_read_tokens, cache_creation_tokens, total_tokens,
+		latency_ms, failed, fail_status_code, fail_summary, fail_body, raw_json, created_at_ms
+	) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return model.InsertResult{}, err
 	}
@@ -71,6 +72,12 @@ func (r *repository) InsertBatch(ctx context.Context, events []model.UsageEvent)
 		if event.Failed {
 			failed = 1
 		}
+		failSummarySource := event.FailSummary
+		if failSummarySource == "" {
+			failSummarySource = event.FailBody
+		}
+		failSummary := usage.FailSummaryFromBody(failSummarySource)
+		rawJSON := usage.SafeRawJSON(event.RawJSON)
 		res, err := stmt.ExecContext(
 			ctx,
 			nullString(event.RequestID),
@@ -95,15 +102,21 @@ func (r *repository) InsertBatch(ctx context.Context, events []model.UsageEvent)
 			nullPositiveInt64(event.AuthSnapshotAtMS),
 			nullString(event.RequestedModel),
 			nullString(event.ResolvedModel),
+			nullString(event.ReasoningEffort),
 			event.InputTokens,
 			event.OutputTokens,
 			event.ReasoningTokens,
 			event.CachedTokens,
 			event.CacheTokens,
+			event.CacheReadTokens,
+			event.CacheCreationTokens,
 			event.TotalTokens,
 			nullInt(event.LatencyMS),
 			failed,
-			nullString(event.RawJSON),
+			nullPositiveInt64(int64(event.FailStatusCode)),
+			nullString(failSummary),
+			nullString(event.FailBody),
+			nullString(rawJSON),
 			event.CreatedAtMS,
 		)
 		if err != nil {
@@ -130,9 +143,9 @@ func (r *repository) ListRecent(ctx context.Context, limit int) ([]model.UsageEv
 		request_id, event_hash, timestamp_ms, timestamp, provider, model, endpoint, method, path,
 		auth_type, auth_index, source, source_hash, api_key_hash,
 		account_snapshot, auth_label_snapshot, auth_file_snapshot, auth_provider_snapshot, auth_project_id_snapshot, auth_snapshot_at_ms,
-		requested_model, resolved_model,
-		input_tokens, output_tokens, reasoning_tokens, cached_tokens, cache_tokens, total_tokens,
-		latency_ms, failed, raw_json, created_at_ms
+		requested_model, resolved_model, reasoning_effort,
+		input_tokens, output_tokens, reasoning_tokens, cached_tokens, cache_tokens, cache_read_tokens, cache_creation_tokens, total_tokens,
+		latency_ms, failed, fail_status_code, fail_summary, created_at_ms
 		from usage_events
 		order by timestamp_ms desc, id desc
 		limit ?`, limit)
@@ -144,9 +157,10 @@ func (r *repository) ListRecent(ctx context.Context, limit int) ([]model.UsageEv
 	events := make([]model.UsageEvent, 0)
 	for rows.Next() {
 		var event model.UsageEvent
-		var requestID, provider, endpoint, method, path, authType, authIndex, source, sourceHash, apiKeyHash, accountSnapshot, authLabelSnapshot, authFileSnapshot, authProviderSnapshot, authProjectIDSnapshot, requestedModel, resolvedModel, rawJSON sql.NullString
+		var requestID, provider, endpoint, method, path, authType, authIndex, source, sourceHash, apiKeyHash, accountSnapshot, authLabelSnapshot, authFileSnapshot, authProviderSnapshot, authProjectIDSnapshot, requestedModel, resolvedModel, reasoningEffort, failSummary sql.NullString
 		var authSnapshotAt sql.NullInt64
 		var latency sql.NullInt64
+		var failStatusCode sql.NullInt64
 		var failed int
 		if err := rows.Scan(
 			&requestID,
@@ -171,15 +185,19 @@ func (r *repository) ListRecent(ctx context.Context, limit int) ([]model.UsageEv
 			&authSnapshotAt,
 			&requestedModel,
 			&resolvedModel,
+			&reasoningEffort,
 			&event.InputTokens,
 			&event.OutputTokens,
 			&event.ReasoningTokens,
 			&event.CachedTokens,
 			&event.CacheTokens,
+			&event.CacheReadTokens,
+			&event.CacheCreationTokens,
 			&event.TotalTokens,
 			&latency,
 			&failed,
-			&rawJSON,
+			&failStatusCode,
+			&failSummary,
 			&event.CreatedAtMS,
 		); err != nil {
 			return nil, err
@@ -201,10 +219,14 @@ func (r *repository) ListRecent(ctx context.Context, limit int) ([]model.UsageEv
 		event.AuthProjectIDSnapshot = authProjectIDSnapshot.String
 		event.RequestedModel = requestedModel.String
 		event.ResolvedModel = resolvedModel.String
+		event.ReasoningEffort = reasoningEffort.String
 		if authSnapshotAt.Valid {
 			event.AuthSnapshotAtMS = authSnapshotAt.Int64
 		}
-		event.RawJSON = rawJSON.String
+		if failStatusCode.Valid {
+			event.FailStatusCode = int(failStatusCode.Int64)
+		}
+		event.FailSummary = failSummary.String
 		event.Failed = failed != 0
 		if latency.Valid {
 			value := latency.Int64
@@ -230,7 +252,12 @@ func (r *repository) ExportJSONL(ctx context.Context) ([]byte, error) {
 	}
 	output := make([]byte, 0)
 	for i := len(events) - 1; i >= 0; i-- {
-		line, err := json.Marshal(events[i])
+		event := events[i]
+		// Export intentionally omits raw_json and raw fail_body. fail_summary is
+		// the redacted/truncated diagnostic field intended for portable JSONL.
+		event.FailBody = ""
+		event.RawJSON = ""
+		line, err := json.Marshal(event)
 		if err != nil {
 			return nil, err
 		}

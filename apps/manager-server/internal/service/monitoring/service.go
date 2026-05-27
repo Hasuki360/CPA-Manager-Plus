@@ -87,6 +87,8 @@ type Summary struct {
 	InputTokens           int64    `json:"input_tokens"`
 	OutputTokens          int64    `json:"output_tokens"`
 	CachedTokens          int64    `json:"cached_tokens"`
+	CacheReadTokens       int64    `json:"cache_read_tokens"`
+	CacheCreationTokens   int64    `json:"cache_creation_tokens"`
 	ReasoningTokens       int64    `json:"reasoning_tokens"`
 	TotalTokens           int64    `json:"total_tokens"`
 	TotalCost             float64  `json:"total_cost"`
@@ -125,16 +127,18 @@ type ModelShareRow struct {
 }
 
 type ModelStat struct {
-	Model        string  `json:"model"`
-	Calls        int64   `json:"calls"`
-	SuccessCalls int64   `json:"success_calls"`
-	FailureCalls int64   `json:"failure_calls"`
-	SuccessRate  float64 `json:"success_rate"`
-	InputTokens  int64   `json:"input_tokens"`
-	OutputTokens int64   `json:"output_tokens"`
-	CachedTokens int64   `json:"cached_tokens"`
-	TotalTokens  int64   `json:"total_tokens"`
-	Cost         float64 `json:"cost"`
+	Model               string  `json:"model"`
+	Calls               int64   `json:"calls"`
+	SuccessCalls        int64   `json:"success_calls"`
+	FailureCalls        int64   `json:"failure_calls"`
+	SuccessRate         float64 `json:"success_rate"`
+	InputTokens         int64   `json:"input_tokens"`
+	OutputTokens        int64   `json:"output_tokens"`
+	CachedTokens        int64   `json:"cached_tokens"`
+	CacheReadTokens     int64   `json:"cache_read_tokens"`
+	CacheCreationTokens int64   `json:"cache_creation_tokens"`
+	TotalTokens         int64   `json:"total_tokens"`
+	Cost                float64 `json:"cost"`
 }
 
 type ChannelShareRow struct {
@@ -157,23 +161,25 @@ type FailureSourceRow struct {
 }
 
 type TaskBucketRow struct {
-	BucketKey    string   `json:"bucket_key"`
-	Total        int64    `json:"total"`
-	Success      int64    `json:"success"`
-	Failure      int64    `json:"failure"`
-	FirstMS      int64    `json:"first_ms"`
-	LastMS       int64    `json:"last_ms"`
-	Source       string   `json:"source"`
-	SourceHash   string   `json:"source_hash"`
-	AuthIndex    string   `json:"auth_index"`
-	Models       []string `json:"models"`
-	Endpoints    []string `json:"endpoints"`
-	InputTokens  int64    `json:"input_tokens"`
-	OutputTokens int64    `json:"output_tokens"`
-	CachedTokens int64    `json:"cached_tokens"`
-	TotalTokens  int64    `json:"total_tokens"`
-	AvgLatencyMS *float64 `json:"average_latency_ms"`
-	MaxLatencyMS *int64   `json:"max_latency_ms"`
+	BucketKey           string   `json:"bucket_key"`
+	Total               int64    `json:"total"`
+	Success             int64    `json:"success"`
+	Failure             int64    `json:"failure"`
+	FirstMS             int64    `json:"first_ms"`
+	LastMS              int64    `json:"last_ms"`
+	Source              string   `json:"source"`
+	SourceHash          string   `json:"source_hash"`
+	AuthIndex           string   `json:"auth_index"`
+	Models              []string `json:"models"`
+	Endpoints           []string `json:"endpoints"`
+	InputTokens         int64    `json:"input_tokens"`
+	OutputTokens        int64    `json:"output_tokens"`
+	CachedTokens        int64    `json:"cached_tokens"`
+	CacheReadTokens     int64    `json:"cache_read_tokens"`
+	CacheCreationTokens int64    `json:"cache_creation_tokens"`
+	TotalTokens         int64    `json:"total_tokens"`
+	AvgLatencyMS        *float64 `json:"average_latency_ms"`
+	MaxLatencyMS        *int64   `json:"max_latency_ms"`
 }
 
 type RecentFailure struct {
@@ -208,13 +214,18 @@ type EventRow struct {
 	AuthLabelSnapshot     string `json:"auth_label_snapshot"`
 	AuthProviderSnapshot  string `json:"auth_provider_snapshot"`
 	AuthProjectIDSnapshot string `json:"auth_project_id_snapshot,omitempty"`
+	ReasoningEffort       string `json:"reasoning_effort,omitempty"`
 	InputTokens           int64  `json:"input_tokens"`
 	OutputTokens          int64  `json:"output_tokens"`
 	CachedTokens          int64  `json:"cached_tokens"`
+	CacheReadTokens       int64  `json:"cache_read_tokens"`
+	CacheCreationTokens   int64  `json:"cache_creation_tokens"`
 	ReasoningTokens       int64  `json:"reasoning_tokens"`
 	TotalTokens           int64  `json:"total_tokens"`
 	LatencyMS             *int64 `json:"latency_ms"`
 	Failed                bool   `json:"failed"`
+	FailStatusCode        *int64 `json:"fail_status_code,omitempty"`
+	FailSummary           string `json:"fail_summary,omitempty"`
 }
 
 func (s *Service) Analytics(ctx context.Context, req Request) (Response, error) {
@@ -392,6 +403,8 @@ func buildSummary(agg store.Aggregate, rolling store.Aggregate, activeDays int64
 		InputTokens:           agg.InputTokens,
 		OutputTokens:          agg.OutputTokens,
 		CachedTokens:          agg.CachedTokens,
+		CacheReadTokens:       agg.CacheReadTokens,
+		CacheCreationTokens:   agg.CacheCreationTokens,
 		ReasoningTokens:       agg.ReasoningTokens,
 		TotalTokens:           agg.TotalTokens,
 		TotalCost:             sumCost(modelStats, prices),
@@ -450,30 +463,34 @@ func buildModelStats(stats []store.ModelStat, prices map[string]store.ModelPrice
 	result := make([]ModelStat, 0, len(aggregated))
 	for _, stat := range aggregated {
 		result = append(result, ModelStat{
-			Model:        stat.Model,
-			Calls:        stat.Calls,
-			SuccessCalls: stat.SuccessCalls,
-			FailureCalls: stat.Calls - stat.SuccessCalls,
-			SuccessRate:  ratio(stat.SuccessCalls, stat.Calls),
-			InputTokens:  stat.InputTokens,
-			OutputTokens: stat.OutputTokens,
-			CachedTokens: stat.CachedTokens,
-			TotalTokens:  stat.TotalTokens,
-			Cost:         stat.Cost,
+			Model:               stat.Model,
+			Calls:               stat.Calls,
+			SuccessCalls:        stat.SuccessCalls,
+			FailureCalls:        stat.Calls - stat.SuccessCalls,
+			SuccessRate:         ratio(stat.SuccessCalls, stat.Calls),
+			InputTokens:         stat.InputTokens,
+			OutputTokens:        stat.OutputTokens,
+			CachedTokens:        stat.CachedTokens,
+			CacheReadTokens:     stat.CacheReadTokens,
+			CacheCreationTokens: stat.CacheCreationTokens,
+			TotalTokens:         stat.TotalTokens,
+			Cost:                stat.Cost,
 		})
 	}
 	return result
 }
 
 type aggregatedModelStat struct {
-	Model        string
-	Calls        int64
-	SuccessCalls int64
-	InputTokens  int64
-	OutputTokens int64
-	CachedTokens int64
-	TotalTokens  int64
-	Cost         float64
+	Model               string
+	Calls               int64
+	SuccessCalls        int64
+	InputTokens         int64
+	OutputTokens        int64
+	CachedTokens        int64
+	CacheReadTokens     int64
+	CacheCreationTokens int64
+	TotalTokens         int64
+	Cost                float64
 }
 
 func aggregateModelStats(stats []store.ModelStat, prices map[string]store.ModelPrice) []aggregatedModelStat {
@@ -491,6 +508,8 @@ func aggregateModelStats(stats []store.ModelStat, prices map[string]store.ModelP
 		entry.InputTokens += stat.InputTokens
 		entry.OutputTokens += stat.OutputTokens
 		entry.CachedTokens += stat.CachedTokens
+		entry.CacheReadTokens += stat.CacheReadTokens
+		entry.CacheCreationTokens += stat.CacheCreationTokens
 		entry.TotalTokens += stat.TotalTokens
 		entry.Cost += costForStat(stat, prices)
 	}
@@ -561,23 +580,25 @@ func buildTaskBuckets(buckets []store.TaskBucket) []TaskBucketRow {
 	result := make([]TaskBucketRow, 0, len(buckets))
 	for _, bucket := range buckets {
 		result = append(result, TaskBucketRow{
-			BucketKey:    bucket.BucketKey,
-			Total:        bucket.Total,
-			Success:      bucket.Success,
-			Failure:      bucket.Failure,
-			FirstMS:      bucket.FirstMS,
-			LastMS:       bucket.LastMS,
-			Source:       bucket.Source,
-			SourceHash:   bucket.SourceHash,
-			AuthIndex:    bucket.AuthIndex,
-			Models:       splitCSV(bucket.Models),
-			Endpoints:    splitCSV(bucket.Endpoints),
-			InputTokens:  bucket.InputTokens,
-			OutputTokens: bucket.OutputTokens,
-			CachedTokens: bucket.CachedTokens,
-			TotalTokens:  bucket.TotalTokens,
-			AvgLatencyMS: nullableFloat(bucket.AvgLatencyMS.Valid, bucket.AvgLatencyMS.Float64),
-			MaxLatencyMS: nullableInt(bucket.MaxLatencyMS.Valid, bucket.MaxLatencyMS.Int64),
+			BucketKey:           bucket.BucketKey,
+			Total:               bucket.Total,
+			Success:             bucket.Success,
+			Failure:             bucket.Failure,
+			FirstMS:             bucket.FirstMS,
+			LastMS:              bucket.LastMS,
+			Source:              bucket.Source,
+			SourceHash:          bucket.SourceHash,
+			AuthIndex:           bucket.AuthIndex,
+			Models:              splitCSV(bucket.Models),
+			Endpoints:           splitCSV(bucket.Endpoints),
+			InputTokens:         bucket.InputTokens,
+			OutputTokens:        bucket.OutputTokens,
+			CachedTokens:        bucket.CachedTokens,
+			CacheReadTokens:     bucket.CacheReadTokens,
+			CacheCreationTokens: bucket.CacheCreationTokens,
+			TotalTokens:         bucket.TotalTokens,
+			AvgLatencyMS:        nullableFloat(bucket.AvgLatencyMS.Valid, bucket.AvgLatencyMS.Float64),
+			MaxLatencyMS:        nullableInt(bucket.MaxLatencyMS.Valid, bucket.MaxLatencyMS.Int64),
 		})
 	}
 	return result
@@ -618,13 +639,18 @@ func buildEvents(page store.EventsPage) *EventsResponse {
 			AuthLabelSnapshot:     item.AuthLabelSnapshot,
 			AuthProviderSnapshot:  item.AuthProviderSnapshot,
 			AuthProjectIDSnapshot: item.AuthProjectIDSnapshot,
+			ReasoningEffort:       item.ReasoningEffort,
 			InputTokens:           item.InputTokens,
 			OutputTokens:          item.OutputTokens,
 			CachedTokens:          item.CachedTokens,
+			CacheReadTokens:       item.CacheReadTokens,
+			CacheCreationTokens:   item.CacheCreationTokens,
 			ReasoningTokens:       item.ReasoningTokens,
 			TotalTokens:           item.TotalTokens,
 			LatencyMS:             nullableInt(item.LatencyMS.Valid, item.LatencyMS.Int64),
 			Failed:                item.Failed,
+			FailStatusCode:        nullableInt(item.FailStatusCode.Valid, item.FailStatusCode.Int64),
+			FailSummary:           item.FailSummary,
 		})
 	}
 	return &EventsResponse{Items: items, NextBeforeMS: page.NextBeforeMS, HasMore: page.HasMore}
@@ -644,9 +670,11 @@ func costForStat(stat store.ModelStat, prices map[string]store.ModelPrice) float
 		model = stat.Model
 	}
 	return pricing.CostForModel(model, pricing.ModelTokens{
-		InputTokens:  stat.InputTokens,
-		OutputTokens: stat.OutputTokens,
-		CachedTokens: stat.CachedTokens,
+		InputTokens:         stat.InputTokens,
+		OutputTokens:        stat.OutputTokens,
+		CachedTokens:        stat.CachedTokens,
+		CacheReadTokens:     stat.CacheReadTokens,
+		CacheCreationTokens: stat.CacheCreationTokens,
 	}, prices)
 }
 
@@ -656,9 +684,11 @@ func costForChannelStat(stat store.ChannelModelStat, prices map[string]store.Mod
 		model = stat.Model
 	}
 	return pricing.CostForModel(model, pricing.ModelTokens{
-		InputTokens:  stat.InputTokens,
-		OutputTokens: stat.OutputTokens,
-		CachedTokens: stat.CachedTokens,
+		InputTokens:         stat.InputTokens,
+		OutputTokens:        stat.OutputTokens,
+		CachedTokens:        stat.CachedTokens,
+		CacheReadTokens:     stat.CacheReadTokens,
+		CacheCreationTokens: stat.CacheCreationTokens,
 	}, prices)
 }
 

@@ -43,18 +43,20 @@ type Window struct {
 }
 
 type TodaySummary struct {
-	TotalCalls       int64    `json:"total_calls"`
-	SuccessCalls     int64    `json:"success_calls"`
-	FailureCalls     int64    `json:"failure_calls"`
-	SuccessRate      float64  `json:"success_rate"`
-	InputTokens      int64    `json:"input_tokens"`
-	OutputTokens     int64    `json:"output_tokens"`
-	CachedTokens     int64    `json:"cached_tokens"`
-	ReasoningTokens  int64    `json:"reasoning_tokens"`
-	TotalTokens      int64    `json:"total_tokens"`
-	TotalCost        float64  `json:"total_cost"`
-	AverageLatencyMS *float64 `json:"average_latency_ms"`
-	ZeroTokenCalls   int64    `json:"zero_token_calls"`
+	TotalCalls          int64    `json:"total_calls"`
+	SuccessCalls        int64    `json:"success_calls"`
+	FailureCalls        int64    `json:"failure_calls"`
+	SuccessRate         float64  `json:"success_rate"`
+	InputTokens         int64    `json:"input_tokens"`
+	OutputTokens        int64    `json:"output_tokens"`
+	CachedTokens        int64    `json:"cached_tokens"`
+	CacheReadTokens     int64    `json:"cache_read_tokens"`
+	CacheCreationTokens int64    `json:"cache_creation_tokens"`
+	ReasoningTokens     int64    `json:"reasoning_tokens"`
+	TotalTokens         int64    `json:"total_tokens"`
+	TotalCost           float64  `json:"total_cost"`
+	AverageLatencyMS    *float64 `json:"average_latency_ms"`
+	ZeroTokenCalls      int64    `json:"zero_token_calls"`
 }
 
 type RollingSummary struct {
@@ -275,18 +277,20 @@ func (s *Service) Summary(ctx context.Context, p SummaryParams) (SummaryResponse
 
 func buildTodaySummary(agg store.Aggregate, modelStats []store.ModelStat, prices map[string]store.ModelPrice) TodaySummary {
 	return TodaySummary{
-		TotalCalls:       agg.TotalCalls,
-		SuccessCalls:     agg.SuccessCalls,
-		FailureCalls:     agg.FailureCalls,
-		SuccessRate:      rate(agg.SuccessCalls, agg.TotalCalls),
-		InputTokens:      agg.InputTokens,
-		OutputTokens:     agg.OutputTokens,
-		CachedTokens:     agg.CachedTokens,
-		ReasoningTokens:  agg.ReasoningTokens,
-		TotalTokens:      agg.TotalTokens,
-		TotalCost:        totalCost(modelStats, prices),
-		AverageLatencyMS: nullableFloat(agg.AvgLatencyMS.Valid, agg.AvgLatencyMS.Float64),
-		ZeroTokenCalls:   agg.ZeroTokenCalls,
+		TotalCalls:          agg.TotalCalls,
+		SuccessCalls:        agg.SuccessCalls,
+		FailureCalls:        agg.FailureCalls,
+		SuccessRate:         rate(agg.SuccessCalls, agg.TotalCalls),
+		InputTokens:         agg.InputTokens,
+		OutputTokens:        agg.OutputTokens,
+		CachedTokens:        agg.CachedTokens,
+		CacheReadTokens:     agg.CacheReadTokens,
+		CacheCreationTokens: agg.CacheCreationTokens,
+		ReasoningTokens:     agg.ReasoningTokens,
+		TotalTokens:         agg.TotalTokens,
+		TotalCost:           totalCost(modelStats, prices),
+		AverageLatencyMS:    nullableFloat(agg.AvgLatencyMS.Valid, agg.AvgLatencyMS.Float64),
+		ZeroTokenCalls:      agg.ZeroTokenCalls,
 	}
 }
 
@@ -428,12 +432,15 @@ func requestHealthTone(calls int64, failureRate float64, future bool) string {
 }
 
 func buildTokenMix(today TodaySummary) []TokenMixSegment {
-	total := today.InputTokens + today.OutputTokens + today.ReasoningTokens + today.CachedTokens
+	total := today.InputTokens + today.OutputTokens + today.ReasoningTokens +
+		today.CachedTokens + today.CacheReadTokens + today.CacheCreationTokens
 	return []TokenMixSegment{
 		{Key: "input", Tokens: today.InputTokens, Share: rate(today.InputTokens, total)},
 		{Key: "output", Tokens: today.OutputTokens, Share: rate(today.OutputTokens, total)},
 		{Key: "reasoning", Tokens: today.ReasoningTokens, Share: rate(today.ReasoningTokens, total)},
 		{Key: "cached", Tokens: today.CachedTokens, Share: rate(today.CachedTokens, total)},
+		{Key: "cache_read", Tokens: today.CacheReadTokens, Share: rate(today.CacheReadTokens, total)},
+		{Key: "cache_creation", Tokens: today.CacheCreationTokens, Share: rate(today.CacheCreationTokens, total)},
 	}
 }
 
@@ -612,9 +619,11 @@ func costForStat(stat store.ModelStat, prices map[string]store.ModelPrice) float
 		model = stat.Model
 	}
 	return pricing.CostForModel(model, pricing.ModelTokens{
-		InputTokens:  stat.InputTokens,
-		OutputTokens: stat.OutputTokens,
-		CachedTokens: stat.CachedTokens,
+		InputTokens:         stat.InputTokens,
+		OutputTokens:        stat.OutputTokens,
+		CachedTokens:        stat.CachedTokens,
+		CacheReadTokens:     stat.CacheReadTokens,
+		CacheCreationTokens: stat.CacheCreationTokens,
 	}, prices)
 }
 
@@ -624,9 +633,11 @@ func costForChannelStat(stat store.ChannelModelStat, prices map[string]store.Mod
 		model = stat.Model
 	}
 	return pricing.CostForModel(model, pricing.ModelTokens{
-		InputTokens:  stat.InputTokens,
-		OutputTokens: stat.OutputTokens,
-		CachedTokens: stat.CachedTokens,
+		InputTokens:         stat.InputTokens,
+		OutputTokens:        stat.OutputTokens,
+		CachedTokens:        stat.CachedTokens,
+		CacheReadTokens:     stat.CacheReadTokens,
+		CacheCreationTokens: stat.CacheCreationTokens,
 	}, prices)
 }
 
