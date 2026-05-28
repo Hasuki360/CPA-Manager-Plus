@@ -16,6 +16,7 @@ import { buildSourceInfoMap, resolveSourceDisplay } from '@/utils/sourceResolver
 import { normalizeAuthIndex, type UsageDetailWithEndpoint } from '@/utils/usage';
 import { joinUnique, maskAuthIndex, maskEmailLike, readString } from './base';
 import { buildDayLabel, buildHourLabel, buildLocalDayKey, padNumber } from './range';
+import { buildMonitoringSourceDisplay } from './sourceDisplay';
 import type {
   MonitoringAuthMeta,
   MonitoringChannelMeta,
@@ -208,6 +209,8 @@ const resolveChannelMeta = (
 export const buildChannelRowsFromAnalytics = (
   rows: MonitoringAnalyticsChannelShareRow[],
   authMetaMap: Map<string, MonitoringAuthMeta>,
+  authFileMap: Map<string, CredentialInfo>,
+  sourceInfoMap: ReturnType<typeof buildSourceInfoMap>,
   channelByAuthIndex: Map<string, MonitoringChannelMeta>
 ): MonitoringChannelRow[] =>
   rows
@@ -218,12 +221,22 @@ export const buildChannelRowsFromAnalytics = (
         authMetaMap,
         channelByAuthIndex
       );
-      const label = channelMeta?.name || authMeta?.provider || authIndex;
+      const display = buildMonitoringSourceDisplay(
+        {
+          source: row.source,
+          authIndex,
+          accountSnapshot: row.account_snapshot,
+          authLabelSnapshot: row.auth_label_snapshot,
+          authProviderSnapshot: row.auth_provider_snapshot,
+        },
+        { authMetaMap, authFileMap, sourceInfoMap, channelByAuthIndex }
+      );
+      const label = display.primary;
       return {
         id: authIndex,
         label,
-        host: channelMeta?.host || '-',
-        provider: authMeta?.provider || '-',
+        host: display.channelHost,
+        provider: display.provider,
         planTypes: authMeta?.planType && authMeta.planType !== '-' ? [authMeta.planType] : [],
         disabled: channelMeta?.disabled || authMeta?.disabled || false,
         authCount: authIndex === '-' ? 0 : 1,
@@ -234,7 +247,9 @@ export const buildChannelRowsFromAnalytics = (
         totalTokens: row.tokens,
         totalCost: row.cost,
         averageLatencyMs: row.average_latency_ms,
-        authLabels: authMeta?.label ? [authMeta.label] : [],
+        authLabels: [authMeta?.label || row.auth_label_snapshot || display.sourceLabel].filter(
+          (value): value is string => Boolean(value)
+        ),
       } satisfies MonitoringChannelRow;
     })
     .sort((left, right) => right.requests - left.requests);
@@ -242,18 +257,26 @@ export const buildChannelRowsFromAnalytics = (
 export const buildFailureSourceRowsFromAnalytics = (
   rows: MonitoringAnalyticsFailureSourceRow[],
   authMetaMap: Map<string, MonitoringAuthMeta>,
+  authFileMap: Map<string, CredentialInfo>,
+  sourceInfoMap: ReturnType<typeof buildSourceInfoMap>,
   channelByAuthIndex: Map<string, MonitoringChannelMeta>
 ): MonitoringFailureSourceRow[] =>
   rows.map((row) => {
-    const { authMeta, channelMeta } = resolveChannelMeta(
-      row.auth_index || '-',
-      authMetaMap,
-      channelByAuthIndex
+    const display = buildMonitoringSourceDisplay(
+      {
+        source: row.source,
+        sourceHash: row.source_hash,
+        authIndex: row.auth_index,
+        accountSnapshot: row.account_snapshot,
+        authLabelSnapshot: row.auth_label_snapshot,
+        authProviderSnapshot: row.auth_provider_snapshot,
+      },
+      { authMetaMap, authFileMap, sourceInfoMap, channelByAuthIndex }
     );
     return {
       id: `${row.source_hash || '-'}::${row.auth_index || '-'}`,
-      label: shortHashLabel(row.source_hash),
-      channel: channelMeta?.name || authMeta?.provider || row.auth_index || '-',
+      label: display.sourceMasked || display.primary,
+      channel: display.channel,
       failures: row.failure,
       totalRequests: row.calls,
       failureRate: row.calls > 0 ? row.failure / row.calls : 0,
@@ -303,22 +326,31 @@ export const buildTaskBucketsFromAnalytics = (
 export const buildFailureRowsFromAnalytics = (
   rows: MonitoringAnalyticsRecentFailure[],
   authMetaMap: Map<string, MonitoringAuthMeta>,
+  authFileMap: Map<string, CredentialInfo>,
+  sourceInfoMap: ReturnType<typeof buildSourceInfoMap>,
   channelByAuthIndex: Map<string, MonitoringChannelMeta>
 ): MonitoringFailureRow[] =>
   rows.map((row) => {
     const authIndex = normalizeAuthIndex(row.auth_index) ?? '-';
-    const { authMeta, channelMeta } = resolveChannelMeta(
-      authIndex,
-      authMetaMap,
-      channelByAuthIndex
+    const display = buildMonitoringSourceDisplay(
+      {
+        source: row.source,
+        sourceHash: row.source_hash,
+        apiKeyHash: row.api_key_hash,
+        authIndex,
+        accountSnapshot: row.account_snapshot,
+        authLabelSnapshot: row.auth_label_snapshot,
+        authProviderSnapshot: row.auth_provider_snapshot,
+      },
+      { authMetaMap, authFileMap, sourceInfoMap, channelByAuthIndex }
     );
     return {
       id: `${row.timestamp_ms}-${row.source_hash}-${row.api_key_hash}-${row.model}`,
       timestampMs: row.timestamp_ms,
       timestamp: new Date(row.timestamp_ms).toISOString(),
       model: row.model,
-      source: shortHashLabel(row.source_hash || row.api_key_hash),
-      channel: channelMeta?.name || authMeta?.provider || '-',
+      source: display.sourceMasked || display.primary,
+      channel: display.channel,
       authIndex: maskAuthIndex(authIndex),
       latencyMs: row.duration_ms,
     };

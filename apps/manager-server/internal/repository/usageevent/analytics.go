@@ -41,28 +41,36 @@ type HourlyPoint struct {
 }
 
 type ChannelModelStat struct {
-	AuthIndex           string
-	Model               string
-	BillingModel        string
-	Calls               int64
-	SuccessCalls        int64
-	FailureCalls        int64
-	InputTokens         int64
-	OutputTokens        int64
-	CachedTokens        int64
-	CacheReadTokens     int64
-	CacheCreationTokens int64
-	TotalTokens         int64
-	AvgLatencyMS        sql.NullFloat64
+	AuthIndex            string
+	Source               string
+	AccountSnapshot      string
+	AuthLabelSnapshot    string
+	AuthProviderSnapshot string
+	Model                string
+	BillingModel         string
+	Calls                int64
+	SuccessCalls         int64
+	FailureCalls         int64
+	InputTokens          int64
+	OutputTokens         int64
+	CachedTokens         int64
+	CacheReadTokens      int64
+	CacheCreationTokens  int64
+	TotalTokens          int64
+	AvgLatencyMS         sql.NullFloat64
 }
 
 type FailureSourceStat struct {
-	SourceHash   string
-	AuthIndex    string
-	Calls        int64
-	FailureCalls int64
-	LastSeenMS   int64
-	AvgLatencyMS sql.NullFloat64
+	Source               string
+	SourceHash           string
+	AuthIndex            string
+	AccountSnapshot      string
+	AuthLabelSnapshot    string
+	AuthProviderSnapshot string
+	Calls                int64
+	FailureCalls         int64
+	LastSeenMS           int64
+	AvgLatencyMS         sql.NullFloat64
 }
 
 type TaskBucket struct {
@@ -301,6 +309,10 @@ func (r *repository) ChannelModelStatsWithFilter(ctx context.Context, filter Ana
 	where, args := analyticsWhere(filter)
 	rows, err := r.db.QueryContext(ctx, `select
 	coalesce(auth_index, ''),
+	coalesce(max(source), ''),
+	coalesce(max(account_snapshot), ''),
+	coalesce(max(auth_label_snapshot), ''),
+	coalesce(max(auth_provider_snapshot), ''),
 	model,
 	coalesce(nullif(resolved_model, ''), model) as billing_model,
 	count(*),
@@ -326,6 +338,10 @@ order by count(*) desc`, args...)
 		var stat ChannelModelStat
 		if err := rows.Scan(
 			&stat.AuthIndex,
+			&stat.Source,
+			&stat.AccountSnapshot,
+			&stat.AuthLabelSnapshot,
+			&stat.AuthProviderSnapshot,
 			&stat.Model,
 			&stat.BillingModel,
 			&stat.Calls,
@@ -349,8 +365,12 @@ order by count(*) desc`, args...)
 func (r *repository) FailureSourcesWithFilter(ctx context.Context, filter AnalyticsFilter) ([]FailureSourceStat, error) {
 	where, args := analyticsWhere(filter)
 	rows, err := r.db.QueryContext(ctx, `select
+	coalesce(max(source), ''),
 	coalesce(source_hash, ''),
 	coalesce(auth_index, ''),
+	coalesce(max(account_snapshot), ''),
+	coalesce(max(auth_label_snapshot), ''),
+	coalesce(max(auth_provider_snapshot), ''),
 	count(*),
 	sum(case when failed = 1 then 1 else 0 end),
 	max(timestamp_ms),
@@ -367,7 +387,18 @@ order by sum(case when failed = 1 then 1 else 0 end) desc, max(timestamp_ms) des
 	stats := make([]FailureSourceStat, 0)
 	for rows.Next() {
 		var stat FailureSourceStat
-		if err := rows.Scan(&stat.SourceHash, &stat.AuthIndex, &stat.Calls, &stat.FailureCalls, &stat.LastSeenMS, &stat.AvgLatencyMS); err != nil {
+		if err := rows.Scan(
+			&stat.Source,
+			&stat.SourceHash,
+			&stat.AuthIndex,
+			&stat.AccountSnapshot,
+			&stat.AuthLabelSnapshot,
+			&stat.AuthProviderSnapshot,
+			&stat.Calls,
+			&stat.FailureCalls,
+			&stat.LastSeenMS,
+			&stat.AvgLatencyMS,
+		); err != nil {
 			return nil, err
 		}
 		stats = append(stats, stat)
@@ -448,10 +479,17 @@ func (r *repository) RecentFailuresWithFilter(ctx context.Context, filter Analyt
 	timestamp_ms,
 	model,
 	coalesce(api_key_hash, ''),
+	coalesce(source, ''),
 	coalesce(source_hash, ''),
 	coalesce(auth_index, ''),
 	coalesce(endpoint, ''),
-	latency_ms
+	latency_ms,
+	coalesce(account_snapshot, ''),
+	coalesce(auth_label_snapshot, ''),
+	coalesce(auth_provider_snapshot, ''),
+	coalesce(auth_project_id_snapshot, ''),
+	fail_status_code,
+	coalesce(fail_summary, '')
 from usage_events `+where+`
 and failed = 1
 order by timestamp_ms desc, id desc
@@ -468,10 +506,17 @@ limit ?`, args...)
 			&failure.TimestampMS,
 			&failure.Model,
 			&failure.APIKeyHash,
+			&failure.Source,
 			&failure.SourceHash,
 			&failure.AuthIndex,
 			&failure.Endpoint,
 			&failure.LatencyMS,
+			&failure.AccountSnapshot,
+			&failure.AuthLabelSnapshot,
+			&failure.AuthProviderSnapshot,
+			&failure.AuthProjectIDSnapshot,
+			&failure.FailStatusCode,
+			&failure.FailSummary,
 		); err != nil {
 			return nil, err
 		}

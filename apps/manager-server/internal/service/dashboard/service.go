@@ -133,36 +133,51 @@ type ModelCostRank struct {
 }
 
 type ChannelHealth struct {
-	AuthIndex        string   `json:"auth_index"`
-	Calls            int64    `json:"calls"`
-	Failures         int64    `json:"failures"`
-	FailureRate      float64  `json:"failure_rate"`
-	SuccessRate      float64  `json:"success_rate"`
-	Tokens           int64    `json:"tokens"`
-	Cost             float64  `json:"cost"`
-	AverageLatencyMS *float64 `json:"average_latency_ms"`
-	Tone             string   `json:"tone"`
+	AuthIndex            string   `json:"auth_index"`
+	Source               string   `json:"source,omitempty"`
+	AccountSnapshot      string   `json:"account_snapshot,omitempty"`
+	AuthLabelSnapshot    string   `json:"auth_label_snapshot,omitempty"`
+	AuthProviderSnapshot string   `json:"auth_provider_snapshot,omitempty"`
+	Calls                int64    `json:"calls"`
+	Failures             int64    `json:"failures"`
+	FailureRate          float64  `json:"failure_rate"`
+	SuccessRate          float64  `json:"success_rate"`
+	Tokens               int64    `json:"tokens"`
+	Cost                 float64  `json:"cost"`
+	AverageLatencyMS     *float64 `json:"average_latency_ms"`
+	Tone                 string   `json:"tone"`
 }
 
 type FailureSource struct {
-	SourceHash       string   `json:"source_hash"`
-	AuthIndex        string   `json:"auth_index"`
-	Calls            int64    `json:"calls"`
-	Failures         int64    `json:"failures"`
-	FailureRate      float64  `json:"failure_rate"`
-	LastSeenMS       int64    `json:"last_seen_ms"`
-	AverageLatencyMS *float64 `json:"average_latency_ms"`
-	Tone             string   `json:"tone"`
+	Source               string   `json:"source,omitempty"`
+	SourceHash           string   `json:"source_hash"`
+	AuthIndex            string   `json:"auth_index"`
+	AccountSnapshot      string   `json:"account_snapshot,omitempty"`
+	AuthLabelSnapshot    string   `json:"auth_label_snapshot,omitempty"`
+	AuthProviderSnapshot string   `json:"auth_provider_snapshot,omitempty"`
+	Calls                int64    `json:"calls"`
+	Failures             int64    `json:"failures"`
+	FailureRate          float64  `json:"failure_rate"`
+	LastSeenMS           int64    `json:"last_seen_ms"`
+	AverageLatencyMS     *float64 `json:"average_latency_ms"`
+	Tone                 string   `json:"tone"`
 }
 
 type RecentFailure struct {
-	TimestampMS int64  `json:"timestamp_ms"`
-	Model       string `json:"model"`
-	APIKeyHash  string `json:"api_key_hash"`
-	SourceHash  string `json:"source_hash"`
-	AuthIndex   string `json:"auth_index"`
-	Endpoint    string `json:"endpoint"`
-	DurationMS  *int64 `json:"duration_ms"`
+	TimestampMS           int64  `json:"timestamp_ms"`
+	Model                 string `json:"model"`
+	APIKeyHash            string `json:"api_key_hash"`
+	Source                string `json:"source,omitempty"`
+	SourceHash            string `json:"source_hash"`
+	AuthIndex             string `json:"auth_index"`
+	AccountSnapshot       string `json:"account_snapshot,omitempty"`
+	AuthLabelSnapshot     string `json:"auth_label_snapshot,omitempty"`
+	AuthProviderSnapshot  string `json:"auth_provider_snapshot,omitempty"`
+	AuthProjectIDSnapshot string `json:"auth_project_id_snapshot,omitempty"`
+	Endpoint              string `json:"endpoint"`
+	DurationMS            *int64 `json:"duration_ms"`
+	FailStatusCode        *int64 `json:"fail_status_code,omitempty"`
+	FailSummary           string `json:"fail_summary,omitempty"`
 }
 
 type SummaryResponse struct {
@@ -489,9 +504,16 @@ func buildChannelHealth(stats []store.ChannelModelStat, prices map[string]store.
 		}
 		entry := grouped[authIndex]
 		if entry == nil {
-			entry = &accumulator{row: ChannelHealth{AuthIndex: authIndex}}
+			entry = &accumulator{row: ChannelHealth{
+				AuthIndex:            authIndex,
+				Source:               stat.Source,
+				AccountSnapshot:      stat.AccountSnapshot,
+				AuthLabelSnapshot:    stat.AuthLabelSnapshot,
+				AuthProviderSnapshot: stat.AuthProviderSnapshot,
+			}}
 			grouped[authIndex] = entry
 		}
+		fillChannelHealthSnapshots(&entry.row, stat)
 		entry.row.Calls += stat.Calls
 		entry.row.Failures += stat.FailureCalls
 		entry.row.Tokens += stat.TotalTokens
@@ -540,14 +562,18 @@ func buildFailureSources(stats []store.FailureSourceStat, limit int) []FailureSo
 			tone = "bad"
 		}
 		rows = append(rows, FailureSource{
-			SourceHash:       stat.SourceHash,
-			AuthIndex:        stat.AuthIndex,
-			Calls:            stat.Calls,
-			Failures:         stat.FailureCalls,
-			FailureRate:      failureRate,
-			LastSeenMS:       stat.LastSeenMS,
-			AverageLatencyMS: nullableFloat(stat.AvgLatencyMS.Valid, stat.AvgLatencyMS.Float64),
-			Tone:             tone,
+			Source:               stat.Source,
+			SourceHash:           stat.SourceHash,
+			AuthIndex:            stat.AuthIndex,
+			AccountSnapshot:      stat.AccountSnapshot,
+			AuthLabelSnapshot:    stat.AuthLabelSnapshot,
+			AuthProviderSnapshot: stat.AuthProviderSnapshot,
+			Calls:                stat.Calls,
+			Failures:             stat.FailureCalls,
+			FailureRate:          failureRate,
+			LastSeenMS:           stat.LastSeenMS,
+			AverageLatencyMS:     nullableFloat(stat.AvgLatencyMS.Valid, stat.AvgLatencyMS.Float64),
+			Tone:                 tone,
 		})
 	}
 	if limit > 0 && len(rows) > limit {
@@ -556,17 +582,39 @@ func buildFailureSources(stats []store.FailureSourceStat, limit int) []FailureSo
 	return rows
 }
 
+func fillChannelHealthSnapshots(row *ChannelHealth, stat store.ChannelModelStat) {
+	if row.Source == "" {
+		row.Source = stat.Source
+	}
+	if row.AccountSnapshot == "" {
+		row.AccountSnapshot = stat.AccountSnapshot
+	}
+	if row.AuthLabelSnapshot == "" {
+		row.AuthLabelSnapshot = stat.AuthLabelSnapshot
+	}
+	if row.AuthProviderSnapshot == "" {
+		row.AuthProviderSnapshot = stat.AuthProviderSnapshot
+	}
+}
+
 func buildRecentFailures(failures []store.RecentFailure) []RecentFailure {
 	result := make([]RecentFailure, 0, len(failures))
 	for _, failure := range failures {
 		result = append(result, RecentFailure{
-			TimestampMS: failure.TimestampMS,
-			Model:       failure.Model,
-			APIKeyHash:  failure.APIKeyHash,
-			SourceHash:  failure.SourceHash,
-			AuthIndex:   failure.AuthIndex,
-			Endpoint:    failure.Endpoint,
-			DurationMS:  nullableInt(failure.LatencyMS.Valid, failure.LatencyMS.Int64),
+			TimestampMS:           failure.TimestampMS,
+			Model:                 failure.Model,
+			APIKeyHash:            failure.APIKeyHash,
+			Source:                failure.Source,
+			SourceHash:            failure.SourceHash,
+			AuthIndex:             failure.AuthIndex,
+			AccountSnapshot:       failure.AccountSnapshot,
+			AuthLabelSnapshot:     failure.AuthLabelSnapshot,
+			AuthProviderSnapshot:  failure.AuthProviderSnapshot,
+			AuthProjectIDSnapshot: failure.AuthProjectIDSnapshot,
+			Endpoint:              failure.Endpoint,
+			DurationMS:            nullableInt(failure.LatencyMS.Valid, failure.LatencyMS.Int64),
+			FailStatusCode:        nullableInt(failure.FailStatusCode.Valid, failure.FailStatusCode.Int64),
+			FailSummary:           failure.FailSummary,
 		})
 	}
 	return result

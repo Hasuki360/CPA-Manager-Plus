@@ -38,13 +38,20 @@ type ModelStat struct {
 
 // RecentFailure holds the columns required to display a recent failure entry.
 type RecentFailure struct {
-	TimestampMS int64
-	Model       string
-	APIKeyHash  string
-	SourceHash  string
-	AuthIndex   string
-	Endpoint    string
-	LatencyMS   sql.NullInt64
+	TimestampMS           int64
+	Model                 string
+	APIKeyHash            string
+	Source                string
+	SourceHash            string
+	AuthIndex             string
+	Endpoint              string
+	LatencyMS             sql.NullInt64
+	AccountSnapshot       string
+	AuthLabelSnapshot     string
+	AuthProviderSnapshot  string
+	AuthProjectIDSnapshot string
+	FailStatusCode        sql.NullInt64
+	FailSummary           string
 }
 
 const aggregateSQL = `select
@@ -202,13 +209,20 @@ func (r *repository) ModelStatsBetween(ctx context.Context, fromMs, toMs int64) 
 const recentFailuresSQL = `select
 	timestamp_ms, model,
 	coalesce(api_key_hash, ''),
+	coalesce(source, ''),
 	coalesce(source_hash, ''),
 	coalesce(auth_index, ''),
 	coalesce(endpoint, ''),
-	latency_ms
+	latency_ms,
+	coalesce(account_snapshot, ''),
+	coalesce(auth_label_snapshot, ''),
+	coalesce(auth_provider_snapshot, ''),
+	coalesce(auth_project_id_snapshot, ''),
+	fail_status_code,
+	coalesce(fail_summary, '')
 from usage_events
 where failed = 1 and timestamp_ms >= ? and timestamp_ms < ?
-order by timestamp_ms desc
+order by timestamp_ms desc, id desc
 limit ?`
 
 // RecentFailuresBetween returns the most recent failed events.
@@ -229,10 +243,17 @@ func (r *repository) RecentFailuresBetween(ctx context.Context, fromMs, toMs int
 			&rf.TimestampMS,
 			&rf.Model,
 			&rf.APIKeyHash,
+			&rf.Source,
 			&rf.SourceHash,
 			&rf.AuthIndex,
 			&rf.Endpoint,
 			&rf.LatencyMS,
+			&rf.AccountSnapshot,
+			&rf.AuthLabelSnapshot,
+			&rf.AuthProviderSnapshot,
+			&rf.AuthProjectIDSnapshot,
+			&rf.FailStatusCode,
+			&rf.FailSummary,
 		); err != nil {
 			return nil, err
 		}

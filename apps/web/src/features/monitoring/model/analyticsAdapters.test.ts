@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import type { MonitoringAnalyticsEventRow } from '@/services/api/usageService';
-import { buildUsageDetailsFromAnalyticsEvents } from './analyticsAdapters';
+import type {
+  MonitoringAnalyticsChannelShareRow,
+  MonitoringAnalyticsEventRow,
+} from '@/services/api/usageService';
+import { buildSourceInfoMap } from '@/utils/sourceResolver';
+import {
+  buildChannelRowsFromAnalytics,
+  buildFailureRowsFromAnalytics,
+  buildFailureSourceRowsFromAnalytics,
+  buildUsageDetailsFromAnalyticsEvents,
+} from './analyticsAdapters';
 
 describe('buildUsageDetailsFromAnalyticsEvents', () => {
   it('maps resolved model and auth project snapshots into usage details', () => {
@@ -90,5 +99,150 @@ describe('buildUsageDetailsFromAnalyticsEvents', () => {
     expect(details[0].tokens.cached_tokens).toBe(5);
     expect(details[0].tokens.cache_read_tokens).toBe(4);
     expect(details[0].tokens.cache_creation_tokens).toBe(1);
+  });
+});
+
+describe('analytics failure source display', () => {
+  const authMetaMap = new Map([
+    [
+      'auth-1',
+      {
+        authIndex: 'auth-1',
+        label: 'Team Auth',
+        account: 'alice@example.com',
+        provider: 'codex',
+        status: 'active',
+        disabled: false,
+        unavailable: false,
+        runtimeOnly: false,
+        planType: 'pro',
+        updatedAt: '',
+      },
+    ],
+  ]);
+  const authFileMap = new Map([['auth-1', { name: 'Team Auth', type: 'codex' }]]);
+  const sourceInfoMap = buildSourceInfoMap({});
+  const channelByAuthIndex = new Map([
+    [
+      'auth-1',
+      {
+        key: 'relay:0',
+        name: 'Production Relay',
+        baseUrl: 'https://relay.example.com/v1',
+        host: 'relay.example.com',
+        disabled: false,
+        authIndices: ['auth-1'],
+        modelNames: [],
+      },
+    ],
+  ]);
+
+  it('uses channel metadata for channel share rows when auth metadata exists', () => {
+    const rows = buildChannelRowsFromAnalytics(
+      [
+        {
+          auth_index: 'auth-1',
+          source: 'm:sk-a...zzzz',
+          account_snapshot: 'snapshot@example.com',
+          auth_label_snapshot: 'Snapshot Auth',
+          auth_provider_snapshot: 'codex',
+          calls: 10,
+          success: 8,
+          failure: 2,
+          tokens: 1000,
+          cost: 0.12,
+          average_latency_ms: 120,
+        },
+      ],
+      authMetaMap,
+      authFileMap,
+      sourceInfoMap,
+      channelByAuthIndex
+    );
+
+    expect(rows[0].label).toBe('Production Relay');
+    expect(rows[0].host).toBe('relay.example.com');
+    expect(rows[0].authLabels).toEqual(['Team Auth']);
+  });
+
+  it('uses channel share snapshots when current auth metadata is missing', () => {
+    const rows = buildChannelRowsFromAnalytics(
+      [
+        {
+          auth_index: 'legacy-auth',
+          source: 'm:sk-a...zzzz',
+          account_snapshot: 'legacy@example.com',
+          auth_label_snapshot: 'Legacy Auth',
+          auth_provider_snapshot: 'codex',
+          calls: 4,
+          success: 3,
+          failure: 1,
+          tokens: 500,
+          cost: 0.04,
+          average_latency_ms: 200,
+        } satisfies MonitoringAnalyticsChannelShareRow,
+      ],
+      new Map(),
+      new Map(),
+      sourceInfoMap,
+      new Map()
+    );
+
+    expect(rows[0].label).toBe('Legacy Auth');
+    expect(rows[0].provider).toBe('codex');
+    expect(rows[0].label).not.toBe('legacy-auth');
+  });
+
+  it('uses readable account metadata for recent failures instead of hashes', () => {
+    const rows = buildFailureRowsFromAnalytics(
+      [
+        {
+          timestamp_ms: Date.UTC(2026, 4, 20, 1, 2, 3),
+          model: 'gpt-test',
+          api_key_hash: 'api-key-hash',
+          source: 'm:sk-a...zzzz',
+          source_hash: 'source-hash',
+          auth_index: 'auth-1',
+          account_snapshot: 'snapshot@example.com',
+          auth_label_snapshot: 'Snapshot Auth',
+          auth_provider_snapshot: 'codex',
+          endpoint: 'POST /v1/chat/completions',
+          duration_ms: 123,
+          fail_status_code: 429,
+          fail_summary: 'rate limit exceeded',
+        },
+      ],
+      authMetaMap,
+      authFileMap,
+      sourceInfoMap,
+      channelByAuthIndex
+    );
+
+    expect(rows[0].source).toBe('Team Auth');
+    expect(rows[0].channel).toBe('Production Relay');
+    expect(rows[0].source).not.toBe('source-hash');
+  });
+
+  it('uses readable source labels for failure source rows', () => {
+    const rows = buildFailureSourceRowsFromAnalytics(
+      [
+        {
+          source_hash: 'source-hash',
+          auth_index: 'auth-1',
+          calls: 10,
+          failure: 2,
+          last_seen_ms: Date.UTC(2026, 4, 20, 1, 2, 3),
+          average_latency_ms: 120,
+        },
+      ],
+      authMetaMap,
+      authFileMap,
+      sourceInfoMap,
+      channelByAuthIndex
+    );
+
+    expect(rows[0].label).toBe('Team Auth');
+    expect(rows[0].channel).toBe('Production Relay');
+    expect(rows[0].label).not.toBe('source-hash');
   });
 });

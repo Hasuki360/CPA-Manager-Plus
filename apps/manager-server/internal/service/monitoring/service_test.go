@@ -284,6 +284,10 @@ func TestAnalyticsUsesResolvedModelPricingInAggregates(t *testing.T) {
 		math.Abs(resp.ChannelShare[0].Cost-3) > 0.000001 {
 		t.Fatalf("channel share = %#v", resp.ChannelShare)
 	}
+	if resp.ChannelShare[0].Source != "user@example.com" ||
+		resp.ChannelShare[0].AccountSnapshot != "user@example.com" {
+		t.Fatalf("channel share snapshots = %#v", resp.ChannelShare[0])
+	}
 }
 
 func TestAnalyticsAppliesFilters(t *testing.T) {
@@ -480,6 +484,7 @@ func monitoringEvent(
 		Source:          "user@example.com",
 		SourceHash:      sourceHash,
 		APIKeyHash:      "api-key-" + authIndex,
+		AccountSnapshot: "user@example.com",
 		InputTokens:     inputTokens,
 		OutputTokens:    outputTokens,
 		ReasoningTokens: reasoningTokens,

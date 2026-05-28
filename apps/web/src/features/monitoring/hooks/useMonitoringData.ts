@@ -356,9 +356,7 @@ export function useMonitoringData({
       if (cancelled) return;
       setEventsPageState((previous) => {
         const base =
-          previous.scopeKey === eventsScopeKey
-            ? previous
-            : createEventsPageState(eventsScopeKey);
+          previous.scopeKey === eventsScopeKey ? previous : createEventsPageState(eventsScopeKey);
         if (base.lastPageKey === pageKey) return base;
         return {
           scopeKey: eventsScopeKey,
@@ -396,9 +394,7 @@ export function useMonitoringData({
     if (!nextBeforeMs) return;
     setEventsPageState((previous) => {
       const base =
-        previous.scopeKey === eventsScopeKey
-          ? previous
-          : createEventsPageState(eventsScopeKey);
+        previous.scopeKey === eventsScopeKey ? previous : createEventsPageState(eventsScopeKey);
       if (base.loadingMore) return base;
       return { ...base, beforeMs: nextBeforeMs, loadingMore: true };
     });
@@ -477,9 +473,15 @@ export function useMonitoringData({
   const channelRows = useMemo(
     () =>
       analyticsData?.channel_share
-        ? buildChannelRowsFromAnalytics(analyticsData.channel_share, authMetaMap, channelByAuthIndex)
+        ? buildChannelRowsFromAnalytics(
+            analyticsData.channel_share,
+            authMetaMap,
+            authFileMap,
+            sourceInfoMap,
+            channelByAuthIndex
+          )
         : buildChannelRows(statsRows),
-    [analyticsData, authMetaMap, channelByAuthIndex, statsRows]
+    [analyticsData, authFileMap, authMetaMap, channelByAuthIndex, sourceInfoMap, statsRows]
   );
   const modelRows = useMemo(
     () =>
@@ -494,10 +496,12 @@ export function useMonitoringData({
         ? buildFailureSourceRowsFromAnalytics(
             analyticsData.failure_sources,
             authMetaMap,
+            authFileMap,
+            sourceInfoMap,
             channelByAuthIndex
           )
         : buildFailureSourceRows(statsRows),
-    [analyticsData, authMetaMap, channelByAuthIndex, statsRows]
+    [analyticsData, authFileMap, authMetaMap, channelByAuthIndex, sourceInfoMap, statsRows]
   );
   const taskBuckets = useMemo(
     () =>
@@ -518,10 +522,12 @@ export function useMonitoringData({
         ? buildFailureRowsFromAnalytics(
             analyticsData.recent_failures,
             authMetaMap,
+            authFileMap,
+            sourceInfoMap,
             channelByAuthIndex
           )
         : buildFailureRows(statsRows),
-    [analyticsData, authMetaMap, channelByAuthIndex, statsRows]
+    [analyticsData, authFileMap, authMetaMap, channelByAuthIndex, sourceInfoMap, statsRows]
   );
 
   const metadata = useMemo<MonitoringMetadata>(() => {

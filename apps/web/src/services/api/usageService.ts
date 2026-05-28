@@ -371,6 +371,10 @@ export interface DashboardChannelHealth {
   auth_label?: string;
   account?: string;
   channel?: string;
+  source?: string;
+  account_snapshot?: string;
+  auth_label_snapshot?: string;
+  auth_provider_snapshot?: string;
   calls: number;
   failures: number;
   failure_rate: number;
@@ -388,6 +392,9 @@ export interface DashboardFailureSource {
   account?: string;
   channel?: string;
   source?: string;
+  account_snapshot?: string;
+  auth_label_snapshot?: string;
+  auth_provider_snapshot?: string;
   calls: number;
   failures: number;
   failure_rate: number;
@@ -407,8 +414,14 @@ export interface DashboardRecentFailure {
   channel?: string;
   api_key_alias?: string;
   source?: string;
+  account_snapshot?: string;
+  auth_label_snapshot?: string;
+  auth_provider_snapshot?: string;
+  auth_project_id_snapshot?: string;
   endpoint: string;
   duration_ms: number | null;
+  fail_status_code?: number | null;
+  fail_summary?: string;
 }
 
 export interface DashboardSummaryResponse {
@@ -537,6 +550,10 @@ export interface MonitoringAnalyticsModelStat {
 
 export interface MonitoringAnalyticsChannelShareRow {
   auth_index: string;
+  source?: string;
+  account_snapshot?: string;
+  auth_label_snapshot?: string;
+  auth_provider_snapshot?: string;
   calls: number;
   success: number;
   failure: number;
@@ -546,8 +563,12 @@ export interface MonitoringAnalyticsChannelShareRow {
 }
 
 export interface MonitoringAnalyticsFailureSourceRow {
+  source?: string;
   source_hash: string;
   auth_index: string;
+  account_snapshot?: string;
+  auth_label_snapshot?: string;
+  auth_provider_snapshot?: string;
   calls: number;
   failure: number;
   last_seen_ms: number;
@@ -580,10 +601,17 @@ export interface MonitoringAnalyticsRecentFailure {
   timestamp_ms: number;
   model: string;
   api_key_hash: string;
+  source?: string;
   source_hash: string;
   auth_index: string;
+  account_snapshot?: string;
+  auth_label_snapshot?: string;
+  auth_provider_snapshot?: string;
+  auth_project_id_snapshot?: string;
   endpoint: string;
   duration_ms: number | null;
+  fail_status_code?: number | null;
+  fail_summary?: string;
 }
 
 export interface MonitoringAnalyticsEventRow {
