@@ -1793,6 +1793,8 @@
     "server_codex_inspection_action_status_success": "已執行 {{action}}",
     "server_codex_inspection_action_status_failed": "執行失敗",
     "server_codex_inspection_action_status_skipped": "已跳過",
+    "server_codex_inspection_action_status_needs_review": "需要確認",
+    "server_codex_inspection_action_needs_review_hint": "請到認證檔案管理中處理該衝突",
     "server_codex_inspection_file_level_action_hint": "同名認證檔案已合併為檔案級執行項",
     "server_codex_inspection_logs_desc": "展示該次服務端巡檢持久化日誌，錯誤詳情會完整保留。",
     "server_codex_inspection_service_unavailable": "未找到可用的 Manager Server，請檢查連線或設定面板中的服務端地址。",

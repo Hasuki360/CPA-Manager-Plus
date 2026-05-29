@@ -24,6 +24,7 @@ import {
   formatPercent,
   formatTimestamp,
   getCanonicalServerCodexInspectionActionIds,
+  getMixedServerCodexInspectionActionIds,
   isActionableServerCodexInspectionResult,
   normalizeServerCodexInspectionActionStatus,
   type StatusTone,
@@ -480,6 +481,9 @@ function formatServerActionStatusLabel(
   }
   if (status === 'skipped') {
     return t('monitoring.server_codex_inspection_action_status_skipped');
+  }
+  if (status === 'needs_review') {
+    return t('monitoring.server_codex_inspection_action_status_needs_review');
   }
   if (status === 'pending') {
     return t('monitoring.server_codex_inspection_action_status_pending');
@@ -1500,6 +1504,7 @@ export function ServerCodexInspectionPage() {
 
   const renderResultsPanel = (results: CodexInspectionResult[]) => {
     const canonicalExecutableIds = getCanonicalServerCodexInspectionActionIds(results);
+    const mixedActionIds = getMixedServerCodexInspectionActionIds(results);
     const executableResults = results.filter((item) => canonicalExecutableIds.has(item.id));
     const canExecuteActions = detail?.run.status === 'completed';
     const resultsRun = detail?.run ?? null;
@@ -1604,7 +1609,9 @@ export function ServerCodexInspectionPage() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((item) => (
+                {filtered.map((item) => {
+                  const actionStatus = normalizeServerCodexInspectionActionStatus(item);
+                  return (
                   <tr key={item.id || item.accountKey}>
                     <td>
                       <div className={styles.primaryCell}>
@@ -1641,7 +1648,6 @@ export function ServerCodexInspectionPage() {
                     <td>
                       <div className={styles.serverResultOperation}>
                         {(() => {
-                          const actionStatus = normalizeServerCodexInspectionActionStatus(item);
                           const statusLabel = formatServerActionStatusLabel(item, t);
                           const detailText =
                             item.actionError || item.error || item.status || item.state || '--';
@@ -1672,6 +1678,10 @@ export function ServerCodexInspectionPage() {
                             })()}
                             {resolveActionLabel(item.action, t)}
                           </Button>
+                        ) : actionStatus === 'needs_review' || mixedActionIds.has(item.id) ? (
+                          <span className={styles.primaryReason}>
+                            {t('monitoring.server_codex_inspection_action_needs_review_hint')}
+                          </span>
                         ) : isActionableServerCodexInspectionResult(item) ? (
                           <span className={styles.primaryReason}>
                             {t('monitoring.server_codex_inspection_file_level_action_hint')}
@@ -1684,7 +1694,8 @@ export function ServerCodexInspectionPage() {
                       </div>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>

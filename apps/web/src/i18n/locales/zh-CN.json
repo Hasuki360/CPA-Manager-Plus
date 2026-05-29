@@ -1768,6 +1768,8 @@
     "server_codex_inspection_action_status_success": "已执行 {{action}}",
     "server_codex_inspection_action_status_failed": "执行失败",
     "server_codex_inspection_action_status_skipped": "已跳过",
+    "server_codex_inspection_action_status_needs_review": "需要确认",
+    "server_codex_inspection_action_needs_review_hint": "请到认证文件管理中处理该冲突",
     "server_codex_inspection_file_level_action_hint": "同名认证文件已合并为文件级执行项",
     "server_codex_inspection_logs_desc": "展示该次服务端巡检持久化日志，错误详情会完整保留。",
     "server_codex_inspection_service_unavailable": "未找到可用的 Manager Server，请检查连接或配置面板中的服务端地址。",

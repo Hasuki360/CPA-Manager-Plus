@@ -19,6 +19,7 @@ import {
   countActions,
   filterByAction,
   getCanonicalServerCodexInspectionActionIds,
+  getMixedServerCodexInspectionActionIds,
   isActionableServerCodexInspectionResult,
   normalizeServerCodexInspectionActionStatus,
 } from './model/codexInspectionPresentation';
@@ -211,12 +212,25 @@ describe('Server Codex inspection action presentation', () => {
   it('normalizes pending action status for server results', () => {
     expect(normalizeServerCodexInspectionActionStatus({ action: 'delete' })).toBe('pending');
     expect(normalizeServerCodexInspectionActionStatus({ action: 'keep' })).toBe('none');
+    expect(
+      normalizeServerCodexInspectionActionStatus({
+        action: 'delete',
+        actionStatus: 'needs_review',
+      })
+    ).toBe('needs_review');
     expect(isActionableServerCodexInspectionResult({ id: 1, action: 'disable' })).toBe(true);
     expect(
       isActionableServerCodexInspectionResult({
         id: 2,
         action: 'disable',
         actionStatus: 'success',
+      })
+    ).toBe(false);
+    expect(
+      isActionableServerCodexInspectionResult({
+        id: 3,
+        action: 'delete',
+        actionStatus: 'needs_review',
       })
     ).toBe(false);
   });
@@ -230,6 +244,37 @@ describe('Server Codex inspection action presentation', () => {
     ]);
 
     expect(Array.from(canonicalIds)).toEqual([3]);
+  });
+
+  it('suppresses file-level server actions when same-file suggestions conflict', () => {
+    const results = [
+      { id: 1, fileName: 'auth-a.json', action: 'enable', actionStatus: 'pending' },
+      { id: 2, fileName: 'auth-a.json', action: 'delete', actionStatus: 'pending' },
+    ];
+    const canonicalIds = getCanonicalServerCodexInspectionActionIds(results);
+    const mixedIds = getMixedServerCodexInspectionActionIds(results);
+
+    expect(Array.from(canonicalIds)).toEqual([]);
+    expect(Array.from(mixedIds)).toEqual([1, 2]);
+  });
+
+  it('keeps one canonical action per same-action file group', () => {
+    const canonicalIds = getCanonicalServerCodexInspectionActionIds([
+      { id: 1, fileName: 'auth-a.json', action: 'delete', actionStatus: 'pending' },
+      { id: 2, fileName: 'auth-a.json', action: 'delete', actionStatus: 'pending' },
+    ]);
+
+    expect(Array.from(canonicalIds)).toEqual([1]);
+  });
+
+  it('keeps canonical actions for different files independently', () => {
+    const canonicalIds = getCanonicalServerCodexInspectionActionIds([
+      { id: 1, fileName: 'auth-a.json', action: 'delete', actionStatus: 'pending' },
+      { id: 2, fileName: 'auth-b.json', action: 'enable', actionStatus: 'failed' },
+      { id: 3, fileName: 'auth-c.json', action: 'disable', actionStatus: 'needs_review' },
+    ]);
+
+    expect(Array.from(canonicalIds)).toEqual([1, 2]);
   });
 });
 

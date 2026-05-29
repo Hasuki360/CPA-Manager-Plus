@@ -28,7 +28,8 @@ export type ServerCodexInspectionActionStatus =
   | 'pending'
   | 'success'
   | 'failed'
-  | 'skipped';
+  | 'skipped'
+  | 'needs_review';
 
 export const CODEX_INSPECTION_PROBLEM_ACTION_MODES: readonly CodexInspectionProblemActionMode[] =
   ['none', 'disable', 'delete'];
@@ -137,7 +138,8 @@ export const normalizeServerCodexInspectionActionStatus = (
     item.actionStatus === 'pending' ||
     item.actionStatus === 'success' ||
     item.actionStatus === 'failed' ||
-    item.actionStatus === 'skipped'
+    item.actionStatus === 'skipped' ||
+    item.actionStatus === 'needs_review'
   ) {
     return item.actionStatus;
   }
@@ -159,18 +161,56 @@ export const getCanonicalServerCodexInspectionActionIds = (
   results: Array<Pick<CodexInspectionResult, 'id' | 'fileName' | 'action' | 'actionStatus'>>
 ) => {
   const canonicalIds = new Set<number>();
-  const seenFileNames = new Set<string>();
+  const fileOrder: string[] = [];
+  const groups = new Map<
+    string,
+    Array<Pick<CodexInspectionResult, 'id' | 'fileName' | 'action' | 'actionStatus'>>
+  >();
   for (const item of results) {
     const fileName = item.fileName.trim();
-    if (!isServerCodexInspectionAction(item.action) || !fileName || seenFileNames.has(fileName)) {
+    if (!isServerCodexInspectionAction(item.action) || !fileName) {
       continue;
     }
-    seenFileNames.add(fileName);
-    if (isActionableServerCodexInspectionResult(item)) {
-      canonicalIds.add(item.id);
+    if (!groups.has(fileName)) {
+      groups.set(fileName, []);
+      fileOrder.push(fileName);
+    }
+    groups.get(fileName)?.push(item);
+  }
+  for (const fileName of fileOrder) {
+    const group = groups.get(fileName) ?? [];
+    if (group.length === 0) continue;
+    const action = group[0].action;
+    if (group.some((item) => item.action !== action)) continue;
+    if (isActionableServerCodexInspectionResult(group[0])) {
+      canonicalIds.add(group[0].id);
     }
   }
   return canonicalIds;
+};
+
+export const getMixedServerCodexInspectionActionIds = (
+  results: Array<Pick<CodexInspectionResult, 'id' | 'fileName' | 'action'>>
+) => {
+  const mixedIds = new Set<number>();
+  const groups = new Map<string, Array<Pick<CodexInspectionResult, 'id' | 'fileName' | 'action'>>>();
+  for (const item of results) {
+    const fileName = item.fileName.trim();
+    if (!isServerCodexInspectionAction(item.action) || !fileName) {
+      continue;
+    }
+    if (!groups.has(fileName)) {
+      groups.set(fileName, []);
+    }
+    groups.get(fileName)?.push(item);
+  }
+  for (const group of groups.values()) {
+    if (group.length === 0) continue;
+    const action = group[0].action;
+    if (!group.some((item) => item.action !== action)) continue;
+    group.forEach((item) => mixedIds.add(item.id));
+  }
+  return mixedIds;
 };
 
 export const formatCurrentStateLabel = (item: CodexInspectionResultItem, t: TFunction) => {

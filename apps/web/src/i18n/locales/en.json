@@ -1768,6 +1768,8 @@
     "server_codex_inspection_action_status_success": "Executed {{action}}",
     "server_codex_inspection_action_status_failed": "Execution failed",
     "server_codex_inspection_action_status_skipped": "Skipped",
+    "server_codex_inspection_action_status_needs_review": "Needs review",
+    "server_codex_inspection_action_needs_review_hint": "Resolve this conflict in auth file management",
     "server_codex_inspection_file_level_action_hint": "Same-name auth files are merged into one file-level action",
     "server_codex_inspection_logs_desc": "Shows persisted logs for this server inspection. Error details are kept in full.",
     "server_codex_inspection_service_unavailable": "No available Manager Server was found. Check the connection or the server address in Config Panel.",
