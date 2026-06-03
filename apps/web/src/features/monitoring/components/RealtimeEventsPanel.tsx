@@ -66,6 +66,42 @@ const formatOptionalText = (value: string | null | undefined) => {
   return trimmed || '-';
 };
 
+const formatReadableText = (value: string | null | undefined) => {
+  const trimmed = String(value || '').trim();
+  return trimmed && trimmed !== '-' ? trimmed : '';
+};
+
+const formatShortHash = (value: string | null | undefined) => {
+  const trimmed = formatReadableText(value);
+  return trimmed ? `#${trimmed.slice(0, 8)}` : '';
+};
+
+const buildRealtimeApiKeyDisplay = (row: MonitoringEventRow, t: TFunction) => {
+  const label = formatReadableText(row.apiKeyLabel);
+  const masked = formatReadableText(row.apiKeyMasked);
+  const hash = formatReadableText(row.apiKeyHash);
+  const shortHash = formatShortHash(hash);
+  const display = label || masked || shortHash;
+
+  if (!display) {
+    return null;
+  }
+
+  const titleParts = [
+    `${t('monitoring.realtime_api_key_label')}: ${display}`,
+    masked && masked !== display ? `${t('monitoring.realtime_api_key_masked')}: ${masked}` : '',
+    hash ? `${t('monitoring.realtime_api_key_hash')}: ${hash}` : '',
+    formatReadableText(row.executorType)
+      ? `${t('monitoring.executor_type_short')}: ${formatReadableText(row.executorType)}`
+      : '',
+  ].filter(Boolean);
+
+  return {
+    display,
+    title: titleParts.join('\n'),
+  };
+};
+
 const formatTokensPerSecond = (value: number | null | undefined, locale: string) => {
   if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return '--';
 
@@ -229,7 +265,7 @@ export function RealtimeEventsPanel({
         <table className={`${styles.table} ${styles.realtimeTable}`}>
           <thead>
             <tr>
-              <th>{t('monitoring.column_type')}</th>
+              <th>{t('monitoring.column_source_api_key')}</th>
               <th>{t('monitoring.column_model')}</th>
               <th>{t('monitoring.reasoning_effort')}</th>
               <th>{t('monitoring.recent_status')}</th>
@@ -256,13 +292,13 @@ export function RealtimeEventsPanel({
           <tbody>
             {pagination.pageItems.map((row) => {
               const sourceDisplay = buildRealtimeSourceDisplay(row, t);
+              const apiKeyDisplay = buildRealtimeApiKeyDisplay(row, t);
               const showResolvedModel =
                 row.resolvedModel &&
                 row.resolvedModel.trim() &&
                 row.resolvedModel.trim() !== row.model;
               const reasoningEffort = formatOptionalText(row.reasoningEffort);
               const serviceTier = formatOptionalText(row.serviceTier);
-              const executorType = formatOptionalText(row.executorType);
               const failureDetails = buildFailureDetails(row, t);
               const failureTooltipId = failureDetails
                 ? `${tooltipIdPrefix}-failure-tooltip-${row.id}`
@@ -278,8 +314,10 @@ export function RealtimeEventsPanel({
                       <div className={styles.primaryCell}>
                         <span>{sourceDisplay.primary}</span>
                         {sourceDisplay.meta ? <small>{sourceDisplay.meta}</small> : null}
-                        {executorType !== '-' ? (
-                          <small>{`${t('monitoring.executor_type_short')}: ${executorType}`}</small>
+                        {apiKeyDisplay ? (
+                          <small className={styles.realtimeApiKeyLine} title={apiKeyDisplay.title}>
+                            {`${t('monitoring.realtime_api_key_label')}: ${apiKeyDisplay.display}`}
+                          </small>
                         ) : null}
                       </div>
                     </div>

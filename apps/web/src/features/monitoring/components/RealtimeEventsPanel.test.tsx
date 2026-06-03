@@ -13,6 +13,7 @@ const t = ((key: string) => {
     'monitoring.column_latency': 'Latency',
     'monitoring.column_model': 'Model',
     'monitoring.column_output_tps': 'TPS',
+    'monitoring.column_source_api_key': 'Source / API Key',
     'monitoring.column_success_rate': 'Success',
     'monitoring.column_time': 'Time',
     'monitoring.column_type': 'Type',
@@ -27,6 +28,9 @@ const t = ((key: string) => {
     'monitoring.reasoning_effort_short': 'Effort',
     'monitoring.recent_failures': 'Failures',
     'monitoring.recent_status': 'Recent',
+    'monitoring.realtime_api_key_hash': 'API Key hash',
+    'monitoring.realtime_api_key_label': 'API Key',
+    'monitoring.realtime_api_key_masked': 'Masked key',
     'monitoring.request_status': 'Status',
     'monitoring.result_failed': 'Failed',
     'monitoring.result_success': 'Success',
@@ -156,7 +160,9 @@ describe('RealtimeEventsPanel', () => {
 
     expect(markup).toContain('<th>Effort</th>');
     expect(markup).toContain('>TPS</th>');
-    expect(markup).toContain('Executor: codex');
+    expect(markup).toContain('Source / API Key');
+    expect(markup).not.toContain('>Executor: codex<');
+    expect(markup).not.toContain('Executor: codex');
     expect(markup).toContain('medium');
     expect(markup).toContain('Tier: priority');
     expect(markup).toContain('client-gpt');
@@ -196,6 +202,25 @@ describe('RealtimeEventsPanel', () => {
     expect(markup).not.toContain('role="tooltip"');
     expect(markup).not.toContain('aria-describedby=');
     expect(markup).not.toContain('HTTP');
+  });
+
+  it('renders API key alias inside the source cell without adding another column', () => {
+    const markup = renderPanel(
+      baseRow({
+        apiKeyHash: '1234567890abcdef',
+        apiKeyLabel: 'Team A',
+        apiKeyMasked: 'sk-...cdef',
+        executorType: 'codex',
+      })
+    );
+
+    expect(markup).toContain('<th>Source / API Key</th>');
+    expect(markup).toContain('API Key: Team A');
+    expect(markup).not.toContain('#12345678');
+    expect(markup).toContain('API Key hash: 1234567890abcdef');
+    expect(markup).toContain('Masked key: sk-...cdef');
+    expect(markup).toContain('Executor: codex');
+    expect(markup).not.toContain('>Executor: codex<');
   });
 
   it('renders a ttft placeholder when ttft is missing', () => {

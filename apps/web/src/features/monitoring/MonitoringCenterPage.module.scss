@@ -1231,6 +1231,14 @@
   line-height: 1.45;
 }
 
+.realtimeApiKeyLine {
+  display: block;
+  max-width: 100%;
+  color: var(--monitor-muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
 .realtimeMetricCell,
 .realtimeTimeCell {
   display: grid;
