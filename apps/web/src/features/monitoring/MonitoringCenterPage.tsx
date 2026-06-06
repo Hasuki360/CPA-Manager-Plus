@@ -7,6 +7,7 @@ import {
   useState,
   type ChangeEvent,
 } from 'react';
+import { useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
   buildRealtimeMonitorRows,
@@ -74,6 +75,7 @@ import {
   buildAuthFilesByAuthIndex,
   buildAccountQuotaErrorEntry,
   buildChannelOptionsFromValues,
+  buildMonitoringInitialStateFromQuery,
   buildModelOptionsFromValues,
   buildPaginationState,
   buildPrimarySummaryCards,
@@ -123,13 +125,26 @@ const EMPTY_STATUS_BAR_DATA: StatusBarData = {
 
 export function MonitoringCenterPage() {
   const { t, i18n } = useTranslation();
+  const location = useLocation();
   const config = useConfigStore((state) => state.config);
   const connectionStatus = useAuthStore((state) => state.connectionStatus);
   const showNotification = useNotificationStore((state) => state.showNotification);
   const showConfirmation = useNotificationStore((state) => state.showConfirmation);
   const requestMonitoringAvailability = useRequestMonitoringAvailability();
   const initialAccountOverviewUiState = useRef(readAccountOverviewUiState());
-  const initialMonitoringCenterUiState = useRef(readMonitoringCenterUiState());
+  const initialMonitoringCenterUiState = useRef(
+    buildMonitoringInitialStateFromQuery(location.search, readMonitoringCenterUiState())
+  );
+  const initialMonitoringDrilldownFilters = useRef(
+    (() => {
+      const params = new URLSearchParams(location.search);
+      return {
+        authFile: params.get('auth_file')?.trim() || '',
+        projectId: params.get('project_id')?.trim() || '',
+        requestType: params.get('request_type')?.trim() || '',
+      };
+    })()
+  );
   const [timeRange, setTimeRange] = useState<MonitoringTimeRange>(
     initialMonitoringCenterUiState.current.timeRange
   );
@@ -168,6 +183,15 @@ export function MonitoringCenterPage() {
   );
   const [selectedStatus, setSelectedStatus] = useState<StatusFilter>(
     () => initialMonitoringCenterUiState.current.selectedStatus
+  );
+  const [drilldownAuthFile, setDrilldownAuthFile] = useState(
+    () => initialMonitoringDrilldownFilters.current.authFile
+  );
+  const [drilldownProjectId, setDrilldownProjectId] = useState(
+    () => initialMonitoringDrilldownFilters.current.projectId
+  );
+  const [drilldownRequestType, setDrilldownRequestType] = useState(
+    () => initialMonitoringDrilldownFilters.current.requestType
   );
   const [expandedAccounts, setExpandedAccounts] = useState<Record<string, boolean>>({});
   const [expandedApiKeys, setExpandedApiKeys] = useState<Record<string, boolean>>({});
@@ -279,12 +303,18 @@ export function MonitoringCenterPage() {
     () => ({
       account: selectedAccount,
       provider: selectedProvider,
+      authFile: drilldownAuthFile || undefined,
+      projectId: drilldownProjectId || undefined,
+      requestType: drilldownRequestType || undefined,
       model: selectedModel,
       channel: selectedChannel,
       apiKeyHash: selectedApiKeyHash,
       status: selectedStatus,
     }),
     [
+      drilldownAuthFile,
+      drilldownProjectId,
+      drilldownRequestType,
       selectedAccount,
       selectedApiKeyHash,
       selectedChannel,
@@ -586,7 +616,10 @@ export function MonitoringCenterPage() {
     selectedModel !== 'all' ||
     selectedChannel !== 'all' ||
     selectedApiKeyHash !== 'all' ||
-    selectedStatus !== 'all';
+    selectedStatus !== 'all' ||
+    Boolean(drilldownAuthFile) ||
+    Boolean(drilldownProjectId) ||
+    Boolean(drilldownRequestType);
   const hasActiveDataFilter = hasSearchFilter || hasScopeFilter;
   const failedGroupCount = groupedRealtimeRows.filter((row) => row.failureCalls > 0).length;
   const failedOnlyActive = selectedStatus === 'failed';
@@ -700,6 +733,9 @@ export function MonitoringCenterPage() {
     setSelectedChannel('all');
     setSelectedApiKeyHash('all');
     setSelectedStatus('all');
+    setDrilldownAuthFile('');
+    setDrilldownProjectId('');
+    setDrilldownRequestType('');
   }, []);
 
   const renderMonitoringEmptyState = () => (

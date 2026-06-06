@@ -19,6 +19,7 @@ import {
   type AccountDisplayMode,
   type AccountSortKey,
 } from '@/features/monitoring/accountOverviewState';
+import type { MonitoringCenterUiState } from '@/features/monitoring/monitoringCenterUiState';
 import type {
   AccountQuotaEntry,
   AccountQuotaWindow,
@@ -113,6 +114,50 @@ export const parseDateTimeLocalValue = (value: string) => {
   if (!value) return null;
   const timestamp = new Date(value).getTime();
   return Number.isFinite(timestamp) ? timestamp : null;
+};
+
+const parseQueryTimestamp = (params: URLSearchParams, key: string) => {
+  const value = Number(params.get(key));
+  return Number.isFinite(value) && value > 0 ? value : null;
+};
+
+export const buildMonitoringInitialStateFromQuery = (
+  search: string,
+  state: MonitoringCenterUiState
+): MonitoringCenterUiState => {
+  const params = new URLSearchParams(search);
+  const fromMs = parseQueryTimestamp(params, 'from_ms');
+  const toMs = parseQueryTimestamp(params, 'to_ms');
+  const model = params.get('model')?.trim();
+  const apiKeyHash = params.get('api_key_hash')?.trim();
+  const status = params.get('status')?.trim();
+  const provider = params.get('provider')?.trim();
+  const authFile = params.get('auth_file')?.trim();
+  const projectId = params.get('project_id')?.trim();
+  const requestType = params.get('request_type')?.trim();
+  const hasRange = fromMs !== null && toMs !== null && fromMs < toMs;
+  const hasStructuredScopeFilter = Boolean(authFile || projectId || requestType);
+
+  return {
+    ...state,
+    timeRange: hasRange ? 'custom' : state.timeRange,
+    customStartInput: hasRange
+      ? formatDateTimeLocalValue(new Date(fromMs))
+      : state.customStartInput,
+    customEndInput: hasRange ? formatDateTimeLocalValue(new Date(toMs)) : state.customEndInput,
+    selectedModel: model || state.selectedModel,
+    selectedProvider: provider || state.selectedProvider,
+    selectedApiKeyHash: apiKeyHash || state.selectedApiKeyHash,
+    selectedStatus:
+      status === 'success' || status === 'failed' || status === 'all'
+        ? status
+        : state.selectedStatus,
+    searchInput: state.searchInput,
+    activeDataTab:
+      hasRange || model || apiKeyHash || status || provider || hasStructuredScopeFilter
+        ? 'realtime'
+        : state.activeDataTab,
+  };
 };
 
 export const ensureSelectedOption = <T extends { value: string; label: string }>(

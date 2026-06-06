@@ -92,6 +92,9 @@ export const buildScopeFilteredRows = (
   const accountApiKeyHashes = new Set(accountCriteria.apiKeyHashes.map(normalizeScopeValue));
   const hasAccountSourceHashFilter = accountCriteria.sourceHashes.length > 0;
   const provider = normalizeScopeValue(scopeFilters.provider);
+  const authFile = normalizeScopeValue(scopeFilters.authFile);
+  const projectId = normalizeScopeValue(scopeFilters.projectId);
+  const requestType = normalizeScopeValue(scopeFilters.requestType);
   const model = normalizeScopeValue(scopeFilters.model);
   const channel = normalizeScopeValue(scopeFilters.channel);
   const apiKeyHash = normalizeScopeValue(scopeFilters.apiKeyHash);
@@ -122,6 +125,29 @@ export const buildScopeFilteredRows = (
     if (
       isActiveScopeFilterValue(scopeFilters.provider) &&
       normalizeScopeValue(row.provider) !== provider
+    ) {
+      return false;
+    }
+
+    if (
+      isActiveScopeFilterValue(scopeFilters.authFile) &&
+      normalizeScopeValue(row.source) !== authFile &&
+      normalizeScopeValue(row.sourceMasked) !== authFile &&
+      !normalizeScopeValue(row.searchText).includes(authFile)
+    ) {
+      return false;
+    }
+
+    if (
+      isActiveScopeFilterValue(scopeFilters.projectId) &&
+      normalizeScopeValue(row.projectId) !== projectId
+    ) {
+      return false;
+    }
+
+    if (
+      isActiveScopeFilterValue(scopeFilters.requestType) &&
+      normalizeScopeValue(row.executorType) !== requestType
     ) {
       return false;
     }
