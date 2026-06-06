@@ -53,6 +53,7 @@ import { MonitoringDataPanel } from '@/features/monitoring/components/Monitoring
 import { MonitoringActionBar } from '@/features/monitoring/components/MonitoringActionBar';
 import { MonitoringCustomRangeModal } from '@/features/monitoring/components/MonitoringCustomRangeModal';
 import { MonitoringFiltersPanel } from '@/features/monitoring/components/MonitoringFiltersPanel';
+import { usePageTransitionLayer } from '@/components/common/PageTransitionLayer';
 import { IconInbox } from '@/components/ui/icons';
 import {
   MonitoringStatusHeader,
@@ -128,6 +129,8 @@ export function MonitoringCenterPage() {
   const showNotification = useNotificationStore((state) => state.showNotification);
   const showConfirmation = useNotificationStore((state) => state.showConfirmation);
   const requestMonitoringAvailability = useRequestMonitoringAvailability();
+  const pageTransitionLayer = usePageTransitionLayer();
+  const isCurrentLayer = pageTransitionLayer ? pageTransitionLayer.status === 'current' : true;
   const initialAccountOverviewUiState = useRef(readAccountOverviewUiState());
   const initialMonitoringCenterUiState = useRef(readMonitoringCenterUiState());
   const [timeRange, setTimeRange] = useState<MonitoringTimeRange>(
@@ -341,12 +344,14 @@ export function MonitoringCenterPage() {
     setCurrentAccountPage(1);
   }, [setCurrentAccountPage]);
 
-  useHeaderRefresh(refreshAll);
+  useHeaderRefresh(refreshAll, isCurrentLayer);
   useInterval(
     () => {
       void refreshAll().catch(() => {});
     },
-    connectionStatus === 'connected' && Number(autoRefreshMs) > 0 ? Number(autoRefreshMs) : null
+    isCurrentLayer && connectionStatus === 'connected' && Number(autoRefreshMs) > 0
+      ? Number(autoRefreshMs)
+      : null
   );
 
   const monitoringUnavailable =

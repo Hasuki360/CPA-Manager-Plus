@@ -424,10 +424,13 @@ export function useMonitoringData({
     ]
   );
 
-  const activeEventsPageState =
-    eventsPageState.scopeKey === eventsScopeKey
-      ? eventsPageState
-      : createEventsPageState(eventsScopeKey);
+  const activeEventsPageState = useMemo(
+    () =>
+      eventsPageState.scopeKey === eventsScopeKey
+        ? eventsPageState
+        : createEventsPageState(eventsScopeKey),
+    [eventsPageState, eventsScopeKey]
+  );
   const eventsBeforeMs = activeEventsPageState.beforeMs;
   const eventsBeforeId = activeEventsPageState.beforeId;
   const eventItems = activeEventsPageState.items;
