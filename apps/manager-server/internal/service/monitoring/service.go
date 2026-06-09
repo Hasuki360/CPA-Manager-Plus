@@ -40,18 +40,19 @@ type Request struct {
 }
 
 type Filters struct {
-	Models            []string `json:"models"`
-	Providers         []string `json:"providers"`
-	Accounts          []string `json:"accounts"`
-	AuthFiles         []string `json:"auth_files"`
-	AuthIndices       []string `json:"auth_indices"`
-	APIKeyHashes      []string `json:"api_key_hashes"`
-	SourceHashes      []string `json:"source_hashes"`
-	ProjectIDs        []string `json:"project_ids"`
-	RequestTypes      []string `json:"request_types"`
-	IncludeFailed     *bool    `json:"include_failed"`
-	FailedOnly        bool     `json:"failed_only"`
-	ExcludeZeroTokens bool     `json:"exclude_zero_token"`
+	Models        []string `json:"models"`
+	Providers     []string `json:"providers"`
+	Accounts      []string `json:"accounts"`
+	AuthFiles     []string `json:"auth_files"`
+	AuthIndices   []string `json:"auth_indices"`
+	APIKeyHashes  []string `json:"api_key_hashes"`
+	SourceHashes  []string `json:"source_hashes"`
+	ProjectIDs    []string `json:"project_ids"`
+	RequestTypes  []string `json:"request_types"`
+	IncludeFailed *bool    `json:"include_failed"`
+	FailedOnly    bool     `json:"failed_only"`
+	MinLatencyMS  int64    `json:"min_latency_ms"`
+	CacheStatus   string   `json:"cache_status"`
 }
 
 type Include struct {
@@ -703,22 +704,23 @@ func buildFilter(req Request) store.AnalyticsFilter {
 		includeFailed = *req.Filters.IncludeFailed
 	}
 	return store.AnalyticsFilter{
-		FromMS:            req.FromMS,
-		ToMS:              req.ToMS,
-		SearchQuery:       req.SearchQuery,
-		SearchAPIKeyHash:  req.SearchAPIKeyHash,
-		Models:            req.Filters.Models,
-		Providers:         req.Filters.Providers,
-		Accounts:          req.Filters.Accounts,
-		AuthFiles:         req.Filters.AuthFiles,
-		AuthIndices:       req.Filters.AuthIndices,
-		APIKeyHashes:      req.Filters.APIKeyHashes,
-		SourceHashes:      req.Filters.SourceHashes,
-		ProjectIDs:        req.Filters.ProjectIDs,
-		RequestTypes:      req.Filters.RequestTypes,
-		IncludeFailed:     includeFailed,
-		FailedOnly:        req.Filters.FailedOnly,
-		ExcludeZeroTokens: req.Filters.ExcludeZeroTokens,
+		FromMS:           req.FromMS,
+		ToMS:             req.ToMS,
+		SearchQuery:      req.SearchQuery,
+		SearchAPIKeyHash: req.SearchAPIKeyHash,
+		Models:           req.Filters.Models,
+		Providers:        req.Filters.Providers,
+		Accounts:         req.Filters.Accounts,
+		AuthFiles:        req.Filters.AuthFiles,
+		AuthIndices:      req.Filters.AuthIndices,
+		APIKeyHashes:     req.Filters.APIKeyHashes,
+		SourceHashes:     req.Filters.SourceHashes,
+		ProjectIDs:       req.Filters.ProjectIDs,
+		RequestTypes:     req.Filters.RequestTypes,
+		IncludeFailed:    includeFailed,
+		FailedOnly:       req.Filters.FailedOnly,
+		MinLatencyMS:     req.Filters.MinLatencyMS,
+		CacheStatus:      req.Filters.CacheStatus,
 	}
 }
 
@@ -735,7 +737,8 @@ func (s *Service) filterOptions(ctx context.Context, filter store.AnalyticsFilte
 	optionFilter.RequestTypes = nil
 	optionFilter.IncludeFailed = true
 	optionFilter.FailedOnly = false
-	optionFilter.ExcludeZeroTokens = false
+	optionFilter.MinLatencyMS = 0
+	optionFilter.CacheStatus = ""
 
 	accountStats, err := s.store.AccountModelStatsWithFilter(ctx, optionFilter)
 	if err != nil {

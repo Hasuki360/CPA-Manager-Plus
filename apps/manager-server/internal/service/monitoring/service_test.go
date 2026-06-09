@@ -613,13 +613,14 @@ func TestAnalyticsSearchMatchesResolvedModelAndProjectID(t *testing.T) {
 	toMS := fromMS + 60*60*1000
 
 	event := monitoringEvent("search-new-fields", fromMS+1_000, "alias-search", "auth-1", "source-a", false, 1, 1, 0, 0, 2, nil)
+	event.RequestID = "req-search-42"
 	event.ResolvedModel = "gpt-resolved-search"
 	event.AuthProjectIDSnapshot = "vertex-project-42"
 	if _, err := db.InsertEvents(ctx, []usage.Event{event}); err != nil {
 		t.Fatalf("insert events: %v", err)
 	}
 
-	for _, query := range []string{"gpt-resolved-search", "vertex-project-42"} {
+	for _, query := range []string{"req-search-42", "search-new-fields", "gpt-resolved-search", "vertex-project-42"} {
 		resp, err := New(db).Analytics(ctx, Request{
 			FromMS:      fromMS,
 			ToMS:        toMS,
@@ -700,18 +701,91 @@ func TestAnalyticsReportsZeroTokenModels(t *testing.T) {
 	if resp.Summary == nil || len(resp.Summary.ZeroTokenModels) != 1 || resp.Summary.ZeroTokenModels[0] != "gpt-zero" {
 		t.Fatalf("zero token models = %#v", resp.Summary)
 	}
+}
 
-	resp, err = New(db).Analytics(ctx, Request{
-		FromMS:  fromMS,
-		ToMS:    toMS,
-		Filters: Filters{ExcludeZeroTokens: true},
-		Include: Include{Summary: true},
+func TestAnalyticsAppliesMinLatencyFilter(t *testing.T) {
+	db := newMonitoringTestStore(t)
+	ctx := context.Background()
+	fromMS := int64(1_778_080_000_000)
+	toMS := fromMS + 60*60*1000
+	fastLatency := int64(2_000)
+	slowLatency := int64(12_000)
+
+	_, err := db.InsertEvents(ctx, []usage.Event{
+		monitoringEvent("latency-fast", fromMS+1_000, "gpt-fast", "auth-1", "source-a", false, 1, 1, 0, 0, 2, &fastLatency),
+		monitoringEvent("latency-slow", fromMS+2_000, "gpt-slow", "auth-1", "source-a", false, 1, 1, 0, 0, 2, &slowLatency),
+		monitoringEvent("latency-unknown", fromMS+3_000, "gpt-unknown", "auth-1", "source-a", false, 1, 1, 0, 0, 2, nil),
 	})
 	if err != nil {
-		t.Fatalf("analytics with zero-token filter: %v", err)
+		t.Fatalf("insert events: %v", err)
 	}
-	if resp.Summary == nil || resp.Summary.ZeroTokenCalls != 0 || len(resp.Summary.ZeroTokenModels) != 0 {
-		t.Fatalf("filtered zero token summary = %#v", resp.Summary)
+
+	resp, err := New(db).Analytics(ctx, Request{
+		FromMS:  fromMS,
+		ToMS:    toMS,
+		Filters: Filters{MinLatencyMS: 10_000},
+		Include: Include{Summary: true, EventsPage: &EventsPage{Limit: 10}},
+	})
+	if err != nil {
+		t.Fatalf("analytics with min latency filter: %v", err)
+	}
+	if resp.Summary == nil || resp.Summary.TotalCalls != 1 {
+		t.Fatalf("filtered latency summary = %#v", resp.Summary)
+	}
+	if resp.Events == nil || len(resp.Events.Items) != 1 || resp.Events.Items[0].EventHash != "latency-slow" {
+		t.Fatalf("filtered latency events = %#v", resp.Events)
+	}
+}
+
+func TestAnalyticsAppliesCacheStatusFilter(t *testing.T) {
+	db := newMonitoringTestStore(t)
+	ctx := context.Background()
+	fromMS := int64(1_778_090_000_000)
+	toMS := fromMS + 60*60*1000
+
+	cacheRead := monitoringEvent("cache-read", fromMS+1_000, "gpt-a", "auth-1", "source-a", false, 10, 5, 0, 0, 15, nil)
+	cacheRead.CacheReadTokens = 4
+	cacheCreation := monitoringEvent("cache-creation", fromMS+2_000, "gpt-b", "auth-1", "source-a", false, 10, 5, 0, 0, 15, nil)
+	cacheCreation.CacheCreationTokens = 3
+	legacyCached := monitoringEvent("cache-legacy", fromMS+3_000, "gpt-c", "auth-1", "source-a", false, 10, 5, 0, 2, 17, nil)
+	cacheMiss := monitoringEvent("cache-miss", fromMS+4_000, "gpt-d", "auth-1", "source-a", false, 10, 5, 0, 0, 15, nil)
+	if _, err := db.InsertEvents(ctx, []usage.Event{cacheRead, cacheCreation, legacyCached, cacheMiss}); err != nil {
+		t.Fatalf("insert events: %v", err)
+	}
+
+	tests := []struct {
+		name       string
+		status     string
+		wantHashes []string
+	}{
+		{name: "hit", status: "hit", wantHashes: []string{"cache-legacy", "cache-creation", "cache-read"}},
+		{name: "miss", status: "miss", wantHashes: []string{"cache-miss"}},
+		{name: "read", status: "read", wantHashes: []string{"cache-read"}},
+		{name: "creation", status: "creation", wantHashes: []string{"cache-creation"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp, err := New(db).Analytics(ctx, Request{
+				FromMS:  fromMS,
+				ToMS:    toMS,
+				Filters: Filters{CacheStatus: tt.status},
+				Include: Include{Summary: true, EventsPage: &EventsPage{Limit: 10}},
+			})
+			if err != nil {
+				t.Fatalf("analytics with cache status filter: %v", err)
+			}
+			if resp.Summary == nil || int(resp.Summary.TotalCalls) != len(tt.wantHashes) {
+				t.Fatalf("filtered cache summary = %#v", resp.Summary)
+			}
+			if resp.Events == nil || len(resp.Events.Items) != len(tt.wantHashes) {
+				t.Fatalf("filtered cache events = %#v", resp.Events)
+			}
+			for index, want := range tt.wantHashes {
+				if resp.Events.Items[index].EventHash != want {
+					t.Fatalf("event %d hash = %q, want %q; events = %#v", index, resp.Events.Items[index].EventHash, want, resp.Events)
+				}
+			}
+		})
 	}
 }
 

@@ -15,25 +15,28 @@ const (
 )
 
 type AnalyticsFilter struct {
-	FromMS            int64
-	ToMS              int64
-	SearchQuery       string
-	SearchAPIKeyHash  string
-	Models            []string
-	Providers         []string
-	Accounts          []string
-	AuthFiles         []string
-	AuthIndices       []string
-	APIKeyHashes      []string
-	SourceHashes      []string
-	ProjectIDs        []string
-	RequestTypes      []string
-	IncludeFailed     bool
-	FailedOnly        bool
-	ExcludeZeroTokens bool
+	FromMS           int64
+	ToMS             int64
+	SearchQuery      string
+	SearchAPIKeyHash string
+	Models           []string
+	Providers        []string
+	Accounts         []string
+	AuthFiles        []string
+	AuthIndices      []string
+	APIKeyHashes     []string
+	SourceHashes     []string
+	ProjectIDs       []string
+	RequestTypes     []string
+	IncludeFailed    bool
+	FailedOnly       bool
+	MinLatencyMS     int64
+	CacheStatus      string
 }
 
 var analyticsSearchTextColumns = []string{
+	"request_id",
+	"event_hash",
 	"model",
 	"resolved_model",
 	"endpoint",
@@ -1508,8 +1511,25 @@ func analyticsWhere(filter AnalyticsFilter) (string, []any) {
 	if filter.FailedOnly {
 		conditions = append(conditions, "failed = 1")
 	}
-	if filter.ExcludeZeroTokens {
-		conditions = append(conditions, "total_tokens > 0")
+	if filter.MinLatencyMS > 0 {
+		conditions = append(conditions, "latency_ms >= ?")
+		args = append(args, filter.MinLatencyMS)
+	}
+	cacheHitCondition := strings.Join([]string{
+		"(coalesce(cached_tokens, 0) > 0",
+		"or coalesce(cache_tokens, 0) > 0",
+		"or coalesce(cache_read_tokens, 0) > 0",
+		"or coalesce(cache_creation_tokens, 0) > 0)",
+	}, " ")
+	switch strings.TrimSpace(strings.ToLower(filter.CacheStatus)) {
+	case "hit":
+		conditions = append(conditions, cacheHitCondition)
+	case "miss":
+		conditions = append(conditions, "not "+cacheHitCondition)
+	case "read":
+		conditions = append(conditions, "coalesce(cache_read_tokens, 0) > 0")
+	case "creation":
+		conditions = append(conditions, "coalesce(cache_creation_tokens, 0) > 0")
 	}
 
 	return "where " + strings.Join(conditions, " and "), args
