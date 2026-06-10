@@ -75,11 +75,8 @@ func (w *RateLimitAutoDisableWorker) Start(ctx context.Context) {
 	go w.run(ctx)
 }
 
-// HandleUsageEvents is called by the request-monitoring collector after raw CPA
-// usage events are normalized and enriched with auth-file snapshots. It does not
-// poll historical events; it only reacts to newly observed request failures.
-func (w *RateLimitAutoDisableWorker) HandleUsageEvents(ctx context.Context, cfg collectorpkg.RuntimeConfig, events []usage.Event) {
-	if w == nil || len(events) == 0 {
+func (w *RateLimitAutoDisableWorker) UpdateRuntimeConfig(ctx context.Context, cfg collectorpkg.RuntimeConfig) {
+	if w == nil {
 		return
 	}
 	baseURL := strings.TrimSpace(cfg.CPAUpstreamURL)
@@ -88,6 +85,25 @@ func (w *RateLimitAutoDisableWorker) HandleUsageEvents(ctx context.Context, cfg 
 		return
 	}
 	w.setRuntimeConfig(baseURL, managementKey)
+	w.enableDue(ctx, time.Now())
+}
+
+// HandleUsageEvents is called by the request-monitoring collector after raw CPA
+// usage events are normalized and enriched with auth-file snapshots. It does not
+// poll historical events; it only reacts to newly observed request failures.
+func (w *RateLimitAutoDisableWorker) HandleUsageEvents(ctx context.Context, cfg collectorpkg.RuntimeConfig, events []usage.Event) {
+	if w == nil {
+		return
+	}
+	baseURL := strings.TrimSpace(cfg.CPAUpstreamURL)
+	managementKey := strings.TrimSpace(cfg.ManagementKey)
+	if baseURL == "" || managementKey == "" {
+		return
+	}
+	w.setRuntimeConfig(baseURL, managementKey)
+	if len(events) == 0 {
+		return
+	}
 	now := time.Now()
 	for _, event := range events {
 		candidate, ok := quotaAutoDisableCandidateFromEvent(event, baseURL, managementKey, now)

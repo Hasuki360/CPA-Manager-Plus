@@ -11,7 +11,9 @@ import (
 	"time"
 
 	collectorpkg "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/collector"
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/config"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/model"
+	collectorservice "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/collector"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/store"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usage"
 )
@@ -89,6 +91,108 @@ func TestQuotaAutoDisableCandidateRequiresStrictCodexUsageLimit(t *testing.T) {
 				t.Fatalf("candidate should not be detected")
 			}
 		})
+	}
+}
+
+func TestRateLimitAutoDisableWorkerRecoversDueCooldownFromManagerRuntimeConfigAfterRestart(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	var mu sync.Mutex
+	disabled := true
+	patches := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer db-management-key" {
+			http.Error(w, "missing auth", http.StatusUnauthorized)
+			return
+		}
+		switch r.URL.Path {
+		case "/auth-files", "/v0/management/auth-files":
+			switch r.Method {
+			case http.MethodGet:
+				mu.Lock()
+				currentDisabled := disabled
+				mu.Unlock()
+				_ = json.NewEncoder(w).Encode([]map[string]any{{
+					"name":       "codex-auth.json",
+					"auth_index": "auth-1",
+					"disabled":   currentDisabled,
+				}})
+			case http.MethodPatch:
+				var item struct {
+					Name     string `json:"name"`
+					Disabled bool   `json:"disabled"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&item); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				mu.Lock()
+				disabled = item.Disabled
+				patches++
+				mu.Unlock()
+				w.WriteHeader(http.StatusOK)
+			default:
+				http.NotFound(w, r)
+			}
+		case "/v0/management/usage-queue":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[]`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if _, err := st.UpsertQuotaCooldown(ctx, store.QuotaCooldownUpsert{
+		AuthFileName:     "codex-auth.json",
+		AuthIndex:        "auth-1",
+		Provider:         "codex",
+		RecoverAtMS:      time.Now().Add(-time.Minute).UnixMilli(),
+		Owner:            model.QuotaCooldownOwnerUsage429,
+		EventHash:        "evt-due",
+		PreDisabledState: false,
+		DisabledAtMS:     time.Now().Add(-2 * time.Minute).UnixMilli(),
+	}); err != nil {
+		t.Fatalf("upsert due cooldown: %v", err)
+	}
+	if err := st.SaveManagerConfig(ctx, store.ManagerConfig{
+		CPAConnection: store.ManagerCPAConnectionConfig{
+			CPABaseURL:    server.URL,
+			ManagementKey: "db-management-key",
+		},
+		Collector: store.ManagerCollectorConfig{
+			CollectorMode:  "http",
+			BatchSize:      10,
+			PollIntervalMS: 10,
+		},
+	}); err != nil {
+		t.Fatalf("save manager config: %v", err)
+	}
+
+	manager := collectorpkg.NewManager(config.Config{CollectorMode: "http", PollInterval: 10 * time.Millisecond}, st)
+	rateLimitWorker := NewRateLimitAutoDisableWorker(st)
+	manager.SetUsageEventHandler(rateLimitWorker)
+	collectorWorker := NewCollectorWorker(config.Config{CollectorMode: "http", PollInterval: 10 * time.Millisecond}, st, collectorservice.New(manager))
+	collectorWorker.Start(ctx)
+
+	waitForWorkerTest(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return patches == 1 && !disabled
+	})
+
+	active, err := st.QuotaCooldowns.ListActive(ctx)
+	if err != nil {
+		t.Fatalf("list active cooldowns: %v", err)
+	}
+	if len(active) != 0 {
+		t.Fatalf("active cooldowns = %#v, want recovered", active)
 	}
 }
 
@@ -183,4 +287,16 @@ func TestRateLimitAutoDisableWorkerPersistsAndRecoversAfterRestart(t *testing.T)
 	if actions[1].Name != "codex-auth.json" || actions[1].Disabled || disabled {
 		t.Fatalf("enable action = %#v disabled=%v", actions[1], disabled)
 	}
+}
+
+func waitForWorkerTest(t *testing.T, condition func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("condition was not met before deadline")
 }

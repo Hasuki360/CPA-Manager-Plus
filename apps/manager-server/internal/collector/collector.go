@@ -45,6 +45,10 @@ type UsageEventHandler interface {
 	HandleUsageEvents(ctx context.Context, cfg RuntimeConfig, events []usage.Event)
 }
 
+type UsageRuntimeConfigHandler interface {
+	UpdateRuntimeConfig(ctx context.Context, cfg RuntimeConfig)
+}
+
 type Manager struct {
 	base              config.Config
 	store             *store.Store
@@ -77,6 +81,7 @@ func (m *Manager) Start(ctx context.Context, cfg RuntimeConfig) {
 		m.cancel = nil
 	}
 	m.runtimeCfg = cfg
+	handler := m.usageEventHandler
 	m.status.Collector = "starting"
 	m.status.Upstream = cfg.CPAUpstreamURL
 	m.status.Mode = collectorMode(valueOr(cfg.CollectorMode, m.base.CollectorMode))
@@ -86,6 +91,9 @@ func (m *Manager) Start(ctx context.Context, cfg RuntimeConfig) {
 
 	runCtx, cancel := context.WithCancel(ctx)
 	m.cancel = cancel
+	if runtimeHandler, ok := handler.(UsageRuntimeConfigHandler); ok {
+		go runtimeHandler.UpdateRuntimeConfig(runCtx, cfg)
+	}
 	go m.run(runCtx, cfg)
 }
 
@@ -107,8 +115,15 @@ func (m *Manager) Status() Status {
 
 func (m *Manager) SetUsageEventHandler(handler UsageEventHandler) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	m.usageEventHandler = handler
+	cfg := m.runtimeCfg
+	running := m.cancel != nil
+	m.mu.Unlock()
+	if running {
+		if runtimeHandler, ok := handler.(UsageRuntimeConfigHandler); ok {
+			runtimeHandler.UpdateRuntimeConfig(context.Background(), cfg)
+		}
+	}
 }
 
 func (m *Manager) setStatus(update func(*Status)) {
@@ -417,7 +432,7 @@ func (m *Manager) processItems(ctx context.Context, cfg RuntimeConfig, items []s
 		return err
 	}
 	if result.Inserted > 0 {
-		m.handleUsageEvents(ctx, cfg, events)
+		m.handleUsageEvents(ctx, cfg, insertedEvents(events, result.InsertedEventHashes))
 	}
 	if result.Inserted > 0 || result.Skipped > 0 {
 		m.setStatus(func(status *Status) {
@@ -452,6 +467,25 @@ func classifyUsageControlPayload(payload string) usageControlPayload {
 		return usageControlSupportRefresh
 	}
 	return usageControlNone
+}
+
+func insertedEvents(events []usage.Event, insertedHashes []string) []usage.Event {
+	if len(events) == 0 || len(insertedHashes) == 0 {
+		return nil
+	}
+	remaining := make(map[string]int, len(insertedHashes))
+	for _, hash := range insertedHashes {
+		remaining[hash]++
+	}
+	inserted := make([]usage.Event, 0, len(insertedHashes))
+	for _, event := range events {
+		if remaining[event.EventHash] <= 0 {
+			continue
+		}
+		inserted = append(inserted, event)
+		remaining[event.EventHash]--
+	}
+	return inserted
 }
 
 func (m *Manager) handleUsageEvents(ctx context.Context, cfg RuntimeConfig, events []usage.Event) {
