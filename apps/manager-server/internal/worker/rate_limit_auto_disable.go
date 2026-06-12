@@ -342,21 +342,55 @@ func codexUsageLimitResetTimeFromEvent(event usage.Event, now time.Time) (time.T
 		return time.Time{}, false
 	}
 	for _, text := range []string{event.FailBody, event.RawJSON, event.FailSummary} {
-		text = strings.TrimSpace(text)
-		if text == "" {
-			continue
-		}
-		var decoded any
-		decoder := json.NewDecoder(strings.NewReader(text))
-		decoder.UseNumber()
-		if err := decoder.Decode(&decoded); err != nil {
-			continue
-		}
-		if resetAt, ok := usageLimitResetFromJSON(decoded, now); ok {
+		var resetAt time.Time
+		found := false
+		forEachJSONValue(text, func(decoded any) bool {
+			if at, ok := usageLimitResetFromJSON(decoded, now); ok {
+				resetAt = at
+				found = true
+				return true
+			}
+			return false
+		})
+		if found {
 			return resetAt, true
 		}
 	}
 	return time.Time{}, false
+}
+
+// forEachJSONValue decodes every JSON value found in text, calling fn for each.
+// It handles concatenated JSON values (e.g. body + headers) and text with
+// non-JSON prefixes (HTML, plain text) by scanning for embedded JSON objects.
+func forEachJSONValue(text string, fn func(any) bool) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return
+	}
+	if tryDecodeAllJSON(text, fn) {
+		return
+	}
+	for i := 0; i < len(text); i++ {
+		if text[i] == '{' || text[i] == '[' {
+			if tryDecodeAllJSON(text[i:], fn) {
+				return
+			}
+		}
+	}
+}
+
+func tryDecodeAllJSON(text string, fn func(any) bool) bool {
+	decoder := json.NewDecoder(strings.NewReader(text))
+	decoder.UseNumber()
+	for {
+		var decoded any
+		if err := decoder.Decode(&decoded); err != nil {
+			return false
+		}
+		if fn(decoded) {
+			return true
+		}
+	}
 }
 
 func usageLimitResetFromJSON(value any, now time.Time) (time.Time, bool) {

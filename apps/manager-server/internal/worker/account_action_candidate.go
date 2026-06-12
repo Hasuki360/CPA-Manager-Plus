@@ -167,17 +167,17 @@ func classifyAccountActionEvent(event usage.Event) (string, string, bool) {
 
 func accountActionErrorCodeAndType(event usage.Event) (string, string) {
 	for _, text := range []string{event.FailBody, event.RawJSON, event.FailSummary} {
-		text = strings.TrimSpace(text)
-		if text == "" {
-			continue
-		}
-		var decoded any
-		decoder := json.NewDecoder(strings.NewReader(text))
-		decoder.UseNumber()
-		if err := decoder.Decode(&decoded); err != nil {
-			continue
-		}
-		if code, typ, ok := accountActionErrorCodeAndTypeFromJSON(decoded); ok {
+		var code, typ string
+		found := false
+		forEachJSONValue(text, func(decoded any) bool {
+			if c, t, ok := accountActionErrorCodeAndTypeFromJSON(decoded); ok {
+				code, typ = c, t
+				found = true
+				return true
+			}
+			return false
+		})
+		if found {
 			return code, typ
 		}
 	}
