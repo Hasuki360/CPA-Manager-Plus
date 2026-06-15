@@ -26,11 +26,11 @@ func (s *Service) ProxyManagement(w http.ResponseWriter, r *http.Request, writeE
 	s.proxyWithSavedManagementKey(w, r, writeError)
 }
 
-func (s *Service) ProxyCPA(w http.ResponseWriter, r *http.Request, writeError func(http.ResponseWriter, int, error)) {
-	s.proxyWithSavedManagementKey(w, r, writeError)
-}
-
 func (s *Service) proxyWithSavedManagementKey(w http.ResponseWriter, r *http.Request, writeError func(http.ResponseWriter, int, error)) {
+	if !isManagementPath(r.URL.Path) {
+		writeError(w, http.StatusNotFound, errors.New("proxy path must be under /v0/management/"))
+		return
+	}
 	setup, ok, err := s.resolveSetup(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
@@ -65,6 +65,10 @@ func (s *Service) ProxyModelList(w http.ResponseWriter, r *http.Request, writeEr
 		methodNotAllowed(w)
 		return
 	}
+	if !isModelListPath(r.URL.Path) {
+		writeError(w, http.StatusNotFound, errors.New("model list proxy path must be /v1/models"))
+		return
+	}
 	setup, ok, err := s.resolveSetup(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
@@ -93,82 +97,21 @@ func (s *Service) ProxyModelList(w http.ResponseWriter, r *http.Request, writeEr
 	proxy.ServeHTTP(w, r)
 }
 
-func IsModelListPath(path string) bool {
+func isModelListPath(path string) bool {
 	cleaned := strings.TrimRight(path, "/")
 	return cleaned == "/v1/models" || cleaned == "/models"
 }
 
-func IsCPAProxyPath(path string) bool {
-	cleaned := strings.TrimRight(path, "/")
-	if cleaned == "" {
-		return false
-	}
-	if _, ok := exactCPAProxyPaths[cleaned]; ok {
+func isManagementPath(path string) bool {
+	if path == "/v0/management" || strings.HasPrefix(path, "/v0/management/") {
 		return true
 	}
-	for _, prefix := range cpaProxyPathPrefixes {
-		if cleaned == prefix || strings.HasPrefix(cleaned, prefix+"/") {
-			return true
-		}
-	}
-	return false
+	return IsCPAPluginResourcePath(path)
 }
 
 func IsCPAPluginResourcePath(path string) bool {
 	cleaned := strings.TrimRight(path, "/")
 	return cleaned == cpaPluginResourcePrefix || strings.HasPrefix(cleaned, cpaPluginResourcePrefix+"/")
-}
-
-var exactCPAProxyPaths = map[string]struct{}{
-	"/ampcode":                             {},
-	"/api-call":                            {},
-	"/api-key-usage":                       {},
-	"/api-keys":                            {},
-	"/anthropic-auth-url":                  {},
-	"/antigravity-auth-url":                {},
-	"/claude-api-key":                      {},
-	"/codex-api-key":                       {},
-	"/codex-auth-url":                      {},
-	"/config":                              {},
-	"/config.yaml":                         {},
-	"/debug":                               {},
-	"/force-model-prefix":                  {},
-	"/gemini-api-key":                      {},
-	"/gemini-cli-auth-url":                 {},
-	"/get-auth-status":                     {},
-	"/latest-version":                      {},
-	"/logging-to-file":                     {},
-	"/logs":                                {},
-	"/logs-max-total-size-mb":              {},
-	"/oauth-callback":                      {},
-	"/oauth-excluded-models":               {},
-	"/oauth-model-alias":                   {},
-	"/openai-compatibility":                {},
-	"/plugin-store":                        {},
-	"/plugins":                             {},
-	"/proxy-url":                           {},
-	"/quota-exceeded/switch-preview-model": {},
-	"/quota-exceeded/switch-project":       {},
-	"/request-error-logs":                  {},
-	"/request-log":                         {},
-	"/request-retry":                       {},
-	"/routing/strategy":                    {},
-	"/vertex-api-key":                      {},
-	"/vertex/import":                       {},
-	"/ws-auth":                             {},
-	"/xai-auth-url":                        {},
-}
-
-var cpaProxyPathPrefixes = []string{
-	"/ampcode/",
-	"/auth-files",
-	"/oauth-excluded-models/",
-	"/oauth-model-alias/",
-	"/plugin-store",
-	"/plugins",
-	cpaPluginResourcePrefix,
-	"/request-error-logs",
-	"/request-log-by-id",
 }
 
 func (s *Service) resolveSetup(ctx context.Context) (store.Setup, bool, error) {

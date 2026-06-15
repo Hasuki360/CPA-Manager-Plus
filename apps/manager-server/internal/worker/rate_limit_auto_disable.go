@@ -535,14 +535,6 @@ func (w *RateLimitAutoDisableWorker) currentAuthFile(ctx context.Context, baseUR
 	return file, ok, nil
 }
 
-func (w *RateLimitAutoDisableWorker) disableAuthFile(ctx context.Context, baseURL string, managementKey string, fileName string) error {
-	return w.patchAuthFile(ctx, baseURL, managementKey, fileName, true)
-}
-
-func (w *RateLimitAutoDisableWorker) enableAuthFile(ctx context.Context, baseURL string, managementKey string, fileName string) error {
-	return w.patchAuthFile(ctx, baseURL, managementKey, fileName, false)
-}
-
 func (w *RateLimitAutoDisableWorker) patchAuthFile(ctx context.Context, baseURL string, managementKey string, fileName string, disabled bool) error {
 	return cpaauthfiles.New(w.client, quotaAutoDisableActionTimeout).PatchDisabled(ctx, baseURL, managementKey, fileName, disabled)
 }

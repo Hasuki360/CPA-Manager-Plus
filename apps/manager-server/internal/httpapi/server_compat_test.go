@@ -504,16 +504,6 @@ func TestServerCompatProxyRoutes(t *testing.T) {
 		t.Fatalf("reload proxy request = %#v", reloadReq)
 	}
 
-	configRR := testutil.Request(t, handler, http.MethodGet, "/config", "", testutil.AdminKey)
-	testutil.RequireStatus(t, configRR, http.StatusOK)
-	configReq, ok := cpa.LastRequest("/config")
-	if !ok {
-		t.Fatal("CPA mock did not receive /config")
-	}
-	if configReq.Authorization != "Bearer management-key" {
-		t.Fatalf("config proxy request = %#v", configReq)
-	}
-
 	modelsReq := httptest.NewRequest(http.MethodGet, "/v1/models?limit=20", nil)
 	modelsReq.Header.Set("Authorization", "Bearer upstream-key")
 	modelsRR := httptest.NewRecorder()
@@ -537,7 +527,7 @@ func TestServerCompatPluginProxyRoutes(t *testing.T) {
 		body          string
 	}
 
-	observed := make(chan observedRequest, 6)
+	observed := make(chan observedRequest, 4)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		observed <- observedRequest{
@@ -571,46 +561,6 @@ func TestServerCompatPluginProxyRoutes(t *testing.T) {
 			t.Fatalf("CPA upstream did not receive %s", path)
 		}
 	}
-
-	listRR := testutil.Request(t, handler, http.MethodGet, "/plugins?scope=all", "", testutil.AdminKey)
-	testutil.RequireStatus(t, listRR, http.StatusOK)
-	assertObserved("/plugins", observedRequest{
-		method:        http.MethodGet,
-		path:          "/plugins",
-		query:         "scope=all",
-		authorization: "Bearer management-key",
-	})
-
-	configRR := testutil.Request(
-		t,
-		handler,
-		http.MethodPut,
-		"/plugins/demo/config",
-		`{"enabled":true}`,
-		testutil.AdminKey,
-	)
-	testutil.RequireStatus(t, configRR, http.StatusOK)
-	assertObserved("/plugins/demo/config", observedRequest{
-		method:        http.MethodPut,
-		path:          "/plugins/demo/config",
-		authorization: "Bearer management-key",
-		body:          `{"enabled":true}`,
-	})
-
-	installRR := testutil.Request(
-		t,
-		handler,
-		http.MethodPost,
-		"/plugin-store/demo/install",
-		"",
-		testutil.AdminKey,
-	)
-	testutil.RequireStatus(t, installRR, http.StatusOK)
-	assertObserved("/plugin-store/demo/install", observedRequest{
-		method:        http.MethodPost,
-		path:          "/plugin-store/demo/install",
-		authorization: "Bearer management-key",
-	})
 
 	managementInstallRR := testutil.Request(
 		t,
