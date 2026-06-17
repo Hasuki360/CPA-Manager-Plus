@@ -92,6 +92,10 @@ type HeatmapSummaryCardsInput = CommonSummaryContext & {
   summary: UsageSummaryMetrics;
 };
 
+type CredentialDetailCardsInput = CommonSummaryContext & {
+  row: UsageRankRow;
+};
+
 const formatCompactNumber = (value: number) => {
   if (!Number.isFinite(value)) return '0';
   if (Math.abs(value) >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(2)}B`;
@@ -563,3 +567,101 @@ export const buildUsageHeatmapSummaryCards = ({
     ),
   },
 ];
+
+export const buildCredentialDetailCards = ({
+  locale,
+  row,
+  t,
+}: CredentialDetailCardsInput): UsageSummaryCard[] => {
+  const averageCost = row.requestCount > 0 ? row.estimatedCost / row.requestCount : 0;
+  const averageTokens = row.requestCount > 0 ? row.totalTokens / row.requestCount : 0;
+  const failureRate = row.requestCount > 0 ? row.failureCount / row.requestCount : 0;
+  const cacheRate = computeCacheHitRate(row);
+  const lastSeenLabel = row.lastSeenMs
+    ? new Intl.DateTimeFormat(locale, {
+        day: '2-digit',
+        hour: '2-digit',
+        hour12: false,
+        minute: '2-digit',
+        month: '2-digit',
+      }).format(new Date(row.lastSeenMs))
+    : '-';
+
+  return [
+    {
+      accent: 'blue',
+      icon: 'calls',
+      label: t('usage_analytics.metric_request_count'),
+      meta: `${t('usage_analytics.metric_total_tokens')} ${formatCompactNumber(row.totalTokens)}`,
+      value: formatCompactNumber(row.requestCount),
+      valueTitle: formatFullNumber(row.requestCount, locale),
+    },
+    {
+      accent: 'amber',
+      icon: 'cost',
+      label: t('usage_analytics.average_cost'),
+      meta: `${t('usage_analytics.metric_estimated_cost')} ${formatMetricValue('estimatedCost', row.estimatedCost)}`,
+      value: formatMetricValue('estimatedCost', averageCost),
+    },
+    {
+      accent: 'teal',
+      icon: 'tokens',
+      label: t('usage_analytics.average_tokens_per_request'),
+      meta: `${t('usage_analytics.cache_read_rate')} ${formatPercent(cacheRate)}`,
+      value: formatCompactNumber(averageTokens),
+      valueTitle: formatFullNumber(averageTokens, locale),
+    },
+    {
+      accent: 'cyan',
+      icon: 'cache',
+      label: t('usage_analytics.cache_read_rate'),
+      meta: `${t('usage_analytics.metric_cached_tokens')} ${formatCompactNumber(row.cachedTokens)}`,
+      value: formatPercent(cacheRate),
+    },
+    {
+      accent: 'green',
+      icon: 'success',
+      label: t('usage_analytics.success_rate'),
+      meta: `${t('usage_analytics.metric_failure_count')} ${formatCompactNumber(row.failureCount)}`,
+      tone:
+        row.requestCount > 0 && row.successRate < USAGE_SUCCESS_RATE_WATCH_THRESHOLD
+          ? 'bad'
+          : 'good',
+      value: formatPercent(row.successRate),
+    },
+    {
+      accent: 'red',
+      icon: 'failure',
+      label: t('usage_analytics.metric_failure_count'),
+      meta: `${t('usage_analytics.failure_rate')} ${formatPercent(failureRate)}`,
+      tone: row.failureCount > 0 ? 'bad' : 'good',
+      value: formatCompactNumber(row.failureCount),
+    },
+    {
+      accent: 'blue',
+      icon: 'latency',
+      label: t('usage_analytics.metric_average_latency'),
+      meta: row.averageLatencyMs === null || row.averageLatencyMs === undefined
+        ? t('usage_analytics.summary_meta')
+        : `${t('usage_analytics.summary_meta')}`,
+      value: formatUsageDurationMs(row.averageLatencyMs),
+    },
+    {
+      accent: 'cyan',
+      icon: 'trend',
+      label: t('usage_analytics.credential_last_seen'),
+      meta: t('usage_analytics.credential_last_seen_meta'),
+      value: lastSeenLabel,
+      valueTitle: row.lastSeenMs
+        ? new Intl.DateTimeFormat(locale, {
+            day: '2-digit',
+            hour: '2-digit',
+            hour12: false,
+            minute: '2-digit',
+            month: '2-digit',
+            year: 'numeric',
+          }).format(new Date(row.lastSeenMs))
+        : '-',
+    },
+  ];
+};

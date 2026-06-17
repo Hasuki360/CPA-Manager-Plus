@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useMonitoringAnalytics } from '@/features/monitoring/hooks/useMonitoringAnalytics';
 import {
   adaptUsageAnalyticsData,
   analyzeUsageBucket,
+  buildSelectedCredentialTrendSeries,
   buildCredentialQuotaRows,
   buildEntityTrendSeries,
   buildKeyAnomalies,
@@ -26,7 +27,6 @@ import {
   type UsageAnalyticsTab,
   type UsageSelectedFilterKey,
   type UsageAnomalyAnalysis,
-  type UsageHeatmapCellDetail,
   type UsageHeatmapCellSelection,
   type UsageHeatmapDateOption,
   type UsageHeatmapMetricKey,
@@ -73,7 +73,6 @@ export function useUsageAnalytics() {
   const [selectedHeatmapCell, setSelectedHeatmapCell] = useState<UsageHeatmapCellSelection | null>(
     null
   );
-  const [activeCredentialsOnly, setActiveCredentialsOnly] = useState(true);
   const browserTimeZone = useMemo(() => getBrowserTimeZone(), []);
   const setActiveTab = useCallback((tab: UsageAnalyticsTab) => {
     setActiveTabState(tab);
@@ -189,30 +188,10 @@ export function useUsageAnalytics() {
   const heatmapDetailSource = selectedHeatmapDate ? heatmapDateRows : adapted.heatmap;
   const heatmapDateRefreshing = Boolean(
     selectedHeatmapDate &&
-      (heatmapDateAnalytics.loading ||
-        heatmapDateAnalytics.dataStale ||
-        (!heatmapDateAnalytics.data && !heatmapDateAnalytics.error))
+    (heatmapDateAnalytics.loading ||
+      heatmapDateAnalytics.dataStale ||
+      (!heatmapDateAnalytics.data && !heatmapDateAnalytics.error))
   );
-  const heatmapDetailScopeKey = useMemo(
-    () =>
-      JSON.stringify({
-        cell: selectedHeatmapCell,
-        metric: heatmapMetric,
-        source: selectedHeatmapDate ? heatmapDateDataScopeKey : dataScopeKey,
-      }),
-    [
-      dataScopeKey,
-      heatmapDateDataScopeKey,
-      heatmapMetric,
-      selectedHeatmapCell,
-      selectedHeatmapDate,
-    ]
-  );
-  const lastVisibleHeatmapDetailRef = useRef<{
-    detail: UsageHeatmapCellDetail;
-    scopeKey: string;
-  } | null>(null);
-
   const summaryDelta = useMemo(
     () => buildUsageSummaryDelta(adapted.summary, adapted.summaryComparison),
     [adapted.summary, adapted.summaryComparison]
@@ -243,14 +222,6 @@ export function useUsageAnalytics() {
     adapted.credentialRows[0] ??
     null;
 
-  const visibleCredentialRows = useMemo(
-    () =>
-      activeCredentialsOnly
-        ? adapted.credentialRows.filter((row) => row.requestCount > 0)
-        : adapted.credentialRows,
-    [activeCredentialsOnly, adapted.credentialRows]
-  );
-
   const modelTrendSeries = useMemo(
     () => buildEntityTrendSeries(adapted.modelRows, adapted.timeline, trendMetric, 4),
     [adapted.modelRows, adapted.timeline, trendMetric]
@@ -260,29 +231,18 @@ export function useUsageAnalytics() {
     [adapted.apiKeyRows, adapted.timeline, trendMetric]
   );
   const credentialTrendSeries = useMemo(
-    () => buildEntityTrendSeries(visibleCredentialRows, adapted.timeline, trendMetric, 4),
-    [visibleCredentialRows, adapted.timeline, trendMetric]
+    () =>
+      buildSelectedCredentialTrendSeries(
+        selectedCredential,
+        adapted.credentialTimeline,
+        trendMetric
+      ),
+    [adapted.credentialTimeline, selectedCredential, trendMetric]
   );
   const heatmapDetail = useMemo(
     () => buildUsageHeatmapCellDetail(heatmapDetailSource, selectedHeatmapCell, heatmapMetric),
     [heatmapDetailSource, heatmapMetric, selectedHeatmapCell]
   );
-  const visibleHeatmapDetail = useMemo(() => {
-    if (heatmapDetail) {
-      lastVisibleHeatmapDetailRef.current = {
-        detail: heatmapDetail,
-        scopeKey: heatmapDetailScopeKey,
-      };
-      return heatmapDetail;
-    }
-
-    const cachedDetail = lastVisibleHeatmapDetailRef.current;
-    if (heatmapDateRefreshing && cachedDetail?.scopeKey === heatmapDetailScopeKey) {
-      return cachedDetail.detail;
-    }
-
-    return null;
-  }, [heatmapDateRefreshing, heatmapDetail, heatmapDetailScopeKey]);
   const heatmapHighlights = useMemo(
     () => buildUsageHeatmapHighlights(adapted.heatmap),
     [adapted.heatmap]
@@ -303,8 +263,8 @@ export function useUsageAnalytics() {
     [adapted.credentialRows]
   );
   const credentialQuotaRows = useMemo(
-    () => buildCredentialQuotaRows(visibleCredentialRows, nowMs),
-    [nowMs, visibleCredentialRows]
+    () => buildCredentialQuotaRows(adapted.credentialRows, nowMs),
+    [adapted.credentialRows, nowMs]
   );
   const insights = useMemo(
     () =>
@@ -397,7 +357,7 @@ export function useUsageAnalytics() {
     timeline: adapted.timeline,
     modelRows: adapted.modelRows,
     apiKeyRows: adapted.apiKeyRows,
-    credentialRows: visibleCredentialRows,
+    credentialRows: adapted.credentialRows,
     allCredentialRows: adapted.credentialRows,
     providerRows: adapted.providerRows,
     heatmap: adapted.heatmap,
@@ -412,7 +372,7 @@ export function useUsageAnalytics() {
     heatmapDateError: selectedHeatmapDate ? heatmapDateAnalytics.error : '',
     selectedHeatmapCell,
     selectHeatmapCell,
-    heatmapDetail: visibleHeatmapDetail,
+    heatmapDetail,
     heatmapHighlights,
     browserTimeZone,
     matrix,
@@ -428,8 +388,6 @@ export function useUsageAnalytics() {
     keyAnomalies,
     credentialAnomalies,
     credentialQuotaRows,
-    activeCredentialsOnly,
-    setActiveCredentialsOnly,
     insights,
     anomalyPoints: adapted.anomalyPoints,
     drilldownPreview: adapted.drilldownPreview,

@@ -3,6 +3,7 @@ import type {
   MonitoringAnalyticsApiKeyStatRow,
   MonitoringAnalyticsChannelShareRow,
   MonitoringAnalyticsCredentialStatRow,
+  MonitoringAnalyticsCredentialTimelinePoint,
   MonitoringAnalyticsEventRow,
   MonitoringAnalyticsFilters,
   MonitoringAnalyticsHeatmapContributor,
@@ -173,6 +174,16 @@ export type UsageEntityTrendSeries = {
     label: string;
     value: number;
   }>;
+};
+
+export type UsageCredentialTimelinePoint = {
+  id: string;
+  label: string;
+  bucketMs: number;
+  bucketLabel: string;
+  requestCount: number;
+  totalTokens: number;
+  estimatedCost: number;
 };
 
 export type UsageMatrixCell = {
@@ -666,6 +677,7 @@ export const buildUsageAnalyticsInclude = (
     channel_share: true,
     api_key_stats: true,
     credential_stats: true,
+    credential_timeline: true,
     filter_options: true,
     heatmap: true,
     anomaly_points: true,
@@ -762,6 +774,31 @@ export const buildUsageTimeline = (
         cachedTokens: toNumber(point.cached_tokens),
       }),
       averageTokensPerRequest: requestCount > 0 ? totalTokens / requestCount : 0,
+    };
+  });
+
+export const buildUsageCredentialTimeline = (
+  timeline: MonitoringAnalyticsCredentialTimelinePoint[] = [],
+  granularity: UsageAnalyticsResolvedGranularity
+): UsageCredentialTimelinePoint[] =>
+  timeline.map((point) => {
+    const bucketMs = toNumber(point.bucket_ms);
+    return {
+      id: point.id || point.auth_file_snapshot || point.auth_index || point.source_hash || '-',
+      label:
+        point.label ||
+        point.auth_label_snapshot ||
+        point.account_snapshot ||
+        point.auth_file_snapshot ||
+        point.source ||
+        point.auth_index ||
+        point.id ||
+        '-',
+      bucketMs,
+      bucketLabel: point.bucket_label || formatLocalBucketLabel(bucketMs, granularity),
+      requestCount: toNumber(point.calls),
+      totalTokens: toNumber(point.total_tokens ?? point.tokens),
+      estimatedCost: toNumber(point.cost),
     };
   });
 
@@ -1482,6 +1519,43 @@ export const buildEntityTrendSeries = (
     });
 };
 
+const usageCredentialTimelineMetricValue = (
+  point: UsageCredentialTimelinePoint,
+  metric: UsageTrendMetricKey
+) => {
+  if (metric === 'estimatedCost') return point.estimatedCost;
+  if (metric === 'totalTokens') return point.totalTokens;
+  return point.requestCount;
+};
+
+export const buildSelectedCredentialTrendSeries = (
+  selectedCredential: UsageRankRow | null,
+  credentialTimeline: UsageCredentialTimelinePoint[],
+  metric: UsageTrendMetricKey
+): UsageEntityTrendSeries[] => {
+  if (!selectedCredential) return [];
+
+  const points = credentialTimeline
+    .filter((point) => point.id === selectedCredential.id)
+    .sort((left, right) => left.bucketMs - right.bucketMs)
+    .map((point) => ({
+      bucketMs: point.bucketMs,
+      label: point.bucketLabel,
+      value: usageCredentialTimelineMetricValue(point, metric),
+    }));
+
+  if (points.length === 0) return [];
+
+  return [
+    {
+      id: selectedCredential.id,
+      label: selectedCredential.label,
+      color: '#2563eb',
+      points,
+    },
+  ];
+};
+
 export const computeRowCacheHitRate = (row: UsageRankRow): number =>
   computeCacheHitRate({
     inputTokens: row.inputTokens,
@@ -1890,6 +1964,10 @@ export const adaptUsageAnalyticsData = (
 ) => {
   const summary = buildUsageSummary(data?.summary);
   const timeline = buildUsageTimeline(data?.timeline ?? [], granularity);
+  const credentialTimeline = buildUsageCredentialTimeline(
+    data?.credential_timeline ?? [],
+    granularity
+  );
   const modelRows = buildModelRows(data?.model_stats ?? [], summary);
   const apiKeyRows = buildApiKeyRows(data?.api_key_stats ?? [], summary, keyword);
   const credentialRows = buildCredentialRows(data?.credential_stats ?? [], summary);
@@ -1903,6 +1981,7 @@ export const adaptUsageAnalyticsData = (
     summary,
     summaryComparison: data?.summary_comparison,
     timeline,
+    credentialTimeline,
     modelRows,
     apiKeyRows,
     credentialRows,

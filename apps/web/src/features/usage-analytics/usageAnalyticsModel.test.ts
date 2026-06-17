@@ -4,6 +4,7 @@ import type { UsageRankRow } from './usageAnalyticsModel';
 import {
   analyzeUsageBucket,
   buildApiKeyRows,
+  buildSelectedCredentialTrendSeries,
   buildDrilldownPreview,
   buildKeyAnomalies,
   buildModelKeyDistribution,
@@ -18,6 +19,7 @@ import {
   buildUsageHeatmapHighlights,
   buildUsageHeatmapRangeContext,
   buildUsageHeatmap,
+  buildUsageCredentialTimeline,
   buildUsageTimeline,
   computeCacheHitRate,
   computeRowAverageCostPerCall,
@@ -90,6 +92,7 @@ describe('usage analytics request model', () => {
       timeline: true,
       model_stats: true,
       api_key_stats: true,
+      credential_timeline: true,
       filter_options: true,
       granularity: 'day',
     });
@@ -218,14 +221,10 @@ describe('usage analytics adapters', () => {
       sampleCount: 2,
     });
     expect(
-      buildUsageHeatmapCellDateOptions(context, { weekday: 1, hour: 9 }).map(
-        (option) => option.key
-      )
+      buildUsageHeatmapCellDateOptions(context, { weekday: 1, hour: 9 }).map((option) => option.key)
     ).toEqual(['2026-06-08', '2026-06-15']);
     expect(
-      buildUsageHeatmapCellDateOptions(context, { weekday: 2, hour: 9 }).map(
-        (option) => option.key
-      )
+      buildUsageHeatmapCellDateOptions(context, { weekday: 2, hour: 9 }).map((option) => option.key)
     ).toEqual(['2026-06-09']);
     expect(buildUsageHeatmapCellDateOptions(context, null)).toHaveLength(8);
   });
@@ -334,6 +333,85 @@ describe('usage analytics adapters', () => {
       successRate: 2 / 3,
       averageLatencyMs: 250,
     });
+  });
+
+  it('builds selected credential trend series from backend credential timeline buckets', () => {
+    const credentialTimeline = buildUsageCredentialTimeline(
+      [
+        {
+          id: 'credential-a',
+          label: 'prod-auth',
+          bucket_ms: NOW_MS,
+          bucket_label: '06/04',
+          calls: 3,
+          tokens: 300,
+          success: 3,
+          failure: 0,
+          total_tokens: 300,
+          cost: 0.3,
+        },
+        {
+          id: 'credential-a',
+          label: 'prod-auth',
+          bucket_ms: NOW_MS + HOUR_MS,
+          bucket_label: '06/04 13:00',
+          calls: 5,
+          tokens: 500,
+          success: 4,
+          failure: 1,
+          total_tokens: 500,
+          cost: 0.5,
+        },
+      ],
+      'hour'
+    );
+    const rows: UsageRankRow[] = [
+      {
+        id: 'credential-a',
+        label: 'prod-auth',
+        requestCount: 8,
+        successCount: 7,
+        failureCount: 1,
+        successRate: 7 / 8,
+        totalTokens: 800,
+        inputTokens: 800,
+        outputTokens: 0,
+        cachedTokens: 0,
+        cacheReadTokens: 0,
+        cacheCreationTokens: 0,
+        estimatedCost: 0.8,
+        averageLatencyMs: null,
+        share: 1,
+      },
+    ];
+
+    const result = buildSelectedCredentialTrendSeries(rows[0], credentialTimeline, 'requestCount');
+
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe('credential-a');
+    expect(result[0].points.map((point) => point.value)).toEqual([3, 5]);
+  });
+
+  it('does not estimate selected credential trend when backend timeline is missing', () => {
+    const row: UsageRankRow = {
+      id: 'credential-a',
+      label: 'prod-auth',
+      requestCount: 8,
+      successCount: 7,
+      failureCount: 1,
+      successRate: 7 / 8,
+      totalTokens: 800,
+      inputTokens: 800,
+      outputTokens: 0,
+      cachedTokens: 0,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+      estimatedCost: 0.8,
+      averageLatencyMs: null,
+      share: 1,
+    };
+
+    expect(buildSelectedCredentialTrendSeries(row, [], 'requestCount')).toEqual([]);
   });
 
   it('filters API key rows by keyword and never exposes a raw key value', () => {
