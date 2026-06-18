@@ -10,6 +10,7 @@ import {
   buildKeyAnomalies,
   buildModelKeyDistribution,
   buildMonitoringDetailUrl,
+  buildProviderRows,
   buildUsageMatrix,
   buildUsageAnalyticsFilters,
   buildUsageAnalyticsInclude,
@@ -697,6 +698,46 @@ describe('usage analytics adapters', () => {
       requestCount: 10,
       totalTokens: 100,
       value: 10,
+    });
+  });
+
+  it('keeps provider request, cost, and token shares separate', () => {
+    const rows = buildProviderRows([
+      {
+        auth_index: 'auth-a',
+        auth_provider_snapshot: 'codex',
+        calls: 80,
+        success: 78,
+        failure: 2,
+        tokens: 900,
+        cost: 9,
+        average_latency_ms: null,
+      },
+      {
+        auth_index: 'auth-b',
+        auth_provider_snapshot: 'mimo',
+        calls: 20,
+        success: 18,
+        failure: 2,
+        tokens: 100,
+        cost: 1,
+        average_latency_ms: null,
+      },
+    ]);
+
+    expect(rows[0]).toMatchObject({
+      label: 'codex',
+      requestShare: 0.8,
+      costShare: 0.9,
+      tokenShare: 0.9,
+      share: 0.8,
+    });
+    expect(rows[1]).toMatchObject({
+      label: 'mimo',
+      requestShare: 0.2,
+      costShare: 0.1,
+      tokenShare: 0.1,
+      share: 0.2,
     });
   });
 

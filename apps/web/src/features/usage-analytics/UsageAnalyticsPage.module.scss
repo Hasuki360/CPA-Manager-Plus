@@ -686,174 +686,6 @@
   text-align: center;
 }
 
-.healthTimelinePanel {
-  display: grid;
-  align-content: start;
-  gap: 12px;
-  min-width: 0;
-}
-
-.healthTimelineSummary {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 10px;
-  min-width: 0;
-  text-align: right;
-
-  strong {
-    flex: 0 0 auto;
-    padding: 6px 10px;
-    border-radius: 8px;
-    background: color-mix(in srgb, var(--success-color) 13%, var(--usage-surface));
-    color: var(--success-color);
-    font-size: 13px;
-    font-weight: 850;
-    line-height: 1;
-  }
-}
-
-.healthTimelineCounts {
-  display: inline-flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 10px;
-  min-width: 0;
-  color: var(--usage-muted);
-  font-size: 11px;
-  font-weight: 700;
-
-  span {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    white-space: nowrap;
-  }
-
-  i {
-    width: 7px;
-    height: 7px;
-    border-radius: 999px;
-  }
-}
-
-.healthTimelineMatrix {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
-}
-
-.healthTimelineHourAxis {
-  display: grid;
-  grid-template-columns: 42px repeat(24, minmax(0, 1fr));
-  gap: 3px;
-  min-height: 12px;
-
-  span {
-    color: var(--usage-muted);
-    font-size: 10px;
-    line-height: 1;
-    text-align: center;
-  }
-}
-
-.healthTimelineRow {
-  display: grid;
-  grid-template-columns: 42px minmax(0, 1fr);
-  gap: 5px;
-  align-items: center;
-  min-width: 0;
-}
-
-.healthTimelineRowLabel {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--usage-muted);
-  font-size: 10px;
-  line-height: 1;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.healthTimelineCells {
-  display: grid;
-  grid-template-columns: repeat(24, minmax(0, 1fr));
-  gap: 3px;
-  min-width: 0;
-}
-
-.healthTimelineDayGrid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(12px, 1fr));
-  gap: 3px;
-  min-width: 0;
-}
-
-.healthTimelineCell {
-  display: inline-block;
-  width: 100%;
-  min-height: 8px;
-  aspect-ratio: 1;
-  border-radius: 2px;
-  background: color-mix(in srgb, var(--usage-muted-surface), var(--usage-text) 10%);
-  opacity: calc(0.58 + var(--cell-intensity, 0) * 0.42);
-}
-
-.healthTimelineEmpty {
-  background: color-mix(in srgb, var(--usage-muted-surface), var(--usage-text) 12%);
-}
-
-.healthTimelineGood {
-  background: #22c55e;
-}
-
-.healthTimelineWarn {
-  background: #a3e635;
-}
-
-.healthTimelineBad {
-  background: #ef4444;
-}
-
-.healthTimelineOutside {
-  border: 1px solid color-mix(in srgb, var(--usage-border), var(--usage-muted) 36%);
-  background:
-    repeating-linear-gradient(
-      -45deg,
-      color-mix(in srgb, var(--usage-muted-surface), transparent 25%) 0,
-      color-mix(in srgb, var(--usage-muted-surface), transparent 25%) 2px,
-      transparent 2px,
-      transparent 5px
-    ),
-    color-mix(in srgb, var(--usage-muted-surface), transparent 58%);
-  opacity: 0.9;
-}
-
-.healthTimelineLegend {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-wrap: wrap;
-  gap: 6px;
-  min-width: 0;
-  color: var(--usage-muted);
-  font-size: 11px;
-
-  span {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    white-space: nowrap;
-  }
-
-  i {
-    width: 9px;
-    height: 9px;
-    border-radius: 2px;
-  }
-}
-
 .echartsTooltipWrapper {
   overflow: hidden;
 }
@@ -1118,7 +950,7 @@
 
 .overviewCards {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
 }
 
@@ -1146,7 +978,6 @@
   min-width: 0;
 }
 
-.overviewHeroGrid,
 .dualChartGrid {
   display: grid;
   grid-template-columns: minmax(0, 1.4fr) minmax(360px, 0.8fr);
@@ -1678,6 +1509,10 @@
 
 .compactTable {
   min-width: 760px !important;
+}
+
+.providerOverviewTable {
+  min-width: 1040px !important;
 }
 
 .toggleControl {
@@ -2718,7 +2553,6 @@
   .apiKeyAnalysisGrid,
   .credentialAnalysisGrid,
   .heatmapDetailBody,
-  .overviewHeroGrid,
   .dualChartGrid,
   .trendEntityGrid,
   .overviewCards,
@@ -2753,37 +2587,6 @@
 @media (max-width: 760px) {
   .controlBar {
     grid-template-columns: 1fr;
-  }
-
-  .healthTimelineSummary {
-    align-items: flex-start;
-    justify-content: flex-start;
-    flex-direction: column;
-    text-align: left;
-  }
-
-  .healthTimelineCounts {
-    justify-content: flex-start;
-    flex-wrap: wrap;
-  }
-
-  .healthTimelineHourAxis {
-    grid-template-columns: 34px repeat(24, minmax(0, 1fr));
-    gap: 2px;
-  }
-
-  .healthTimelineRow {
-    grid-template-columns: 34px minmax(0, 1fr);
-    gap: 4px;
-  }
-
-  .healthTimelineCells {
-    gap: 2px;
-  }
-
-  .healthTimelineRowLabel,
-  .healthTimelineHourAxis span {
-    font-size: 9px;
   }
 
   .controlBar .segmentedControl,

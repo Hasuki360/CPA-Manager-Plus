@@ -225,6 +225,9 @@ const createUsageState = (overrides: Record<string, unknown> = {}) => {
         totalTokens: 1200,
         estimatedCost: 1.25,
         averageLatencyMs: 250,
+        requestShare: 1,
+        costShare: 1,
+        tokenShare: 1,
         share: 1,
         models: [modelRow],
       },
@@ -489,65 +492,22 @@ describe('UsageAnalyticsPage', () => {
 
     expect(text).toContain('usage_analytics.tab_overview');
     expect(text).toContain('usage_analytics.anomaly_points_title');
-    expect(text).toContain('usage_analytics.insights_title');
     expect(text).toContain('usage_analytics.overview_trend_title');
-    expect(text).toContain('usage_analytics.health_timeline_title');
     expect(text).toContain('usage_analytics.model_overview_title');
     expect(text).toContain('usage_analytics.api_key_overview_title');
     expect(text).toContain('usage_analytics.provider_overview_title');
+    expect(text).toContain('usage_analytics.provider_request_share');
+    expect(text).toContain('usage_analytics.provider_cost_share');
+    expect(text).toContain('usage_analytics.provider_top_model');
+    expect(text).not.toContain('usage_analytics.insights_title');
+    expect(text).not.toContain('usage_analytics.health_timeline_title');
+    expect(text).not.toContain('usage_analytics.provider_usage_share_title');
+    expect(text).not.toContain('usage_analytics.provider_health_title');
+    expect(text).not.toContain('usage_analytics.quota_status_title');
     expect(text).not.toContain('usage_analytics.analysis_entry_trends');
     expect(text).not.toContain('usage_analytics.favorite_views_title');
     expect(text).not.toContain('usage_analytics.recent_views_title');
     expect(text).not.toContain('usage_analytics.model_rank_title');
-  });
-
-  it('renders the overview request health timeline without click actions', () => {
-    const usageState = createUsageState();
-    mocks.usageState = usageState;
-    const renderer = renderPage();
-    const timelineCells = renderer.root.findAll((node) =>
-      String(node.props.title ?? '').includes('usage_analytics.health_timeline_status')
-    );
-    const timelineButton = renderer.root
-      .findAllByType('button')
-      .find((node) =>
-        String(node.props['aria-label'] ?? '').includes('usage_analytics.health_timeline_status')
-      );
-
-    expect(timelineCells.length).toBeGreaterThan(0);
-    expect(timelineButton).toBeUndefined();
-    expect(usageState.selectBucket).not.toHaveBeenCalled();
-  });
-
-  it('compacts long hourly health timelines into bounded day cells', () => {
-    const hourMs = 60 * 60 * 1000;
-    const dayMs = 24 * hourMs;
-    const startDate = new Date(1_780_000_000_000);
-    startDate.setHours(0, 0, 0, 0);
-    const fromMs = startDate.getTime();
-    const timeline = Array.from({ length: 30 }, (_, index) =>
-      createTimelinePoint({
-        bucketMs: fromMs + index * dayMs + 12 * hourMs,
-        bucketEndMs: fromMs + index * dayMs + 13 * hourMs,
-        failureCount: index % 5 === 0 ? 1 : 0,
-        failureRate: index % 5 === 0 ? 0.1 : 0,
-        label: `day-${index + 1}`,
-        requestCount: 10,
-        successCount: index % 5 === 0 ? 9 : 10,
-        successRate: index % 5 === 0 ? 0.9 : 1,
-      })
-    );
-    mocks.usageState = createUsageState({
-      bounds: { fromMs, toMs: fromMs + 30 * dayMs },
-      resolvedGranularity: 'hour',
-      timeline,
-    });
-    const renderer = renderPage();
-    const timelineCells = renderer.root.findAll((node) =>
-      String(node.props.title ?? '').includes('usage_analytics.health_timeline_status')
-    );
-
-    expect(timelineCells).toHaveLength(30);
   });
 
   it('renders trends as a focused time-series workspace', () => {

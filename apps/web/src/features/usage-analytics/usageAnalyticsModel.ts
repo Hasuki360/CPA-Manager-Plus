@@ -180,6 +180,9 @@ export type UsageProviderRow = {
   totalTokens: number;
   estimatedCost: number;
   averageLatencyMs: number | null;
+  requestShare: number;
+  costShare: number;
+  tokenShare: number;
   share: number;
   models: UsageRankRow[];
 };
@@ -1349,6 +1352,9 @@ export const buildProviderRows = (
         totalTokens: 0,
         estimatedCost: 0,
         averageLatencyMs: null,
+        requestShare: 0,
+        costShare: 0,
+        tokenShare: 0,
         share: 0,
         models: [],
       } satisfies UsageProviderRow);
@@ -1383,6 +1389,9 @@ export const buildProviderRows = (
           totalTokens: 0,
           estimatedCost: 0,
           averageLatencyMs: null,
+          requestShare: 0,
+          costShare: 0,
+          tokenShare: 0,
           share: 0,
           models: [],
         } satisfies UsageProviderRow);
@@ -1398,6 +1407,11 @@ export const buildProviderRows = (
 
   const totalRequests =
     summary?.requestCount ?? [...grouped.values()].reduce((sum, row) => sum + row.requestCount, 0);
+  const totalCost =
+    summary?.estimatedCost ??
+    [...grouped.values()].reduce((sum, row) => sum + row.estimatedCost, 0);
+  const totalTokens =
+    summary?.totalTokens ?? [...grouped.values()].reduce((sum, row) => sum + row.totalTokens, 0);
   return [...grouped.values()]
     .map((row) => {
       const models = [...(providerModels.get(row.label)?.values() ?? [])].sort(
@@ -1407,6 +1421,7 @@ export const buildProviderRows = (
           left.label.localeCompare(right.label)
       );
       const modelTotal = models.reduce((sum, model) => sum + model.totalTokens, 0);
+      const requestShare = safeShare(row.requestCount, totalRequests);
       return {
         ...row,
         successRate: safeShare(row.successCount, row.requestCount),
@@ -1422,7 +1437,10 @@ export const buildProviderRows = (
                 cachedTokens: models.reduce((sum, model) => sum + model.cachedTokens, 0),
               })
             : row.cacheRate,
-        share: safeShare(row.requestCount, totalRequests),
+        requestShare,
+        costShare: safeShare(row.estimatedCost, totalCost),
+        tokenShare: safeShare(row.totalTokens, totalTokens),
+        share: requestShare,
         models: models.map((model) => ({
           ...model,
           share: safeShare(model.totalTokens, modelTotal),
@@ -1799,7 +1817,7 @@ export const buildUsageInsights = ({
     });
   }
   const topProvider = providerRows[0];
-  if (topProvider && topProvider.share >= 0.45) {
+  if (topProvider && topProvider.requestShare >= 0.45) {
     insights.push({
       id: 'provider-concentration',
       tone: 'info',

@@ -20,11 +20,9 @@ import { Select, type SelectOption } from '@/components/ui/Select';
 import { SegmentedTabs, type SegmentedTabItem } from '@/components/ui/SegmentedTabs';
 import {
   IconBinary,
-  IconCheck,
   IconCopy,
   IconDollarSign,
   IconExternalLink,
-  IconEye,
   IconFileText,
   IconInbox,
   IconKey,
@@ -60,11 +58,8 @@ import {
   USAGE_SUCCESS_RATE_WATCH_THRESHOLD,
   USAGE_TIME_RANGES,
   type UsageAnalyticsTab,
-  type UsageCredentialQuotaRow,
   type UsageEntityTrendSeries,
-  type UsageInsight,
   type UsageAnalyticsGranularity,
-  type UsageAnalyticsResolvedGranularity,
   type UsageAnalyticsCacheStatus,
   type UsageAnalyticsLatencyFilter,
   type UsageAnalyticsStatus,
@@ -122,11 +117,6 @@ const heatmapScaleOptions: Array<{ value: UsageHeatmapScaleMode; labelKey: strin
 
 const chartHeight = 360;
 const compactChartHeight = 220;
-const usageHealthTimelineHourMs = 60 * 60 * 1000;
-const usageHealthTimelineDayMs = 24 * usageHealthTimelineHourMs;
-const usageHealthTimelineCompactThresholdMs = 7 * usageHealthTimelineDayMs;
-const usageHealthTimelineMaxCompactCells = 42;
-const usageHealthTimelineHourLabels = [0, 6, 12, 18, 23];
 
 type UsageTrendChartOption = ComposeOption<
   | DataZoomComponentOption
@@ -160,41 +150,6 @@ type HeatmapChartOption = ComposeOption<
   GridComponentOption | HeatmapSeriesOption | TooltipComponentOption | VisualMapComponentOption
 >;
 
-type HealthTimelineTone = 'empty' | 'good' | 'warn' | 'bad' | 'outside';
-
-type HealthTimelineCell = {
-  averageLatencyMs: number | null;
-  bucketMs: number;
-  bucketEndMs: number;
-  failureCount: number;
-  failureRate: number;
-  id: string;
-  intensity: number;
-  label: string;
-  requestCount: number;
-  successCount: number;
-  successRate: number;
-  tone: HealthTimelineTone;
-};
-
-type HealthTimelineRow = {
-  cells: HealthTimelineCell[];
-  id: string;
-  label: string;
-};
-
-type HealthTimelineMatrix = {
-  cells: HealthTimelineCell[];
-  mode: 'hour' | 'day';
-  rows: HealthTimelineRow[];
-  summary: {
-    failureCount: number;
-    requestCount: number;
-    successCount: number;
-  };
-};
-
-type HealthCellStyle = CSSProperties & Record<'--cell-intensity', number>;
 type CostShareRankStyle = CSSProperties &
   Record<'--rank-color' | '--rank-share', string | number>;
 
@@ -423,29 +378,6 @@ const formatTrendMetricValue = (key: UsageTrendMetricKey, value: number) => {
   if (key === 'totalTokens') return formatMetricValue('totalTokens', value);
   return formatMetricValue('requestCount', value);
 };
-
-const formatQuotaValue = (value: number) => formatMetricValue('estimatedCost', value);
-
-const mapProviderRowsToRankRows = (rows: UsageProviderRow[]): UsageRankRow[] =>
-  rows.map((row) => ({
-    id: row.id,
-    label: row.label,
-    provider: row.id,
-    requestCount: row.requestCount,
-    successCount: row.successCount,
-    failureCount: row.failureCount,
-    successRate: row.successRate,
-    totalTokens: row.totalTokens,
-    inputTokens: 0,
-    outputTokens: 0,
-    cachedTokens: 0,
-    cacheReadTokens: 0,
-    cacheCreationTokens: 0,
-    estimatedCost: row.estimatedCost,
-    averageLatencyMs: row.averageLatencyMs,
-    share: row.share,
-    models: row.models,
-  }));
 
 const buildStableSelectOptions = (
   allLabel: string,
@@ -1033,440 +965,6 @@ function CostRankChart({ rows, title }: { rows: UsageRankRow[]; title: string })
       style={{ height: Math.max(180, chartRows.length * 36 + 26) }}
       ariaLabel={title}
     />
-  );
-}
-
-const healthToneClassMap: Record<HealthTimelineTone, string> = {
-  bad: 'healthTimelineBad',
-  empty: 'healthTimelineEmpty',
-  good: 'healthTimelineGood',
-  outside: 'healthTimelineOutside',
-  warn: 'healthTimelineWarn',
-};
-
-const healthToneLabelKeys: Record<HealthTimelineTone, string> = {
-  bad: 'usage_analytics.health_timeline_failure',
-  empty: 'usage_analytics.health_timeline_no_request',
-  good: 'usage_analytics.health_timeline_success',
-  outside: 'usage_analytics.health_timeline_outside',
-  warn: 'usage_analytics.health_timeline_warning',
-};
-
-const localTimelineDayStartMs = (timestampMs: number) => {
-  const date = new Date(timestampMs);
-  date.setHours(0, 0, 0, 0);
-  return date.getTime();
-};
-
-const formatTimelineDayLabel = (bucketMs: number, locale: string) =>
-  new Date(bucketMs).toLocaleDateString(locale, {
-    day: '2-digit',
-    month: '2-digit',
-  });
-
-const formatTimelineHourLabel = (bucketMs: number, locale: string) =>
-  new Date(bucketMs).toLocaleTimeString(locale, {
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-
-const getHealthTimelineTone = (
-  requestCount: number,
-  failureRate: number,
-  inRange: boolean
-): HealthTimelineTone => {
-  if (!inRange) return 'outside';
-  if (requestCount <= 0) return 'empty';
-  if (failureRate >= 0.1) return 'bad';
-  if (failureRate > 0) return 'warn';
-  return 'good';
-};
-
-const buildEmptyHealthTimelineCell = ({
-  bucketMs,
-  bucketSizeMs,
-  inRange,
-  label,
-}: {
-  bucketMs: number;
-  bucketSizeMs: number;
-  inRange: boolean;
-  label: string;
-}): HealthTimelineCell => ({
-  averageLatencyMs: null,
-  bucketEndMs: bucketMs + bucketSizeMs,
-  bucketMs,
-  failureCount: 0,
-  failureRate: 0,
-  id: String(bucketMs),
-  intensity: 0,
-  label,
-  requestCount: 0,
-  successCount: 0,
-  successRate: 0,
-  tone: getHealthTimelineTone(0, 0, inRange),
-});
-
-const buildHealthTimelineCell = ({
-  bucketMs,
-  bucketSizeMs,
-  inRange,
-  label,
-  maxRequests,
-  point,
-}: {
-  bucketMs: number;
-  bucketSizeMs: number;
-  inRange: boolean;
-  label: string;
-  maxRequests: number;
-  point?: UsageTimelinePoint;
-}): HealthTimelineCell => {
-  if (!point) {
-    return buildEmptyHealthTimelineCell({ bucketMs, bucketSizeMs, inRange, label });
-  }
-
-  return {
-    averageLatencyMs: point.averageLatencyMs,
-    bucketEndMs: point.bucketEndMs,
-    bucketMs,
-    failureCount: point.failureCount,
-    failureRate: point.failureRate,
-    id: String(bucketMs),
-    intensity: maxRequests > 0 ? Math.min(1, Math.max(0.18, point.requestCount / maxRequests)) : 0,
-    label,
-    requestCount: point.requestCount,
-    successCount: point.successCount,
-    successRate: point.successRate,
-    tone: getHealthTimelineTone(point.requestCount, point.failureRate, inRange),
-  };
-};
-
-const buildAggregatedHealthTimelineCell = ({
-  bucketMs,
-  bucketSizeMs,
-  inRange,
-  label,
-  maxRequests,
-  points,
-}: {
-  bucketMs: number;
-  bucketSizeMs: number;
-  inRange: boolean;
-  label: string;
-  maxRequests: number;
-  points: UsageTimelinePoint[];
-}): HealthTimelineCell => {
-  if (points.length === 0) {
-    return buildEmptyHealthTimelineCell({ bucketMs, bucketSizeMs, inRange, label });
-  }
-
-  const requestCount = points.reduce((sum, point) => sum + point.requestCount, 0);
-  const successCount = points.reduce((sum, point) => sum + point.successCount, 0);
-  const failureCount = points.reduce((sum, point) => sum + point.failureCount, 0);
-  const latencyWeight = points.reduce(
-    (sum, point) => sum + (point.averageLatencyMs === null ? 0 : point.requestCount),
-    0
-  );
-  const averageLatencyMs =
-    latencyWeight > 0
-      ? points.reduce(
-          (sum, point) =>
-            sum +
-            (point.averageLatencyMs === null ? 0 : point.averageLatencyMs * point.requestCount),
-          0
-        ) / latencyWeight
-      : null;
-  const successRate = requestCount > 0 ? successCount / requestCount : 0;
-  const failureRate = requestCount > 0 ? failureCount / requestCount : 0;
-
-  return {
-    averageLatencyMs,
-    bucketEndMs: bucketMs + bucketSizeMs,
-    bucketMs,
-    failureCount,
-    failureRate,
-    id: String(bucketMs),
-    intensity:
-      maxRequests > 0 && requestCount > 0
-        ? Math.min(1, Math.max(0.18, requestCount / maxRequests))
-        : 0,
-    label,
-    requestCount,
-    successCount,
-    successRate,
-    tone: getHealthTimelineTone(requestCount, failureRate, inRange),
-  };
-};
-
-const groupHealthTimelinePointsByLocalDay = (timeline: UsageTimelinePoint[]) => {
-  const grouped = new Map<number, UsageTimelinePoint[]>();
-  for (const point of timeline) {
-    const dayMs = localTimelineDayStartMs(point.bucketMs);
-    const points = grouped.get(dayMs);
-    if (points) {
-      points.push(point);
-    } else {
-      grouped.set(dayMs, [point]);
-    }
-  }
-  return grouped;
-};
-
-const buildHealthTimelineMatrix = ({
-  bounds,
-  granularity,
-  locale,
-  timeline,
-}: {
-  bounds: { fromMs: number; toMs: number } | null;
-  granularity: UsageAnalyticsResolvedGranularity;
-  locale: string;
-  timeline: UsageTimelinePoint[];
-}): HealthTimelineMatrix => {
-  const summary = timeline.reduce(
-    (current, point) => ({
-      failureCount: current.failureCount + point.failureCount,
-      requestCount: current.requestCount + point.requestCount,
-      successCount: current.successCount + point.successCount,
-    }),
-    { failureCount: 0, requestCount: 0, successCount: 0 }
-  );
-
-  if (timeline.length === 0) {
-    return { cells: [], mode: granularity, rows: [], summary };
-  }
-
-  const pointByBucket = new Map(timeline.map((point) => [point.bucketMs, point]));
-  const maxRequests = timeline.reduce((max, point) => Math.max(max, point.requestCount), 0);
-  const firstPoint = timeline[0];
-  const lastPoint = timeline[timeline.length - 1];
-  const fromMs = bounds?.fromMs ?? firstPoint.bucketMs;
-  const toMs = bounds?.toMs ?? lastPoint.bucketEndMs;
-  const durationMs = Math.max(0, toMs - fromMs);
-  const useCompactDayMode =
-    granularity === 'day' || durationMs > usageHealthTimelineCompactThresholdMs;
-  const rows: HealthTimelineRow[] = [];
-
-  if (useCompactDayMode) {
-    const startDayMs = localTimelineDayStartMs(fromMs);
-    const endDayMs = localTimelineDayStartMs(Math.max(fromMs, toMs - 1));
-    const pointsByDay = groupHealthTimelinePointsByLocalDay(timeline);
-    const cells: HealthTimelineCell[] = [];
-    const dayStarts: number[] = [];
-    for (let dayMs = startDayMs; dayMs <= endDayMs; dayMs += usageHealthTimelineDayMs) {
-      dayStarts.push(dayMs);
-    }
-    const groupSize = Math.max(1, Math.ceil(dayStarts.length / usageHealthTimelineMaxCompactCells));
-    const dayGroups: number[][] = [];
-    for (let index = 0; index < dayStarts.length; index += groupSize) {
-      dayGroups.push(dayStarts.slice(index, index + groupSize));
-    }
-    const maxGroupRequests = dayGroups.reduce(
-      (max, groupDays) =>
-        Math.max(
-          max,
-          groupDays
-            .flatMap((dayMs) => pointsByDay.get(dayMs) ?? [])
-            .reduce((sum, point) => sum + point.requestCount, 0)
-        ),
-      0
-    );
-
-    for (const groupDays of dayGroups) {
-      const bucketMs = groupDays[0];
-      const bucketEndMs = groupDays[groupDays.length - 1] + usageHealthTimelineDayMs;
-      const label =
-        groupDays.length > 1
-          ? `${formatTimelineDayLabel(bucketMs, locale)} - ${formatTimelineDayLabel(
-              groupDays[groupDays.length - 1],
-              locale
-            )}`
-          : formatTimelineDayLabel(bucketMs, locale);
-      const inRange = bucketEndMs > fromMs && bucketMs < toMs;
-      const cell = buildAggregatedHealthTimelineCell({
-        bucketMs,
-        bucketSizeMs: bucketEndMs - bucketMs,
-        inRange,
-        label,
-        maxRequests: maxGroupRequests,
-        points: groupDays.flatMap((dayMs) => pointsByDay.get(dayMs) ?? []),
-      });
-      cells.push(cell);
-    }
-
-    return {
-      cells,
-      mode: 'day',
-      rows: [{ cells, id: 'days', label: '' }],
-      summary,
-    };
-  }
-
-  const startDayMs = localTimelineDayStartMs(fromMs);
-  const endDayMs = localTimelineDayStartMs(Math.max(fromMs, toMs - 1));
-  const cells: HealthTimelineCell[] = [];
-
-  for (let dayMs = startDayMs; dayMs <= endDayMs; dayMs += usageHealthTimelineDayMs) {
-    const rowCells = Array.from({ length: 24 }, (_, hour) => {
-      const bucketMs = dayMs + hour * usageHealthTimelineHourMs;
-      const inRange = bucketMs + usageHealthTimelineHourMs > fromMs && bucketMs < toMs;
-      const cell = buildHealthTimelineCell({
-        bucketMs,
-        bucketSizeMs: usageHealthTimelineHourMs,
-        inRange,
-        label: formatTimelineHourLabel(bucketMs, locale),
-        maxRequests,
-        point: pointByBucket.get(bucketMs),
-      });
-      cells.push(cell);
-      return cell;
-    });
-    rows.push({
-      cells: rowCells,
-      id: String(dayMs),
-      label: formatTimelineDayLabel(dayMs, locale),
-    });
-  }
-
-  return { cells, mode: 'hour', rows, summary };
-};
-
-const buildHealthTimelineTitle = (
-  cell: HealthTimelineCell,
-  t: ReturnType<typeof useTranslation>['t']
-) =>
-  [
-    cell.label,
-    `${t('usage_analytics.health_timeline_status')}: ${t(healthToneLabelKeys[cell.tone])}`,
-    `${t('usage_analytics.metric_request_count')}: ${formatMetricValue(
-      'requestCount',
-      cell.requestCount
-    )}`,
-    `${t('usage_analytics.success_rate')}: ${formatPercent(cell.successRate)}`,
-    `${t('usage_analytics.failure_rate')}: ${formatPercent(cell.failureRate)}`,
-    `${t('usage_analytics.metric_average_latency')}: ${formatUsageDurationMs(
-      cell.averageLatencyMs
-    )}`,
-  ].join('\n');
-
-function RequestHealthTimeline({
-  bounds,
-  granularity,
-  timeline,
-}: {
-  bounds: { fromMs: number; toMs: number } | null;
-  granularity: UsageAnalyticsResolvedGranularity;
-  timeline: UsageTimelinePoint[];
-}) {
-  const { t, i18n } = useTranslation();
-  const matrix = useMemo(
-    () =>
-      buildHealthTimelineMatrix({
-        bounds,
-        granularity,
-        locale: i18n.language,
-        timeline,
-      }),
-    [bounds, granularity, i18n.language, timeline]
-  );
-  const { summary } = matrix;
-  const successRate = summary.requestCount > 0 ? summary.successCount / summary.requestCount : 0;
-  const failureRate = summary.requestCount > 0 ? summary.failureCount / summary.requestCount : 0;
-
-  if (matrix.cells.length === 0) {
-    return (
-      <div className={styles.chartEmptyInline}>
-        <IconInbox size={24} />
-        <span>{t('usage_analytics.empty_title')}</span>
-      </div>
-    );
-  }
-
-  return (
-    <div className={styles.healthTimelinePanel}>
-      <div className={styles.healthTimelineSummary}>
-        <strong>{formatPercent(successRate)}</strong>
-        <div className={styles.healthTimelineCounts}>
-          <span>
-            <i className={styles.healthTimelineGood} />{' '}
-            {formatMetricValue('requestCount', summary.successCount)}
-          </span>
-          <span>
-            <i className={styles.healthTimelineBad} />{' '}
-            {formatMetricValue('requestCount', summary.failureCount)}
-          </span>
-          <span>{formatPercent(failureRate)}</span>
-        </div>
-      </div>
-
-      {matrix.mode === 'hour' ? (
-        <div
-          className={styles.healthTimelineMatrix}
-          role="list"
-          aria-label={t('usage_analytics.health_timeline_title')}
-        >
-          <div className={styles.healthTimelineHourAxis}>
-            {usageHealthTimelineHourLabels.map((hour) => (
-              <span key={hour} style={{ gridColumn: hour + 2 }}>
-                {String(hour).padStart(2, '0')}
-              </span>
-            ))}
-          </div>
-          {matrix.rows.map((row) => (
-            <div key={row.id} className={styles.healthTimelineRow}>
-              <span className={styles.healthTimelineRowLabel}>{row.label}</span>
-              <div className={styles.healthTimelineCells}>
-                {row.cells.map((cell) => {
-                  const title = buildHealthTimelineTitle(cell, t);
-                  return (
-                    <span
-                      key={cell.id}
-                      role="listitem"
-                      className={`${styles.healthTimelineCell} ${
-                        styles[healthToneClassMap[cell.tone]]
-                      }`}
-                      style={{ '--cell-intensity': cell.intensity } as HealthCellStyle}
-                      title={title}
-                      aria-label={title}
-                    />
-                  );
-                })}
-              </div>
-            </div>
-          ))}
-        </div>
-      ) : (
-        <div
-          className={styles.healthTimelineDayGrid}
-          role="list"
-          aria-label={t('usage_analytics.health_timeline_title')}
-        >
-          {matrix.cells.map((cell) => {
-            const title = buildHealthTimelineTitle(cell, t);
-            return (
-              <span
-                key={cell.id}
-                role="listitem"
-                className={`${styles.healthTimelineCell} ${styles[healthToneClassMap[cell.tone]]}`}
-                style={{ '--cell-intensity': cell.intensity } as HealthCellStyle}
-                title={title}
-                aria-label={title}
-              />
-            );
-          })}
-        </div>
-      )}
-
-      <div className={styles.healthTimelineLegend}>
-        {(['empty', 'good', 'warn', 'bad', 'outside'] as HealthTimelineTone[]).map((tone) => (
-          <span key={tone}>
-            <i className={styles[healthToneClassMap[tone]]} />
-            {t(healthToneLabelKeys[tone])}
-          </span>
-        ))}
-      </div>
-    </div>
   );
 }
 
@@ -2510,51 +2008,6 @@ function EntityTrendChart({
   );
 }
 
-function InsightsPanel({
-  insights,
-  onOpen,
-  className,
-}: {
-  insights: UsageInsight[];
-  onOpen: (tab: UsageAnalyticsTab) => void;
-  className?: string;
-}) {
-  const { t } = useTranslation();
-  return (
-    <div className={`${styles.panel}${className ? ` ${className}` : ''}`}>
-      <div className={styles.panelHeader}>
-        <div>
-          <h2>{t('usage_analytics.insights_title')}</h2>
-          <p>{t('usage_analytics.insights_hint')}</p>
-        </div>
-      </div>
-      {insights.length === 0 ? (
-        <div className={styles.inlineEmpty}>
-          <IconCheck size={22} />
-          <span>{t('usage_analytics.insights_empty')}</span>
-        </div>
-      ) : (
-        <div className={styles.insightList}>
-          {insights.map((insight) => (
-            <button
-              key={insight.id}
-              type="button"
-              className={`${styles.insightItem} ${styles[`insight${insight.tone}`]}`}
-              onClick={() => insight.actionTab && onOpen(insight.actionTab)}
-            >
-              <span>
-                <IconEye size={16} />
-              </span>
-              <strong>{t(insight.titleKey)}</strong>
-              <em>{t(insight.bodyKey)}</em>
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
 function KeyAnomalyTable({
   locale,
   rows,
@@ -2684,116 +2137,91 @@ function ApiKeyContextTable({ locale, rows }: { locale: string; rows: UsageApiKe
   );
 }
 
-function CredentialQuotaTable({
-  locale,
+function ProviderOverviewPanel({
   rows,
+  onOpen,
 }: {
-  locale: string;
-  rows: UsageCredentialQuotaRow[];
+  rows: UsageProviderRow[];
+  onOpen: (row: UsageProviderRow) => void;
 }) {
   const { t } = useTranslation();
+  const visibleRows = useMemo(
+    () =>
+      [...rows]
+        .sort(
+          (left, right) =>
+            right.estimatedCost - left.estimatedCost ||
+            right.requestCount - left.requestCount ||
+            left.label.localeCompare(right.label)
+        )
+        .slice(0, 8),
+    [rows]
+  );
+
   return (
     <div className={styles.tableWrap}>
-      <table className={styles.compactTable}>
-        <thead>
-          <tr>
-            <th>{t('usage_analytics.col_credential')}</th>
-            <th>{t('usage_analytics.col_plan')}</th>
-            <th>{t('usage_analytics.col_status')}</th>
-            <th>{t('usage_analytics.col_used_quota')}</th>
-            <th>{t('usage_analytics.col_remaining_quota')}</th>
-            <th>{t('usage_analytics.col_reset_at')}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.length === 0 ? (
+      {visibleRows.length === 0 ? (
+        <div className={styles.inlineEmpty}>
+          <IconInbox size={22} />
+          <span>{t('usage_analytics.empty_title')}</span>
+        </div>
+      ) : (
+        <table className={`${styles.compactTable} ${styles.providerOverviewTable}`}>
+          <thead>
             <tr>
-              <td colSpan={6}>{t('usage_analytics.empty_title')}</td>
+              <th>{t('usage_analytics.credential_identity_provider')}</th>
+              <th>{t('usage_analytics.metric_request_count')}</th>
+              <th>{t('usage_analytics.provider_request_share')}</th>
+              <th>{t('usage_analytics.metric_estimated_cost')}</th>
+              <th>{t('usage_analytics.provider_cost_share')}</th>
+              <th>{t('usage_analytics.metric_total_tokens')}</th>
+              <th>{t('usage_analytics.success_rate')}</th>
+              <th>{t('usage_analytics.cache_read_rate')}</th>
+              <th>{t('usage_analytics.provider_top_model')}</th>
+              <th>{t('usage_analytics.col_action')}</th>
             </tr>
-          ) : (
-            rows.map((row) => (
-              <tr key={row.id}>
-                <td>{row.label}</td>
-                <td>{row.plan}</td>
-                <td>
-                  <span className={`${styles.quotaStatus} ${styles[`quota${row.status}`]}`}>
-                    {t(`usage_analytics.quota_status_${row.status}`)}
-                  </span>
-                </td>
-                <td>
-                  <span className={styles.quotaMeter}>
-                    <i style={{ width: `${Math.min(100, row.usedRate * 100)}%` }} />
-                    <b>{formatQuotaValue(row.used)}</b>
-                  </span>
-                </td>
-                <td>{formatQuotaValue(row.remaining)}</td>
-                <td>{formatLocalDateTime(row.resetAtMs, locale)}</td>
-              </tr>
-            ))
-          )}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-function ProviderHealthPanel({ rows }: { rows: UsageProviderRow[] }) {
-  const { t } = useTranslation();
-  return (
-    <div className={styles.providerList}>
-      {rows.length === 0 ? (
-        <div className={styles.inlineEmpty}>
-          <IconInbox size={22} />
-          <span>{t('usage_analytics.empty_title')}</span>
-        </div>
-      ) : (
-        rows.slice(0, 6).map((row) => (
-          <div key={row.id} className={styles.providerItem}>
-            <div>
-              <strong>{row.label}</strong>
-              <span>
-                {compactNumber(row.requestCount)} ·{' '}
-                {formatMetricValue('estimatedCost', row.estimatedCost)}
-              </span>
-            </div>
-            <span className={styles.providerMeter}>
-              <i style={{ width: `${Math.min(100, row.successRate * 100)}%` }} />
-              <b>{formatPercent(row.successRate)}</b>
-            </span>
-            <span className={styles.providerMeter}>
-              <i style={{ width: `${Math.min(100, row.cacheRate * 100)}%` }} />
-              <b>{formatPercent(row.cacheRate)}</b>
-            </span>
-          </div>
-        ))
-      )}
-    </div>
-  );
-}
-
-function ProviderSharePanel({ rows }: { rows: UsageProviderRow[] }) {
-  const { t } = useTranslation();
-  const chartTheme = useUsageChartTheme();
-  return (
-    <div className={styles.providerShareList}>
-      {rows.length === 0 ? (
-        <div className={styles.inlineEmpty}>
-          <IconInbox size={22} />
-          <span>{t('usage_analytics.empty_title')}</span>
-        </div>
-      ) : (
-        rows.slice(0, 6).map((row, index) => (
-          <span key={row.id}>
-            <i
-              style={{
-                backgroundColor:
-                  chartTheme.categoryPalette[index % chartTheme.categoryPalette.length],
-              }}
-            />
-            <b>{row.label}</b>
-            <em>{formatPercent(row.share)}</em>
-          </span>
-        ))
+          </thead>
+          <tbody>
+            {visibleRows.map((row) => {
+              const topModel = row.models[0];
+              return (
+                <tr key={row.id}>
+                  <td>
+                    <strong>{row.label}</strong>
+                  </td>
+                  <td>{formatMetricValue('requestCount', row.requestCount)}</td>
+                  <td>{formatPercent(row.requestShare)}</td>
+                  <td>{formatMetricValue('estimatedCost', row.estimatedCost)}</td>
+                  <td>{formatPercent(row.costShare)}</td>
+                  <td>{formatMetricValue('totalTokens', row.totalTokens)}</td>
+                  <td
+                    className={
+                      row.requestCount > 0 && row.successRate < USAGE_SUCCESS_RATE_WATCH_THRESHOLD
+                        ? styles.tonebad
+                        : ''
+                    }
+                  >
+                    {formatPercent(row.successRate)}
+                  </td>
+                  <td>{formatPercent(row.cacheRate)}</td>
+                  <td title={topModel?.label ?? '-'}>
+                    {topModel
+                      ? `${topModel.label} · ${formatMetricValue(
+                          'estimatedCost',
+                          topModel.estimatedCost
+                        )}`
+                      : '-'}
+                  </td>
+                  <td>
+                    <button type="button" className={styles.linkButton} onClick={() => onOpen(row)}>
+                      {t('usage_analytics.view_request_details')}
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
       )}
     </div>
   );
@@ -3020,10 +2448,6 @@ function UsageAnalyticsPageInner() {
     () => usage.timeline.reduce((sum, point) => sum + point.reasoningTokens, 0),
     [usage.timeline]
   );
-  const providerOverviewRows = useMemo(
-    () => mapProviderRowsToRankRows(usage.providerRows),
-    [usage.providerRows]
-  );
 
   const overviewAnomalySummary = useMemo(
     () => summarizeAnomalies(usage.anomalyPoints, { minRequests: 10, limit: 5 }),
@@ -3128,6 +2552,18 @@ function UsageAnalyticsPageInner() {
       timeRange: 'custom',
       customRange: { startMs, endMs },
     });
+  };
+  const openProviderDetails = (row: UsageProviderRow) => {
+    if (!usage.bounds) {
+      navigate(`/monitoring?provider=${encodeURIComponent(row.id.toLowerCase())}`);
+      return;
+    }
+    navigate(
+      buildMonitoringDetailUrl(
+        { bucketMs: usage.bounds.fromMs, bucketEndMs: usage.bounds.toMs },
+        { ...usage.filters, provider: row.id }
+      )
+    );
   };
 
   return (
@@ -3348,45 +2784,26 @@ function UsageAnalyticsPageInner() {
         <>
           <UsageSummarySection cards={overviewSummaryCards} />
 
-          <section className={styles.overviewHeroGrid}>
-            <div className={styles.chartPanel}>
-              <div className={styles.panelHeader}>
-                <div>
-                  <h2>{t('usage_analytics.overview_trend_title')}</h2>
-                  <p>{t('usage_analytics.overview_trend_hint')}</p>
-                </div>
+          <section className={styles.chartPanel}>
+            <div className={styles.panelHeader}>
+              <div>
+                <h2>{t('usage_analytics.overview_trend_title')}</h2>
+                <p>{t('usage_analytics.overview_trend_hint')}</p>
               </div>
-              <UsageLineChart
-                timeline={usage.timeline}
-                selectedMetrics={DEFAULT_SELECTED_METRICS}
-                selectedBucket={usage.selectedBucket}
-                onSelectBucket={usage.selectBucket}
-                compact
-              />
             </div>
-            <div className={styles.panel}>
-              <div className={styles.panelHeader}>
-                <div>
-                  <h2>{t('usage_analytics.health_timeline_title')}</h2>
-                  <p>{t('usage_analytics.health_timeline_hint')}</p>
-                </div>
-              </div>
-              <RequestHealthTimeline
-                timeline={usage.timeline}
-                bounds={usage.bounds}
-                granularity={usage.resolvedGranularity}
-              />
-            </div>
+            <UsageLineChart
+              timeline={usage.timeline}
+              selectedMetrics={DEFAULT_SELECTED_METRICS}
+              selectedBucket={usage.selectedBucket}
+              onSelectBucket={usage.selectBucket}
+            />
           </section>
 
-          <section className={styles.analysisGrid}>
-            <AnomalyPointsPanel
-              rows={overviewAnomalySummary}
-              onOpen={(row) => navigate(buildMonitoringDetailUrl(row, usage.filters))}
-              onViewAll={() => usage.setActiveTab('trends')}
-            />
-            <InsightsPanel insights={usage.insights} onOpen={usage.setActiveTab} />
-          </section>
+          <AnomalyPointsPanel
+            rows={overviewAnomalySummary}
+            onOpen={(row) => navigate(buildMonitoringDetailUrl(row, usage.filters))}
+            onViewAll={() => usage.setActiveTab('trends')}
+          />
 
           <section className={styles.overviewCards}>
             <OverviewCard
@@ -3399,37 +2816,16 @@ function UsageAnalyticsPageInner() {
               rows={usage.apiKeyRows}
               onViewAll={() => usage.setActiveTab('apiKeys')}
             />
-            <OverviewCard
-              title={t('usage_analytics.provider_overview_title')}
-              rows={providerOverviewRows}
-              onViewAll={() => usage.setActiveTab('credentials')}
-            />
           </section>
 
-          <section className={styles.analysisGrid}>
-            <div className={styles.sidePanels}>
-              <div className={styles.panel}>
-                <div className={styles.panelHeader}>
-                  <h2>{t('usage_analytics.provider_usage_share_title')}</h2>
-                </div>
-                <ProviderSharePanel rows={usage.providerRows} />
-              </div>
-              <div className={styles.panel}>
-                <div className={styles.panelHeader}>
-                  <h2>{t('usage_analytics.provider_health_title')}</h2>
-                </div>
-                <ProviderHealthPanel rows={usage.providerRows} />
+          <section className={styles.tablePanel}>
+            <div className={styles.panelHeader}>
+              <div>
+                <h2>{t('usage_analytics.provider_overview_title')}</h2>
+                <p>{t('usage_analytics.provider_overview_hint')}</p>
               </div>
             </div>
-            <div className={styles.tablePanel}>
-              <div className={styles.panelHeader}>
-                <div>
-                  <h2>{t('usage_analytics.quota_status_title')}</h2>
-                  <p>{t('usage_analytics.quota_status_hint')}</p>
-                </div>
-              </div>
-              <CredentialQuotaTable rows={usage.credentialQuotaRows} locale={i18n.language} />
-            </div>
+            <ProviderOverviewPanel rows={usage.providerRows} onOpen={openProviderDetails} />
           </section>
 
           {usage.selectedBucket ? (
