@@ -4,6 +4,7 @@ set -euo pipefail
 app_name="cpa-manager-plus"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 binary="${CPA_MANAGER_PLUS_BIN:-"${script_dir}/${app_name}"}"
+binary_name="$(basename "${binary}")"
 run_dir="${CPA_MANAGER_PLUS_RUN_DIR:-"${script_dir}/run"}"
 log_dir="${CPA_MANAGER_PLUS_LOG_DIR:-"${script_dir}/logs"}"
 pid_file="${CPA_MANAGER_PLUS_PID_FILE:-"${run_dir}/${app_name}.pid"}"
@@ -46,12 +47,51 @@ is_pid_running() {
   kill -0 "${pid}" >/dev/null 2>&1
 }
 
+resolve_path() {
+  local path="$1"
+  if command -v realpath >/dev/null 2>&1; then
+    realpath "${path}" 2>/dev/null || printf '%s\n' "${path}"
+    return
+  fi
+  if command -v readlink >/dev/null 2>&1; then
+    readlink -f "${path}" 2>/dev/null || printf '%s\n' "${path}"
+    return
+  fi
+  printf '%s\n' "${path}"
+}
+
+pid_matches_binary() {
+  local pid="$1"
+  local resolved_binary resolved_process comm
+
+  if ! is_pid_running "${pid}"; then
+    return 1
+  fi
+
+  resolved_binary="$(resolve_path "${binary}")"
+
+  if [ -L "/proc/${pid}/exe" ]; then
+    resolved_process="$(resolve_path "/proc/${pid}/exe")"
+    [ "${resolved_process}" = "${resolved_binary}" ] && return 0
+    return 1
+  fi
+
+  comm="$(ps -p "${pid}" -o comm= 2>/dev/null | awk '{$1=$1;print}')"
+  case "${comm}" in
+    "${binary}" | "${resolved_binary}" | "${binary_name}" | */"${binary_name}")
+      return 0
+      ;;
+  esac
+
+  return 1
+}
+
 running_pid() {
   local pid
   if ! pid="$(read_pid)"; then
     return 1
   fi
-  if is_pid_running "${pid}"; then
+  if pid_matches_binary "${pid}"; then
     printf '%s\n' "${pid}"
     return 0
   fi
@@ -78,7 +118,7 @@ start_app() {
   printf '%s\n' "${pid}" >"${pid_file}"
 
   sleep 1
-  if is_pid_running "${pid}"; then
+  if pid_matches_binary "${pid}"; then
     echo "${app_name} started with PID ${pid}"
     echo "Log: ${log_file}"
     return 0
@@ -99,7 +139,7 @@ stop_app() {
     return 0
   fi
 
-  if ! is_pid_running "${pid}"; then
+  if ! pid_matches_binary "${pid}"; then
     rm -f "${pid_file}"
     echo "Removed stale PID file for ${app_name}"
     return 0
@@ -107,7 +147,7 @@ stop_app() {
 
   kill "${pid}"
   for _ in 1 2 3 4 5 6 7 8 9 10; do
-    if ! is_pid_running "${pid}"; then
+    if ! pid_matches_binary "${pid}"; then
       rm -f "${pid_file}"
       echo "${app_name} stopped"
       return 0

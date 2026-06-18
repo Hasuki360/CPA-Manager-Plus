@@ -3,6 +3,7 @@ $ErrorActionPreference = 'Stop'
 $AppName = 'cpa-manager-plus'
 $ScriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
 $Binary = if ($env:CPA_MANAGER_PLUS_BIN) { $env:CPA_MANAGER_PLUS_BIN } else { Join-Path $ScriptDir "$AppName.exe" }
+$BinaryName = [System.IO.Path]::GetFileName($Binary)
 $RunDir = if ($env:CPA_MANAGER_PLUS_RUN_DIR) { $env:CPA_MANAGER_PLUS_RUN_DIR } else { Join-Path $ScriptDir 'run' }
 $LogDir = if ($env:CPA_MANAGER_PLUS_LOG_DIR) { $env:CPA_MANAGER_PLUS_LOG_DIR } else { Join-Path $ScriptDir 'logs' }
 $PidFile = if ($env:CPA_MANAGER_PLUS_PID_FILE) { $env:CPA_MANAGER_PLUS_PID_FILE } else { Join-Path $RunDir "$AppName.pid" }
@@ -61,6 +62,33 @@ function Get-RunningProcess {
   }
 }
 
+function Test-ProcessMatchesBinary {
+  param([System.Diagnostics.Process]$Process)
+
+  if (-not $Process) {
+    return $false
+  }
+
+  try {
+    $path = $Process.MainModule.FileName
+    if ($path) {
+      return ([System.IO.Path]::GetFullPath($path) -ieq [System.IO.Path]::GetFullPath($Binary))
+    }
+  } catch {
+  }
+
+  return ($Process.ProcessName -ieq [System.IO.Path]::GetFileNameWithoutExtension($BinaryName))
+}
+
+function Get-MatchingProcess {
+  $process = Get-RunningProcess
+  if ($process -and (Test-ProcessMatchesBinary -Process $process)) {
+    return $process
+  }
+
+  return $null
+}
+
 function Start-App {
   param([string[]]$AppArgs)
 
@@ -68,7 +96,7 @@ function Start-App {
     throw "Binary does not exist: $Binary"
   }
 
-  $process = Get-RunningProcess
+  $process = Get-MatchingProcess
   if ($process) {
     Write-Host "$AppName is already running with PID $($process.Id)"
     return
@@ -93,7 +121,7 @@ function Start-App {
   Set-Content -LiteralPath $PidFile -Value $process.Id
   Start-Sleep -Seconds 1
 
-  if (Get-RunningProcess) {
+  if (Get-MatchingProcess) {
     Write-Host "$AppName started with PID $($process.Id)"
     Write-Host "Log: $LogFile"
     Write-Host "Error log: $ErrLogFile"
@@ -111,7 +139,7 @@ function Stop-App {
     return
   }
 
-  $process = Get-RunningProcess
+  $process = Get-MatchingProcess
   if (-not $process) {
     Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
     Write-Host "Removed stale PID file for $AppName"
@@ -121,7 +149,7 @@ function Stop-App {
   Stop-Process -Id $process.Id
   for ($i = 0; $i -lt 10; $i++) {
     Start-Sleep -Seconds 1
-    if (-not (Get-RunningProcess)) {
+    if (-not (Get-MatchingProcess)) {
       Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
       Write-Host "$AppName stopped"
       return
@@ -132,7 +160,7 @@ function Stop-App {
 }
 
 function Show-Status {
-  $process = Get-RunningProcess
+  $process = Get-MatchingProcess
   if ($process) {
     Write-Host "$AppName is running with PID $($process.Id)"
     Write-Host "PID file: $PidFile"
