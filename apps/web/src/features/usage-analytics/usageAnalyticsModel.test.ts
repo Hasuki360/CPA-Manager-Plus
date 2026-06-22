@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { MonitoringAnalyticsResponse } from '@/services/api/usageService';
+import { buildSourceInfoMap } from '@/utils/sourceResolver';
 import type { UsageRankRow } from './usageAnalyticsModel';
 import {
   analyzeUsageBucket,
   buildApiKeyRows,
+  buildCredentialRows,
   buildSelectedApiKeyTrendSeries,
   buildSelectedCredentialTrendSeries,
   buildDrilldownPreview,
@@ -392,6 +394,82 @@ describe('usage analytics adapters', () => {
     expect(result).toHaveLength(1);
     expect(result[0].id).toBe('credential-a');
     expect(result[0].points.map((point) => point.value)).toEqual([3, 5]);
+  });
+
+  it('resolves credential labels from the same source metadata as request monitoring', () => {
+    const credentialDisplayContext = {
+      authMetaMap: new Map(),
+      authFileMap: new Map(),
+      sourceInfoMap: buildSourceInfoMap({
+        codexApiKeys: [{ apiKey: 'sk-Key-secret-e9GW', prefix: 'Codex Team Key' }],
+      }),
+      channelByAuthIndex: new Map(),
+    };
+
+    const credentialRows = buildCredentialRows(
+      [
+        {
+          id: 'source-hash-a',
+          source: 'm:sk-K...e9GW',
+          source_hash: 'source-hash-a',
+          auth_index: '',
+          auth_file_snapshot: '',
+          account_snapshot: '',
+          auth_label_snapshot: '',
+          auth_provider_snapshot: 'codex',
+          calls: 3,
+          success_calls: 3,
+          failure_calls: 0,
+          success_rate: 1,
+          input_tokens: 100,
+          output_tokens: 20,
+          cached_tokens: 0,
+          cache_read_tokens: 0,
+          cache_creation_tokens: 0,
+          total_tokens: 120,
+          cost: 0.12,
+          average_latency_ms: null,
+          last_seen_ms: NOW_MS,
+        },
+      ],
+      undefined,
+      credentialDisplayContext
+    );
+    const credentialTimeline = buildUsageCredentialTimeline(
+      [
+        {
+          id: 'source-hash-a',
+          source: 'm:sk-K...e9GW',
+          source_hash: 'source-hash-a',
+          auth_index: '',
+          auth_file_snapshot: '',
+          account_snapshot: '',
+          auth_label_snapshot: '',
+          auth_provider_snapshot: 'codex',
+          bucket_ms: NOW_MS,
+          bucket_label: '06/04',
+          calls: 3,
+          tokens: 120,
+          success: 3,
+          failure: 0,
+          total_tokens: 120,
+          cost: 0.12,
+        },
+      ],
+      'hour',
+      credentialDisplayContext
+    );
+
+    expect(credentialRows[0]).toMatchObject({
+      id: 'source-hash-a',
+      label: 'Codex Team Key',
+      provider: 'codex',
+    });
+    expect(credentialRows[0].label).not.toContain('m:sk-K');
+    expect(credentialTimeline[0]).toMatchObject({
+      id: 'source-hash-a',
+      label: 'Codex Team Key',
+    });
   });
 
   it('does not estimate selected credential trend when backend timeline is missing', () => {

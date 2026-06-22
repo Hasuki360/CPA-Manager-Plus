@@ -3,7 +3,15 @@ import { useSearchParams } from 'react-router-dom';
 import { useMonitoringAnalytics } from '@/features/monitoring/hooks/useMonitoringAnalytics';
 import { useUsageData } from '@/features/monitoring/hooks/useUsageData';
 import { buildApiKeyDisplayMap } from '@/features/monitoring/model/apiKeys';
+import { buildMonitoringAuthMetaMap } from '@/features/monitoring/model/authMeta';
+import { readString } from '@/features/monitoring/model/base';
+import type { MonitoringChannelMeta } from '@/features/monitoring/model/types';
+import { loadMonitoringMetaPayload } from '@/features/monitoring/services/monitoringMetaService';
 import { useConfigStore } from '@/stores';
+import type { AuthFileItem } from '@/types/authFile';
+import type { CredentialInfo } from '@/types/sourceInfo';
+import { buildSourceInfoMap } from '@/utils/sourceResolver';
+import { normalizeAuthIndex } from '@/utils/usage';
 import {
   adaptUsageAnalyticsData,
   analyzeUsageBucket,
@@ -38,6 +46,7 @@ import {
   type UsageHeatmapMetricKey,
   type UsageHeatmapScaleMode,
   type UsageTimelinePoint,
+  type UsageCredentialDisplayContext,
 } from './usageAnalyticsModel';
 import {
   buildUsageAnalyticsSearchParams,
@@ -49,6 +58,16 @@ import {
 
 const USAGE_SEARCH_DEBOUNCE_MS = 350;
 const USAGE_HEATMAP_ALL_DATES_KEY = 'all';
+
+type UsageAnalyticsMonitoringMeta = {
+  authFiles: AuthFileItem[];
+  channels: MonitoringChannelMeta[];
+};
+
+const EMPTY_USAGE_ANALYTICS_MONITORING_META: UsageAnalyticsMonitoringMeta = {
+  authFiles: [],
+  channels: [],
+};
 
 const getBrowserTimeZone = () => {
   if (typeof Intl === 'undefined') return 'UTC';
@@ -69,6 +88,9 @@ function useDebouncedValue<T>(value: T, delayMs: number): T {
 export function useUsageAnalytics() {
   const config = useConfigStore((state) => state.config);
   const { apiKeyAliases, loadApiKeyAliases } = useUsageData({ loadUsageEvents: false });
+  const [monitoringMeta, setMonitoringMeta] = useState<UsageAnalyticsMonitoringMeta>(
+    EMPTY_USAGE_ANALYTICS_MONITORING_META
+  );
   const [searchParams, setSearchParams] = useSearchParams();
   const [initialUiState] = useState<UsageAnalyticsUiState>(() =>
     buildUsageAnalyticsUiStateFromSearchParams(
@@ -100,6 +122,82 @@ export function useUsageAnalytics() {
   const apiKeyDisplayMap = useMemo(
     () => buildApiKeyDisplayMap(config?.apiKeys || [], apiKeyAliases || []),
     [apiKeyAliases, config?.apiKeys]
+  );
+  const loadMonitoringMeta = useCallback(async () => {
+    const payload = await loadMonitoringMetaPayload(config);
+    setMonitoringMeta({
+      authFiles: payload.authFiles,
+      channels: payload.channels,
+    });
+  }, [config]);
+  useEffect(() => {
+    let cancelled = false;
+    loadMonitoringMetaPayload(config)
+      .then((payload) => {
+        if (cancelled) return;
+        setMonitoringMeta({
+          authFiles: payload.authFiles,
+          channels: payload.channels,
+        });
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setMonitoringMeta(EMPTY_USAGE_ANALYTICS_MONITORING_META);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [config]);
+  const authMetaMap = useMemo(
+    () => buildMonitoringAuthMetaMap(monitoringMeta.authFiles),
+    [monitoringMeta.authFiles]
+  );
+  const authFileMap = useMemo(() => {
+    const map = new Map<string, CredentialInfo>();
+    monitoringMeta.authFiles.forEach((entry) => {
+      const authIndex = normalizeAuthIndex(entry['auth_index'] ?? entry.authIndex);
+      if (!authIndex) return;
+      map.set(authIndex, {
+        name:
+          readString(entry.label) ||
+          readString(entry.name) ||
+          readString(entry.email) ||
+          readString(entry.account) ||
+          authIndex,
+        type: readString(entry.provider) || readString(entry.type),
+      });
+    });
+    return map;
+  }, [monitoringMeta.authFiles]);
+  const sourceInfoMap = useMemo(
+    () =>
+      buildSourceInfoMap({
+        geminiApiKeys: config?.geminiApiKeys || [],
+        claudeApiKeys: config?.claudeApiKeys || [],
+        codexApiKeys: config?.codexApiKeys || [],
+        vertexApiKeys: config?.vertexApiKeys || [],
+        openaiCompatibility: config?.openaiCompatibility || [],
+      }),
+    [config]
+  );
+  const channelByAuthIndex = useMemo(() => {
+    const map = new Map<string, MonitoringChannelMeta>();
+    monitoringMeta.channels.forEach((channel) => {
+      channel.authIndices.forEach((authIndex) => {
+        map.set(authIndex, channel);
+      });
+    });
+    return map;
+  }, [monitoringMeta.channels]);
+  const credentialDisplayContext = useMemo<UsageCredentialDisplayContext>(
+    () => ({
+      authMetaMap,
+      authFileMap,
+      sourceInfoMap,
+      channelByAuthIndex,
+    }),
+    [authFileMap, authMetaMap, channelByAuthIndex, sourceInfoMap]
   );
   const setActiveTab = useCallback((tab: UsageAnalyticsTab) => {
     setActiveTabState(tab);
@@ -219,9 +317,16 @@ export function useUsageAnalytics() {
         analyticsData,
         resolvedGranularity,
         filters.apiKeyKeyword,
-        apiKeyDisplayMap
+        apiKeyDisplayMap,
+        credentialDisplayContext
       ),
-    [analyticsData, apiKeyDisplayMap, filters.apiKeyKeyword, resolvedGranularity]
+    [
+      analyticsData,
+      apiKeyDisplayMap,
+      credentialDisplayContext,
+      filters.apiKeyKeyword,
+      resolvedGranularity,
+    ]
   );
   const heatmapDateData = heatmapDateAnalytics.dataStale ? null : heatmapDateAnalytics.data;
   const heatmapDateRows = useMemo(
@@ -430,6 +535,7 @@ export function useUsageAnalytics() {
   const refresh = useCallback(() => {
     setNowMs(Date.now());
     void loadApiKeyAliases();
+    void loadMonitoringMeta();
     void analytics.refresh({ force: true });
     if (selectedApiKeyTimelineAnalytics.enabled) {
       void selectedApiKeyTimelineAnalytics.refresh({ force: true });
@@ -441,6 +547,7 @@ export function useUsageAnalytics() {
     analytics,
     heatmapDateAnalytics,
     loadApiKeyAliases,
+    loadMonitoringMeta,
     selectedApiKeyTimelineAnalytics,
     selectedHeatmapDate,
   ]);
