@@ -15,6 +15,7 @@ const { mocks } = vi.hoisted(() => {
       showNotification: vi.fn(),
       showConfirmation: vi.fn(),
       navigate: vi.fn(),
+      pageTransitionStatus: 'current' as 'current' | 'exiting' | 'stacked',
       loadExcluded: vi.fn(async () => undefined),
       loadModelAlias: vi.fn(async () => undefined),
       listCodexInspectionRuns: vi.fn(),
@@ -67,7 +68,7 @@ vi.mock('@/hooks/useHeaderRefresh', () => ({
 }));
 
 vi.mock('@/components/common/PageTransitionLayer', () => ({
-  usePageTransitionLayer: () => ({ status: 'current' }),
+  usePageTransitionLayer: () => ({ status: mocks.pageTransitionStatus }),
 }));
 
 vi.mock('@/hooks/usePanelFeatureAvailability', () => ({
@@ -299,6 +300,7 @@ describe('AuthFilesPage quota cooldown derived badge', () => {
     mocks.getCodexInspectionRun.mockReset();
     mocks.connectionStatus = 'connected';
     mocks.managementKey = 'test-key';
+    mocks.pageTransitionStatus = 'current';
 
     mocks.list.mockReturnValue([
       { name: 'codex-one.json', type: 'codex' },
@@ -479,6 +481,47 @@ describe('AuthFilesPage quota cooldown derived badge', () => {
         'data-quota-cooldown'
       ]
     ).toBe('codex-two.json@1700000000000');
+  });
+
+  it('drops stale cooldown when base changes before the next loader runs', async () => {
+    const first = createDeferred();
+    mocks.getActiveQuotaCooldowns.mockReturnValueOnce(first.promise);
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<AuthFilesPage />);
+    });
+
+    // Initial fetch is in flight against the original non-empty base.
+    await vi.waitFor(() => {
+      expect(mocks.getActiveQuotaCooldowns).toHaveBeenCalledTimes(1);
+    });
+
+    // Switch to another non-empty base, but mark the page as non-current so the
+    // passive effect that normally kicks off the next load is intentionally
+    // skipped. This isolates the review edge case: the old response returns
+    // after context changes but before any new loader can bump the token.
+    setManagerServiceBase('http://manager-two.local:18317');
+    mocks.pageTransitionStatus = 'stacked';
+    await act(async () => {
+      renderer!.update(<AuthFilesPage />);
+    });
+    expect(mocks.getActiveQuotaCooldowns).toHaveBeenCalledTimes(1);
+
+    // The old-context response lands before a new loader runs — it must be
+    // dropped by the layout-effect invalidation alone.
+    await act(async () => {
+      first.resolve([
+        { authFileName: 'codex-one.json', recoverAtMs: 2_000_000_000_000 },
+      ]);
+      await first.promise.catch(() => {});
+    });
+
+    expect(
+      renderer!.root.findByProps({ 'data-auth-card': 'codex-one.json' }).props[
+        'data-quota-cooldown'
+      ]
+    ).toBe('');
   });
 
   it('ignores mocked Select import for sort/plan dropdowns without crashing', () => {

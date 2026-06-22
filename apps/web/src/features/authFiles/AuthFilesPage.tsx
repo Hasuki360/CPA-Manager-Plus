@@ -184,10 +184,14 @@ export function AuthFilesPage() {
   const previousSelectionCountRef = useRef(0);
   const selectionCountRef = useRef(0);
   // Generation token for in-flight cooldown fetches. Every fetch and every
-  // context reset (Manager Server going unavailable) bump it, so a slow,
-  // superseded response can be detected and dropped — otherwise it would
-  // re-introduce stale badges after the clear effect emptied the map.
+  // context identity change bump it, so a slow, superseded response can be
+  // detected and dropped — otherwise it would re-introduce stale badges after
+  // the old context was invalidated.
   const cooldownReqId = useRef(0);
+  // Tracks the context identity so the layout effect can detect cross-context
+  // transitions synchronously (before passive effects fire) and invalidate any
+  // in-flight request that belongs to the old context.
+  const cooldownContextRef = useRef({ managerServiceBase, managementKey });
 
   const {
     files,
@@ -517,11 +521,9 @@ export function AuthFilesPage() {
   );
 
   const loadQuotaCooldowns = useCallback(async () => {
-    // Stamp this fetch with a fresh id so a later context change (Manager Server
-    // going unavailable or credentials rotating, which re-fire the loader or
-    // trip the clear effect below) can invalidate it. If a newer fetch or reset
-    // has bumped the id by the time we land, we drop the result instead of
-    // writing stale badges back.
+    // Stamp this fetch with a fresh id so a later fetch or context identity
+    // invalidation can supersede it. If the generation has changed by the time
+    // we land, we drop the result instead of writing stale badges back.
     const id = ++cooldownReqId.current;
     try {
       const items = await usageServiceApi.getActiveQuotaCooldowns(managerServiceBase, managementKey);
@@ -540,17 +542,22 @@ export function AuthFilesPage() {
     }
   }, [managerServiceBase, managementKey]);
 
-  // Clear stale cooldowns the moment the Manager Server becomes unavailable.
-  // The loader's call sites all guard on managerServiceBase, so without this
-  // the derived badge would linger after credentials change, the service goes
-  // down, or feature availability flips off.
-  useEffect(() => {
-    if (managerServiceBase) return;
-    // Bump the token to invalidate any in-flight fetch whose request context no
-    // longer applies, then drop the derived state so stale badges don't linger.
+  // Synchronously invalidate in-flight cooldown requests when the context
+  // (managerServiceBase or managementKey) changes, regardless of direction
+  // (A→B, A→empty, empty→A). This runs in the layout phase, before any
+  // passive effect that might fire a new loadQuotaCooldowns, so a stale
+  // response that resolves between renders or inside the gap between a
+  // re-render and its passive effects will find its generation token already
+  // invalidated.
+  useLayoutEffect(() => {
+    const prev = cooldownContextRef.current;
+    if (prev.managerServiceBase === managerServiceBase && prev.managementKey === managementKey) {
+      return;
+    }
+    cooldownContextRef.current = { managerServiceBase, managementKey };
     cooldownReqId.current += 1;
     setQuotaCooldowns((current) => (current.size === 0 ? current : new Map()));
-  }, [managerServiceBase]);
+  }, [managerServiceBase, managementKey]);
 
   useEffect(() => {
     if (!isCurrentLayer || !managerServiceBase) return;
