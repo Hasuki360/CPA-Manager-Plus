@@ -15,6 +15,7 @@ import { animate } from 'motion/mini';
 import type { AnimationPlaybackControlsWithThen } from 'motion-dom';
 import { useInterval } from '@/hooks/useInterval';
 import { useHeaderRefresh } from '@/hooks/useHeaderRefresh';
+import { usePanelFeatureAvailability } from '@/hooks/usePanelFeatureAvailability';
 import { usePageTransitionLayer } from '@/components/common/PageTransitionLayer';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -58,6 +59,7 @@ import { useAuthFilesModels } from '@/features/authFiles/hooks/useAuthFilesModel
 import { useAuthFilesOauth } from '@/features/authFiles/hooks/useAuthFilesOauth';
 import { useAuthFilesPrefixProxyEditor } from '@/features/authFiles/hooks/useAuthFilesPrefixProxyEditor';
 import { useAuthFilesStatusBarCache } from '@/features/authFiles/hooks/useAuthFilesStatusBarCache';
+import { useAntigravitySubscriptions } from '@/features/authFiles/hooks/useAntigravitySubscriptions';
 import {
   BATCH_BAR_BASE_TRANSFORM,
   BATCH_BAR_HIDDEN_TRANSFORM,
@@ -143,6 +145,7 @@ export function AuthFilesPage() {
   const managementKey = useAuthStore((state) => state.managementKey);
   const resolvedTheme: ResolvedTheme = useThemeStore((state) => state.resolvedTheme);
   const codexQuota = useQuotaStore((state) => state.codexQuota);
+  const featureAvailability = usePanelFeatureAvailability();
   const pageTransitionLayer = usePageTransitionLayer();
   const isCurrentLayer = pageTransitionLayer ? pageTransitionLayer.status === 'current' : true;
   const navigate = useNavigate();
@@ -374,13 +377,22 @@ export function AuthFilesPage() {
       ? loadCodexInspectionLastRun(connectionFingerprint)
       : null;
 
-    if (apiBase) {
+    const managerServiceBase = featureAvailability.managerServiceBase;
+    if (
+      !featureAvailability.checking &&
+      featureAvailability.serverCodexInspectionAvailable &&
+      managerServiceBase
+    ) {
       try {
-        const runs = await usageServiceApi.listCodexInspectionRuns(apiBase, managementKey, 1);
+        const runs = await usageServiceApi.listCodexInspectionRuns(
+          managerServiceBase,
+          managementKey,
+          1
+        );
         const latestRun = runs.items[0];
         if (latestRun) {
           const detail = await usageServiceApi.getCodexInspectionRun(
-            apiBase,
+            managerServiceBase,
             managementKey,
             latestRun.id
           );
@@ -393,7 +405,13 @@ export function AuthFilesPage() {
     }
 
     setLastCodexInspectionResults(lastRun?.result.results ?? []);
-  }, [apiBase, connectionFingerprint, managementKey]);
+  }, [
+    connectionFingerprint,
+    featureAvailability.checking,
+    featureAvailability.managerServiceBase,
+    featureAvailability.serverCodexInspectionAvailable,
+    managementKey,
+  ]);
 
   useEffect(() => {
     if (!isCurrentLayer) return;
@@ -680,7 +698,12 @@ export function AuthFilesPage() {
   const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize));
   const currentPage = Math.min(page, totalPages);
   const start = (currentPage - 1) * pageSize;
-  const pageItems = sorted.slice(start, start + pageSize);
+  const pageItems = useMemo(() => sorted.slice(start, start + pageSize), [pageSize, sorted, start]);
+  const antigravitySubscriptionItems = useMemo(
+    () => (normalizedFilter === 'antigravity' ? pageItems : []),
+    [normalizedFilter, pageItems]
+  );
+  const antigravitySubscriptions = useAntigravitySubscriptions(antigravitySubscriptionItems);
   const pageHasInlineQuotaCards = !compactMode && pageItems.some(hasInlineQuotaLayout);
   const selectablePageItems = useMemo(
     () => pageItems.filter((file) => !isRuntimeOnlyAuthFile(file)),
@@ -1231,6 +1254,7 @@ export function AuthFilesPage() {
                       statusBarCache={statusBarCache}
                       codexStatusBadges={codexStatus?.badges ?? []}
                       codexNeedsReauth={codexStatus?.needsReauth ?? false}
+                      antigravitySubscription={antigravitySubscriptions[file.name]}
                       onShowModels={showModels}
                       onReauth={(targetFile) =>
                         setCodexReauthTarget(createCodexReauthTargetFromAuthFile(targetFile))

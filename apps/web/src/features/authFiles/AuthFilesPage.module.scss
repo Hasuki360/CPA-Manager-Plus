@@ -976,6 +976,80 @@
   letter-spacing: 0;
 }
 
+.subscriptionBadge {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+  letter-spacing: 0;
+}
+
+.subscriptionBadgePaid {
+  color: #064e3b;
+  background: #ccfbf1;
+  border: 1px solid #5eead4;
+}
+
+.subscriptionBadgeFree {
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--surface-subtle) 86%, transparent);
+  border: 1px solid var(--border-subtle);
+}
+
+.subscriptionBadgeUnknown,
+.subscriptionBadgeLoading {
+  color: var(--info-text, #1e40af);
+  background: var(--info-bg, #dbeafe);
+  border: 1px solid var(--info-border, #93c5fd);
+}
+
+.subscriptionBadgeError {
+  color: var(--danger-color);
+  background: color-mix(in srgb, var(--danger-color) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--danger-color) 35%, transparent);
+}
+
+.subscriptionSubtitle {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  min-width: 0;
+}
+
+.subscriptionSubtitleLabel {
+  flex: 0 0 auto;
+  color: var(--text-tertiary);
+  font-weight: 600;
+}
+
+.subscriptionSubtitleValue {
+  @include text-ellipsis-multiline(2);
+  min-width: 0;
+  word-break: break-word;
+}
+
+.subscriptionError {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--danger-color);
+  background-color: color-mix(in srgb, var(--danger-color) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--danger-color) 28%, transparent);
+  border-radius: 10px;
+  padding: 8px 10px;
+  word-break: break-word;
+}
+
 .codexStatusBadgeDanger {
   color: var(--danger-color);
   background: color-mix(in srgb, var(--danger-color) 10%, var(--bg-primary));

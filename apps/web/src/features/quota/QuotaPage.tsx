@@ -15,7 +15,6 @@ import {
   ANTIGRAVITY_CONFIG,
   CLAUDE_CONFIG,
   CODEX_CONFIG,
-  GEMINI_CLI_CONFIG,
   KIMI_CONFIG,
   XAI_CONFIG
 } from '@/components/quota';
@@ -182,16 +181,6 @@ export function QuotaPage() {
         sortMode={sortMode}
         viewMode={getSectionViewMode(ANTIGRAVITY_CONFIG.type)}
         onViewModeChange={(viewMode) => setSectionViewMode(ANTIGRAVITY_CONFIG.type, viewMode)}
-      />
-      <QuotaSection
-        config={GEMINI_CLI_CONFIG}
-        files={files}
-        loading={loading}
-        disabled={disableControls}
-        searchQuery={searchQuery}
-        sortMode={sortMode}
-        viewMode={getSectionViewMode(GEMINI_CLI_CONFIG.type)}
-        onViewModeChange={(viewMode) => setSectionViewMode(GEMINI_CLI_CONFIG.type, viewMode)}
       />
       <QuotaSection
         config={KIMI_CONFIG}

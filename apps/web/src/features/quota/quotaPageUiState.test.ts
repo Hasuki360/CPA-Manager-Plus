@@ -56,7 +56,6 @@ describe('quotaPageUiState', () => {
     expect(normalizeQuotaSortMode('unknown')).toBe('default');
     expect(normalizeQuotaSectionViewMode('all')).toBe('all');
     expect(normalizeQuotaSectionViewMode('bad')).toBe('paged');
-    expect(normalizeQuotaSectionType('gemini-cli')).toBe('gemini-cli');
     expect(normalizeQuotaSectionType('xai')).toBe('xai');
     expect(normalizeQuotaSectionType('bad')).toBeNull();
   });
