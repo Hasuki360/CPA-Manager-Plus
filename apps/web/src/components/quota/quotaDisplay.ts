@@ -56,6 +56,6 @@ export const resolveQuotaAccountDisplayText = (
   return {
     primary: primary || full || '-',
     full: full || '-',
-    title: full || primary || '-',
+    title: displayMode === 'full' ? full || primary || '-' : primary || '-',
   };
 };

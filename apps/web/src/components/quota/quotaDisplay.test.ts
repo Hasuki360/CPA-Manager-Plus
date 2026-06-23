@@ -2,14 +2,15 @@ import { describe, expect, it } from 'vitest';
 import { maskQuotaAccountText, resolveQuotaAccountDisplayText } from './quotaDisplay';
 
 describe('quotaDisplay', () => {
-  it('masks email-like credential names while preserving full titles', () => {
+  it('masks email-like credential names and title text in masked mode', () => {
     const display = resolveQuotaAccountDisplayText(
       { name: 'very-long-account-name@example.com.json' },
       'masked'
     );
 
     expect(display.primary).toBe('ver***@example.com.json');
-    expect(display.title).toBe('very-long-account-name@example.com.json');
+    expect(display.title).toBe('ver***@example.com.json');
+    expect(display.title).not.toContain('very-long-account-name');
   });
 
   it('shows full credential names when full display mode is selected', () => {
