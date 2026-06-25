@@ -10,7 +10,9 @@ import {
   getHeaderSnapshotErrorCode,
   getHeaderSnapshotErrorKind,
   getHeaderSnapshotPlanType,
+  getHeaderSnapshotReachedWindowKind,
   getHeaderSnapshotRecoverAtMs,
+  getHeaderSnapshotSummaryWindowKind,
   getHeaderSnapshotTraceId,
   getHeaderSnapshotUsedPercent,
 } from '@/utils/usageHeaderSnapshots';
@@ -48,6 +50,7 @@ export const AUTH_FILES_CODEX_STATUS_FILTERS = [
   // Legacy URL/query value. The Auth Files UI now presents 401 as "needs reauth".
   'http_401',
   'reauth',
+  'quota_limited',
   'five_hour_limited',
   'weekly_limited',
   'monthly_limited',
@@ -89,6 +92,8 @@ export type AuthFileCodexStatusSummary = {
   isCodex: boolean;
   isHttp401: boolean;
   needsReauth: boolean;
+  isQuotaLimited: boolean;
+  isUnknownQuotaLimited: boolean;
   isFiveHourLimited: boolean;
   isWeeklyLimited: boolean;
   isMonthlyLimited: boolean;
@@ -302,6 +307,8 @@ export const getAuthFileCodexStatus = (
       isCodex: false,
       isHttp401: false,
       needsReauth: false,
+      isQuotaLimited: false,
+      isUnknownQuotaLimited: false,
       isFiveHourLimited: false,
       isWeeklyLimited: false,
       isMonthlyLimited: false,
@@ -331,6 +338,8 @@ export const getAuthFileCodexStatus = (
   const observedErrorKind = getHeaderSnapshotErrorKind(headerSnapshot);
   const observedErrorCode = getHeaderSnapshotErrorCode(headerSnapshot);
   const observedTraceID = getHeaderSnapshotTraceId(headerSnapshot);
+  const observedReachedWindowKind = getHeaderSnapshotReachedWindowKind(headerSnapshot);
+  const observedSummaryWindowKind = getHeaderSnapshotSummaryWindowKind(headerSnapshot);
   const observedRateLimitReachedType =
     typeof headerSnapshot?.response_metadata?.quota?.rate_limit_reached_type === 'string'
       ? headerSnapshot.response_metadata.quota.rate_limit_reached_type.trim()
@@ -339,6 +348,17 @@ export const getAuthFileCodexStatus = (
     (observedUsedPercent !== null && observedUsedPercent >= 100) ||
     Boolean(observedRateLimitReachedType) ||
     isObservedQuotaLimitError(observedErrorKind, observedErrorCode);
+  const observedLimitWindowKind =
+    observedReachedWindowKind ??
+    (observedUsedPercent !== null && observedUsedPercent >= 100
+      ? observedSummaryWindowKind
+      : null);
+  const observedFiveHourLimited =
+    observedQuotaLimited && observedLimitWindowKind === 'five_hour';
+  const observedWeeklyLimited =
+    observedQuotaLimited && observedLimitWindowKind === 'weekly';
+  const observedMonthlyLimited =
+    observedQuotaLimited && observedLimitWindowKind === 'monthly';
   const monthlyUsedPercent =
     monthlyWindowUsedPercent ?? (monthlyWindow ? inspectionUsedPercent : null);
   const longWindowUsedPercent = weeklyWindowUsedPercent ?? monthlyUsedPercent;
@@ -371,11 +391,17 @@ export const getAuthFileCodexStatus = (
   const isWeeklyLimited =
     (weeklyUsedPercent !== null && weeklyUsedPercent >= 100) ||
     (inspectionReachedQuota && !monthlyWindow) ||
-    (observedQuotaLimited && !weeklyWindow && !monthlyWindow);
+    observedWeeklyLimited;
   const isMonthlyLimited =
     (monthlyUsedPercent !== null && monthlyUsedPercent >= 100) ||
-    (inspectionReachedQuota && monthlyWindow !== null && !weeklyWindow);
-  const isFiveHourLimited = fiveHourUsedPercent !== null && fiveHourUsedPercent >= 100;
+    (inspectionReachedQuota && monthlyWindow !== null && !weeklyWindow) ||
+    observedMonthlyLimited;
+  const isFiveHourLimited =
+    (fiveHourUsedPercent !== null && fiveHourUsedPercent >= 100) || observedFiveHourLimited;
+  const isUnknownQuotaLimited =
+    observedQuotaLimited && !isFiveHourLimited && !isWeeklyLimited && !isMonthlyLimited;
+  const isQuotaLimited =
+    isFiveHourLimited || isWeeklyLimited || isMonthlyLimited || isUnknownQuotaLimited;
   const recoveryResetLabel =
     (isMonthlyLimited && monthlyResetLabel) ||
     (isWeeklyLimited && weeklyResetLabel) ||
@@ -483,6 +509,8 @@ export const getAuthFileCodexStatus = (
     isCodex,
     isHttp401,
     needsReauth,
+    isQuotaLimited,
+    isUnknownQuotaLimited,
     isFiveHourLimited,
     isWeeklyLimited,
     isMonthlyLimited,
@@ -506,6 +534,7 @@ export const authFileMatchesCodexStatusFilter = (
   if (!status.isCodex) return false;
   if (filter === 'http_401') return status.isHttp401;
   if (filter === 'reauth') return status.needsReauth || status.isHttp401;
+  if (filter === 'quota_limited') return status.isQuotaLimited;
   if (filter === 'five_hour_limited') return status.isFiveHourLimited;
   if (filter === 'weekly_limited') return status.isWeeklyLimited;
   if (filter === 'monthly_limited') return status.isMonthlyLimited;

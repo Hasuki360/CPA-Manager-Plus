@@ -40,10 +40,12 @@ import {
   fetchCodexQuota,
   fetchKimiQuota,
   fetchXaiQuota,
+  buildCodexQuotaWindowInfos,
   formatKimiResetHint,
   formatQuotaResetTime,
 } from '@/utils/quota';
 import {
+  buildObservedCodexQuotaFromHeaderSnapshot,
   getHeaderSnapshotErrorCode,
   getHeaderSnapshotErrorKind,
   getHeaderSnapshotPlanType,
@@ -983,6 +985,7 @@ export const buildObservedCodexAccountQuotaEntry = (
 ): AccountQuotaEntry | null => {
   if (target.provider !== 'codex' || !hasUsageHeaderQuotaSignal(snapshot)) return null;
   const planType = target.planType ?? getHeaderSnapshotPlanType(snapshot) ?? null;
+  const observedQuota = buildObservedCodexQuotaFromHeaderSnapshot(snapshot);
   const planLabel = getCodexPlanLabel(planType, t);
   const observedAt =
     snapshot?.timestamp_ms && Number.isFinite(snapshot.timestamp_ms)
@@ -1007,24 +1010,37 @@ export const buildObservedCodexAccountQuotaEntry = (
     traceID ? `Trace: ${traceID}` : '',
   ].filter(Boolean);
 
+  const observedWindows: CodexQuotaWindow[] = observedQuota?.payload
+    ? buildCodexQuotaWindowInfos(observedQuota.payload, { planType }).map((window) => ({
+        id: window.id,
+        label: t(window.labelKey, window.labelParams),
+        labelKey: window.labelKey,
+        labelParams: window.labelParams,
+        usedPercent: window.usedPercent,
+        resetLabel: window.resetLabel,
+        limitWindowSeconds: window.limitWindowSeconds,
+      }))
+    : [];
   const windows: AccountQuotaWindow[] =
-    usedPercent !== null || recoverAtMS
-      ? [
-          {
-            id: 'usage-header-observed',
-            label: t('codex_quota.observed_window', { defaultValue: 'Latest request' }),
-            remainingPercent: buildRemainingFromUsedPercent(usedPercent),
-            resetLabel: recoverAtMS ? new Date(recoverAtMS).toLocaleString() : '-',
-            usageLabel:
-              usedPercent !== null
-                ? t('monitoring.account_quota_observed_used', {
-                    percent: `${Math.round(usedPercent)}%`,
-                    defaultValue: `Observed used ${Math.round(usedPercent)}%`,
-                  })
-                : null,
-          },
-        ]
-      : [];
+    observedWindows.length > 0
+      ? buildCodexAccountQuotaWindows(observedWindows, t)
+      : usedPercent !== null || recoverAtMS
+        ? [
+            {
+              id: 'usage-header-observed',
+              label: t('codex_quota.observed_window', { defaultValue: 'Latest request' }),
+              remainingPercent: buildRemainingFromUsedPercent(usedPercent),
+              resetLabel: recoverAtMS ? new Date(recoverAtMS).toLocaleString() : '-',
+              usageLabel:
+                usedPercent !== null
+                  ? t('monitoring.account_quota_observed_used', {
+                      percent: `${Math.round(usedPercent)}%`,
+                      defaultValue: `Observed used ${Math.round(usedPercent)}%`,
+                    })
+                  : null,
+            },
+          ]
+        : [];
 
   return {
     ...buildBaseAccountQuotaEntry({ ...target, planType }, t, metaLabels),

@@ -804,6 +804,7 @@
     "codex_status_filter_all": "All statuses",
     "codex_status_filter_http_401": "Needs reauth (401)",
     "codex_status_filter_reauth": "Needs reauth",
+    "codex_status_filter_quota_limited": "Quota issue",
     "codex_status_filter_five_hour_limited": "5-hour quota full",
     "codex_status_filter_weekly_limited": "7-day quota full",
     "codex_status_filter_monthly_limited": "Monthly quota full",

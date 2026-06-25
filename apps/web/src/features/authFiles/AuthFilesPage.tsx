@@ -739,6 +739,7 @@ export function AuthFilesPage() {
     () => [
       { value: 'all', label: t('auth_files.codex_status_filter_all') },
       { value: 'reauth', label: t('auth_files.codex_status_filter_reauth') },
+      { value: 'quota_limited', label: t('auth_files.codex_status_filter_quota_limited') },
       {
         value: 'five_hour_limited',
         label: t('auth_files.codex_status_filter_five_hour_limited'),

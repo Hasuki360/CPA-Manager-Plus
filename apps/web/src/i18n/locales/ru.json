@@ -803,6 +803,7 @@
     "codex_status_filter_all": "Все статусы",
     "codex_status_filter_http_401": "Нужна повторная авторизация (401)",
     "codex_status_filter_reauth": "Нужна повторная авторизация",
+    "codex_status_filter_quota_limited": "Проблема квоты",
     "codex_status_filter_five_hour_limited": "5-часовая квота заполнена",
     "codex_status_filter_weekly_limited": "7-дневная квота заполнена",
     "codex_status_filter_monthly_limited": "Месячная квота заполнена",

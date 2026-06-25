@@ -51,6 +51,35 @@ const readBoolean = (value: unknown): boolean | null => {
   return null;
 };
 
+const normalizeHeaderQuotaWindowKind = (value: unknown): string | null => {
+  const normalized = readString(value).toLowerCase().replace(/-/g, '_');
+  if (['five_hour', 'weekly', 'monthly', 'unknown'].includes(normalized)) {
+    return normalized;
+  }
+  return null;
+};
+
+const classifyHeaderQuotaWindowKind = (
+  window: ResponseHeaderQuotaWindow | null | undefined
+): string | null => {
+  const minutes = readNumber(window?.window_minutes);
+  if (minutes === null || minutes <= 0) return null;
+  if (Math.abs(minutes - 300) < 0.001) return 'five_hour';
+  if (Math.abs(minutes - 10_080) < 0.001) return 'weekly';
+  if (minutes >= 28 * 24 * 60 && minutes <= 31 * 24 * 60) return 'monthly';
+  return 'unknown';
+};
+
+const getHeaderQuotaWindowBySource = (
+  quota: ResponseHeaderQuotaMetadata | undefined,
+  source: string | null
+): ResponseHeaderQuotaWindow | undefined => {
+  if (!quota) return undefined;
+  if (source === 'primary') return quota.primary;
+  if (source === 'secondary') return quota.secondary;
+  return undefined;
+};
+
 const newerSnapshot = (
   current: UsageHeaderSnapshot | undefined,
   next: UsageHeaderSnapshot
@@ -196,6 +225,31 @@ export const getHeaderSnapshotQuotaMetadata = (
   snapshot: UsageHeaderSnapshot | null | undefined
 ): ResponseHeaderQuotaMetadata | undefined => snapshot?.response_metadata?.quota;
 
+export const getHeaderSnapshotSummaryWindowKind = (
+  snapshot: UsageHeaderSnapshot | null | undefined
+): string | null => {
+  const quota = getHeaderSnapshotQuotaMetadata(snapshot);
+  const explicitKind = normalizeHeaderQuotaWindowKind(quota?.summary_window_kind);
+  if (explicitKind) return explicitKind;
+  const source = readString(quota?.summary_window_source).toLowerCase();
+  return classifyHeaderQuotaWindowKind(getHeaderQuotaWindowBySource(quota, source));
+};
+
+export const getHeaderSnapshotReachedWindowKind = (
+  snapshot: UsageHeaderSnapshot | null | undefined
+): string | null => {
+  const quota = getHeaderSnapshotQuotaMetadata(snapshot);
+  const explicitKind = normalizeHeaderQuotaWindowKind(quota?.reached_window_kind);
+  if (explicitKind) return explicitKind;
+  const explicitSource = readString(quota?.reached_window_source).toLowerCase();
+  const source =
+    explicitSource ||
+    (['primary', 'secondary'].includes(readString(quota?.rate_limit_reached_type).toLowerCase())
+      ? readString(quota?.rate_limit_reached_type).toLowerCase()
+      : '');
+  return classifyHeaderQuotaWindowKind(getHeaderQuotaWindowBySource(quota, source));
+};
+
 export const getHeaderSnapshotUsedPercent = (
   snapshot: UsageHeaderSnapshot | null | undefined
 ): number | null => {
@@ -242,6 +296,10 @@ export type ObservedCodexHeaderQuota = {
   creditsUnlimited: boolean | null;
   creditsBalance: string | null;
   rateLimitReachedType: string | null;
+  summaryWindowKind: string | null;
+  summaryWindowSource: string | null;
+  reachedWindowKind: string | null;
+  reachedWindowSource: string | null;
   primaryOverSecondaryLimitPercent: number | null;
 };
 
@@ -282,6 +340,10 @@ export const buildObservedCodexQuotaFromHeaderSnapshot = (
   const creditsHasCredits = readBoolean(quota.credits_has_credits);
   const creditsUnlimited = readBoolean(quota.credits_unlimited);
   const rateLimitReachedType = readString(quota.rate_limit_reached_type) || null;
+  const summaryWindowKind = getHeaderSnapshotSummaryWindowKind(snapshot);
+  const summaryWindowSource = readString(quota.summary_window_source) || null;
+  const reachedWindowKind = getHeaderSnapshotReachedWindowKind(snapshot);
+  const reachedWindowSource = readString(quota.reached_window_source) || null;
   const primaryOverSecondaryLimitPercent = readNumber(quota.primary_over_secondary_limit_percent);
   const primaryWindow = buildCodexWindowFromHeaderQuota(quota.primary);
   const secondaryWindow = buildCodexWindowFromHeaderQuota(quota.secondary);
@@ -319,7 +381,11 @@ export const buildObservedCodexQuotaFromHeaderSnapshot = (
     !payload &&
     !activeLimit &&
     primaryOverSecondaryLimitPercent === null &&
-    !rateLimitReachedType
+    !rateLimitReachedType &&
+    !summaryWindowKind &&
+    !summaryWindowSource &&
+    !reachedWindowKind &&
+    !reachedWindowSource
   ) {
     return null;
   }
@@ -332,6 +398,10 @@ export const buildObservedCodexQuotaFromHeaderSnapshot = (
     creditsUnlimited,
     creditsBalance,
     rateLimitReachedType,
+    summaryWindowKind,
+    summaryWindowSource,
+    reachedWindowKind,
+    reachedWindowSource,
     primaryOverSecondaryLimitPercent,
   };
 };

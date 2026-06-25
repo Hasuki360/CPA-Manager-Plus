@@ -792,6 +792,7 @@
     "codex_status_filter_all": "全部狀態",
     "codex_status_filter_http_401": "需重新授權 (401)",
     "codex_status_filter_reauth": "需重新授權",
+    "codex_status_filter_quota_limited": "額度問題",
     "codex_status_filter_five_hour_limited": "5小時額度已滿",
     "codex_status_filter_weekly_limited": "7天額度已滿",
     "codex_status_filter_monthly_limited": "月額度已滿",

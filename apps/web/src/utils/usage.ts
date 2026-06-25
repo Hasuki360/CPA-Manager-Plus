@@ -47,6 +47,10 @@ export interface UsageResponseHeaderMetadata {
     plan_type?: string;
     active_limit?: string;
     rate_limit_reached_type?: string;
+    summary_window_kind?: string;
+    summary_window_source?: string;
+    reached_window_kind?: string;
+    reached_window_source?: string;
     primary?: UsageResponseHeaderQuotaWindow;
     secondary?: UsageResponseHeaderQuotaWindow;
     recover_at_ms?: number;

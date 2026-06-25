@@ -293,8 +293,39 @@ describe('auth file Codex status helpers', () => {
 
     const status = getAuthFileCodexStatus(codexFile(), undefined, undefined, usageLimitSnapshot);
 
-    expect(status.isWeeklyLimited).toBe(true);
+    expect(status.isQuotaLimited).toBe(true);
+    expect(status.isUnknownQuotaLimited).toBe(true);
+    expect(status.isWeeklyLimited).toBe(false);
+    expect(authFileMatchesCodexStatusFilter(status, 'quota_limited')).toBe(true);
+    expect(authFileMatchesCodexStatusFilter(status, 'weekly_limited')).toBe(false);
     expect(status.badges.map((badge) => badge.kind)).toContain('observed_quota');
+  });
+
+  it('uses observed reached window metadata for specific quota status filters', () => {
+    const usageLimitSnapshot: UsageHeaderSnapshot = {
+      event_hash: 'usage-limit-weekly',
+      timestamp_ms: 1_700_000_000_000,
+      response_metadata: {
+        quota: {
+          rate_limit_reached_type: 'secondary',
+          reached_window_kind: 'weekly',
+          reached_window_source: 'secondary',
+          recover_at_ms: 1_700_604_800_000,
+        },
+        errors: {
+          kind: 'rate_limit',
+          code: 'usage_limit_reached',
+        },
+      },
+    };
+
+    const status = getAuthFileCodexStatus(codexFile(), undefined, undefined, usageLimitSnapshot);
+
+    expect(status.isQuotaLimited).toBe(true);
+    expect(status.isUnknownQuotaLimited).toBe(false);
+    expect(status.isWeeklyLimited).toBe(true);
+    expect(authFileMatchesCodexStatusFilter(status, 'quota_limited')).toBe(true);
+    expect(authFileMatchesCodexStatusFilter(status, 'weekly_limited')).toBe(true);
   });
 
   it('ignores non-Codex files for Codex-only status filters', () => {
@@ -336,6 +367,7 @@ describe('auth file Codex status helpers', () => {
       stringifySearchValue(getAuthFileSearchValues(codexFile(), t, undefined, status))
     ).toContain('auth_files.codex_status_badge_reauth');
     expect(normalizeAuthFilesCodexStatusFilter('http_401')).toBe('reauth');
+    expect(normalizeAuthFilesCodexStatusFilter('quota_limited')).toBe('quota_limited');
     expect(normalizeAuthFilesCodexStatusFilter('five_hour_limited')).toBe('five_hour_limited');
     expect(normalizeAuthFilesCodexStatusFilter('monthly_limited')).toBe('monthly_limited');
     expect(normalizeAuthFilesCodexStatusFilter('disabled_with_reset')).toBe('disabled_with_reset');
