@@ -331,16 +331,18 @@ export function AiProvidersClaudeModelsPage() {
                     label={
                       <div className={styles.modelDiscoveryMeta}>
                         <div className={styles.modelDiscoveryName}>
-                          {model.name}
-                          {model.alias && (
-                            <span className={styles.modelDiscoveryAlias}>{model.alias}</span>
+                          <div className={styles.modelDiscoveryNameText}>
+                            {model.name}
+                            {model.alias && (
+                              <span className={styles.modelDiscoveryAlias}>{model.alias}</span>
+                            )}
+                          </div>
+                          {alreadyConfigured && (
+                            <span className={styles.modelDiscoveryAddedBadge}>
+                              {t('ai_providers.model_discovery_already_added')}
+                            </span>
                           )}
                         </div>
-                        {alreadyConfigured && (
-                          <div className={styles.modelDiscoveryDesc}>
-                            {t('ai_providers.model_discovery_already_added')}
-                          </div>
-                        )}
                         {model.description && (
                           <div className={styles.modelDiscoveryDesc}>{model.description}</div>
                         )}

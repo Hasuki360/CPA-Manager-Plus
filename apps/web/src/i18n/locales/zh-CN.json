@@ -641,7 +641,7 @@
     "openai_test_all_partial": "测试完成：{{success}} 个通过，{{failed}} 个失败",
     "disable_cooling_label": "禁用冷却调度",
     "disable_cooling_hint": "全局禁用认证或模型失败后的冷却窗口。",
-    "model_discovery_already_added": "已添加到当前模型列表",
+    "model_discovery_already_added": "已添加",
     "model_search_placeholder": "按模型筛选...",
     "model_search_clear": "清除",
     "model_select_all": "全选",

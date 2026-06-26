@@ -651,7 +651,7 @@
     "openai_test_all_partial": "Тест завершен: {{success}} прошло, {{failed}} не прошло",
     "disable_cooling_label": "Отключить cooldown",
     "disable_cooling_hint": "Глобально отключить окна cooldown после сбоев аутентификации или моделей.",
-    "model_discovery_already_added": "Уже добавлено в текущий список моделей",
+    "model_discovery_already_added": "Добавлено",
     "model_search_placeholder": "Фильтр по моделям...",
     "model_search_clear": "Очистить",
     "model_select_all": "Выбрать все",

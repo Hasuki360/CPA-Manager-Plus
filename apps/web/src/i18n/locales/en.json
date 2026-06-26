@@ -652,7 +652,7 @@
     "openai_test_all_partial": "Test completed: {{success}} passed, {{failed}} failed",
     "disable_cooling_label": "Disable Cooling",
     "disable_cooling_hint": "Globally disable auth/model cooldown windows after failures.",
-    "model_discovery_already_added": "Already added to the current model list",
+    "model_discovery_already_added": "Added",
     "model_search_placeholder": "Filter by models...",
     "model_search_clear": "Clear",
     "model_select_all": "Select All",
