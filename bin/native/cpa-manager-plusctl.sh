@@ -310,7 +310,12 @@ write_pid_record() {
 }
 
 start_app() {
-  if [ ! -x "${binary}" ]; then
+  local launch_binary="${binary}"
+  if [[ "${launch_binary}" != /* ]]; then
+    launch_binary="$(resolve_path "${launch_binary}")"
+  fi
+
+  if [ ! -x "${launch_binary}" ]; then
     echo "Binary is not executable: ${binary}" >&2
     exit 1
   fi
@@ -342,7 +347,7 @@ start_app() {
   rm -f "${pid_file}"
 
   local pid
-  nohup "${binary}" "$@" >>"${log_file}" 2>&1 &
+  (cd "${script_dir}" && exec nohup "${launch_binary}" "$@") >>"${log_file}" 2>&1 &
   pid="$!"
 
   sleep 1

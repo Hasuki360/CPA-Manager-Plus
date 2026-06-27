@@ -32,6 +32,11 @@ Environment overrides:
   CPA_MANAGER_PLUS_PID_FILE     PID file path
   CPA_MANAGER_PLUS_LOG_FILE     stdout log file path
   CPA_MANAGER_PLUS_ERR_LOG_FILE stderr log file path
+
+Note:
+  Prefer environment variables for runtime configuration. Windows argument
+  forwarding follows Start-Process parsing and may be shell-dependent for
+  complex values with spaces or quotes.
 "@
 }
 
