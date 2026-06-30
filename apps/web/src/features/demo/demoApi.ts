@@ -141,13 +141,20 @@ export async function handleDemoApiRequest<T = unknown>(
 
   if (pathname === '/plugin-store') return getDemoPluginStore() as T;
   if (/^\/plugin-store\/[^/]+\/install$/.test(pathname)) {
+    const requestedVersion =
+      params.get('version') ||
+      ((data && typeof data === 'object' && 'version' in data
+        ? String((data as { version?: unknown }).version ?? '')
+        : ''
+      ).trim());
     return {
       status: 'installed',
       source_id: params.get('source') || 'official',
       source_name: 'official',
       source_url: 'https://plugins.example.com/index.json',
       id: decodeURIComponent(pathname.split('/')[2] || ''),
-      version: '1.0.0',
+      version: requestedVersion || '1.0.0',
+      install_type: 'github-release',
       path: `plugins/${decodeURIComponent(pathname.split('/')[2] || '')}`,
       plugins_enabled: true,
       restart_required: false,

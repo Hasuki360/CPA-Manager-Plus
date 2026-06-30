@@ -16,10 +16,11 @@ vi.mock('@/services/api/apiCall', () => ({
 }));
 
 import {
+  ANTIGRAVITY_USER_AGENT,
   CODEX_RATE_LIMIT_RESET_CREDITS_URL,
   CODEX_USAGE_URL,
 } from './constants';
-import { fetchCodexQuota } from './providerRequests';
+import { fetchAntigravityQuota, fetchCodexQuota } from './providerRequests';
 
 const t = ((key: string) => key) as TFunction;
 
@@ -132,5 +133,38 @@ describe('fetchCodexQuota', () => {
     expect(result.rateLimitResetCreditsAvailableCount).toBe(1);
     expect(result.rateLimitResetCredits).toEqual([]);
     expect(result.rateLimitResetCreditsError).toBe('502 bad gateway');
+  });
+});
+
+describe('fetchAntigravityQuota', () => {
+  it('sends the generated Antigravity user agent', async () => {
+    mocks.request.mockResolvedValue({
+      statusCode: 403,
+      hasStatusCode: true,
+      header: {},
+      bodyText: 'forbidden',
+      body: null,
+    });
+
+    await expect(
+      fetchAntigravityQuota(
+        {
+          name: 'antigravity.json',
+          type: 'antigravity',
+          authIndex: 'ag-1',
+          project_id: 'project-1',
+        },
+        t
+      )
+    ).rejects.toThrow();
+
+    expect(mocks.request.mock.calls[0][0]).toMatchObject({
+      authIndex: 'ag-1',
+      method: 'POST',
+      header: expect.objectContaining({
+        Authorization: 'Bearer $TOKEN$',
+        'User-Agent': ANTIGRAVITY_USER_AGENT,
+      }),
+    });
   });
 });
