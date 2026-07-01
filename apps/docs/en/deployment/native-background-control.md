@@ -97,4 +97,3 @@ Check the recent log output printed by the script. On Windows, check both stdout
 
 `logs` says the log file does not exist:
 The server has not written logs yet, or the configured `CPA_MANAGER_PLUS_LOG_FILE` path is wrong.
-
