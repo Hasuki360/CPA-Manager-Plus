@@ -43,17 +43,6 @@ const clickButton = (button: ReactTestInstance) => {
   });
 };
 
-const mouseDownButton = (button: ReactTestInstance) => {
-  const onMouseDown = button.props.onMouseDown as
-    | ((event: { preventDefault: () => void }) => void)
-    | undefined;
-  if (!onMouseDown) throw new Error('Button mouse down handler not found');
-
-  act(() => {
-    onMouseDown({ preventDefault: vi.fn() });
-  });
-};
-
 const toggleSwitch = (toggle: ReactTestInstance, value: boolean) => {
   const onChange = toggle.props.onChange as ((value: boolean) => void) | undefined;
   if (!onChange) throw new Error('Toggle change handler not found');
@@ -103,6 +92,34 @@ const keyDownInput = (input: ReactTestInstance, key: string) => {
       },
     });
   });
+};
+
+const getPriorityEditTrigger = (row: ReactTestInstance) => {
+  const trigger = row
+    .findAll((node) => node.type === 'button')
+    .find(
+      (button) =>
+        button.props.type === 'button' &&
+        button.props['aria-label'] === 'ai_providers.priority_edit'
+    );
+  if (!trigger) throw new Error('Priority edit trigger not found');
+  return trigger;
+};
+
+const getPriorityInput = (row: ReactTestInstance) => {
+  const input = getPriorityInputs(row)[0];
+  if (!input) throw new Error('Priority input not found');
+  return input;
+};
+
+const getPriorityInputs = (row: ReactTestInstance) =>
+  row
+    .findAll((node) => node.type === 'input')
+    .filter((node) => node.props['aria-label'] === 'ai_providers.priority_edit');
+
+const openPriorityEditor = (renderer: ReactTestRenderer, rowIndex = 0) => {
+  clickButton(getPriorityEditTrigger(getRows(renderer)[rowIndex]));
+  return getPriorityInput(getRows(renderer)[rowIndex]);
 };
 
 describe('ProviderTable', () => {
@@ -208,48 +225,19 @@ describe('ProviderTable', () => {
     expect(lastToggle.props.checked).toBe(false);
   });
 
-  it('adjusts priority inline without opening row detail', () => {
+  it('shows priority as an edit trigger before entering edit mode', () => {
     const rows = filterAndSortProviderRows(
       buildProviderRows({ ...emptyInput, codex: codexConfigs })
     );
-    const onPriorityChange = vi.fn();
-    const onShowDetail = vi.fn();
-    const renderer = renderTable(rows, { onPriorityChange, onShowDetail });
+    const renderer = renderTable(rows);
 
     const firstRow = getRows(renderer)[0];
-    const increaseButton = firstRow
-      .findAllByType(Button)
-      .find((button) => button.props['aria-label'] === 'ai_providers.priority_increase');
-    expect(increaseButton).toBeTruthy();
+    const priorityTrigger = getPriorityEditTrigger(firstRow);
+    expect(getText(priorityTrigger)).toBe('9');
+    expect(getPriorityInputs(firstRow)).toHaveLength(0);
 
-    clickButton(increaseButton!);
-
-    expect(onPriorityChange).toHaveBeenLastCalledWith(
-      expect.objectContaining({ kind: 'codex', originalIndex: 2 }),
-      10
-    );
-    expect(onShowDetail).not.toHaveBeenCalled();
-  });
-
-  it('decreases priority inline without clamping existing priority semantics', () => {
-    const rows = filterAndSortProviderRows(
-      buildProviderRows({ ...emptyInput, codex: codexConfigs })
-    );
-    const onPriorityChange = vi.fn();
-    const renderer = renderTable(rows, { onPriorityChange });
-
-    const firstRow = getRows(renderer)[0];
-    const decreaseButton = firstRow
-      .findAllByType(Button)
-      .find((button) => button.props['aria-label'] === 'ai_providers.priority_decrease');
-    expect(decreaseButton).toBeTruthy();
-
-    clickButton(decreaseButton!);
-
-    expect(onPriorityChange).toHaveBeenLastCalledWith(
-      expect.objectContaining({ kind: 'codex', originalIndex: 2 }),
-      8
-    );
+    const priorityInput = openPriorityEditor(renderer);
+    expect(priorityInput.props.value).toBe('9');
   });
 
   it('commits a direct priority edit on blur without opening row detail', () => {
@@ -260,10 +248,7 @@ describe('ProviderTable', () => {
     const onShowDetail = vi.fn();
     const renderer = renderTable(rows, { onPriorityChange, onShowDetail });
 
-    const firstRow = getRows(renderer)[0];
-    const priorityInput = firstRow.findByProps({
-      'aria-label': 'ai_providers.priority_edit',
-    });
+    const priorityInput = openPriorityEditor(renderer);
 
     changeInput(priorityInput, '42');
     blurInput(priorityInput);
@@ -282,9 +267,7 @@ describe('ProviderTable', () => {
     const onPriorityChange = vi.fn();
     const renderer = renderTable(rows, { onPriorityChange });
 
-    const priorityInput = getRows(renderer)[0].findByProps({
-      'aria-label': 'ai_providers.priority_edit',
-    });
+    const priorityInput = openPriorityEditor(renderer);
 
     changeInput(priorityInput, '12');
     keyDownInput(priorityInput, 'Enter');
@@ -296,34 +279,6 @@ describe('ProviderTable', () => {
     );
   });
 
-  it('steps from an uncommitted direct priority draft without double submitting', () => {
-    const rows = filterAndSortProviderRows(
-      buildProviderRows({ ...emptyInput, codex: codexConfigs })
-    );
-    const onPriorityChange = vi.fn();
-    const renderer = renderTable(rows, { onPriorityChange });
-
-    const firstRow = getRows(renderer)[0];
-    const priorityInput = firstRow.findByProps({
-      'aria-label': 'ai_providers.priority_edit',
-    });
-    const increaseButton = firstRow
-      .findAllByType(Button)
-      .find((button) => button.props['aria-label'] === 'ai_providers.priority_increase');
-    expect(increaseButton).toBeTruthy();
-
-    changeInput(priorityInput, '12');
-    mouseDownButton(increaseButton!);
-    blurInput(priorityInput);
-    clickButton(increaseButton!);
-
-    expect(onPriorityChange).toHaveBeenCalledTimes(1);
-    expect(onPriorityChange).toHaveBeenLastCalledWith(
-      expect.objectContaining({ kind: 'codex', originalIndex: 2 }),
-      13
-    );
-  });
-
   it('cancels a direct priority edit with Escape without committing on blur', () => {
     const rows = filterAndSortProviderRows(
       buildProviderRows({ ...emptyInput, codex: codexConfigs })
@@ -331,17 +286,13 @@ describe('ProviderTable', () => {
     const onPriorityChange = vi.fn();
     const renderer = renderTable(rows, { onPriorityChange });
 
-    const priorityInput = getRows(renderer)[0].findByProps({
-      'aria-label': 'ai_providers.priority_edit',
-    });
+    const priorityInput = openPriorityEditor(renderer);
 
     changeInput(priorityInput, '12');
     keyDownInput(priorityInput, 'Escape');
 
-    const updatedInput = getRows(renderer)[0].findByProps({
-      'aria-label': 'ai_providers.priority_edit',
-    });
-    expect(updatedInput.props.value).toBe('9');
+    const updatedTrigger = getPriorityEditTrigger(getRows(renderer)[0]);
+    expect(getText(updatedTrigger)).toBe('9');
     expect(onPriorityChange).not.toHaveBeenCalled();
   });
 
@@ -352,23 +303,18 @@ describe('ProviderTable', () => {
     const onPriorityChange = vi.fn();
     const renderer = renderTable(rows, { onPriorityChange });
 
-    let priorityInput = getRows(renderer)[0].findByProps({
-      'aria-label': 'ai_providers.priority_edit',
-    });
+    let priorityInput = openPriorityEditor(renderer);
 
     changeInput(priorityInput, '');
     blurInput(priorityInput);
-    priorityInput = getRows(renderer)[0].findByProps({
-      'aria-label': 'ai_providers.priority_edit',
-    });
-    expect(priorityInput.props.value).toBe('9');
+    let priorityTrigger = getPriorityEditTrigger(getRows(renderer)[0]);
+    expect(getText(priorityTrigger)).toBe('9');
 
+    priorityInput = openPriorityEditor(renderer);
     changeInput(priorityInput, 'not-a-number');
     blurInput(priorityInput);
-    priorityInput = getRows(renderer)[0].findByProps({
-      'aria-label': 'ai_providers.priority_edit',
-    });
-    expect(priorityInput.props.value).toBe('9');
+    priorityTrigger = getPriorityEditTrigger(getRows(renderer)[0]);
+    expect(getText(priorityTrigger)).toBe('9');
     expect(onPriorityChange).not.toHaveBeenCalled();
   });
 
@@ -379,9 +325,7 @@ describe('ProviderTable', () => {
     const onPriorityChange = vi.fn();
     const renderer = renderTable(rows, { onPriorityChange });
 
-    const priorityInput = getRows(renderer)[0].findByProps({
-      'aria-label': 'ai_providers.priority_edit',
-    });
+    const priorityInput = openPriorityEditor(renderer);
 
     changeInput(priorityInput, '9');
     blurInput(priorityInput);
@@ -396,20 +340,10 @@ describe('ProviderTable', () => {
     const renderer = renderTable(rows, {}, { actionsDisabled: true });
 
     const firstRow = getRows(renderer)[0];
-    const priorityButtons = firstRow
-      .findAllByType(Button)
-      .filter((button) =>
-        ['ai_providers.priority_decrease', 'ai_providers.priority_increase'].includes(
-          button.props['aria-label']
-        )
-      );
-    const priorityInput = firstRow.findByProps({
-      'aria-label': 'ai_providers.priority_edit',
-    });
+    const priorityTrigger = getPriorityEditTrigger(firstRow);
 
-    expect(priorityButtons).toHaveLength(2);
-    expect(priorityButtons.every((button) => button.props.disabled)).toBe(true);
-    expect(priorityInput.props.disabled).toBe(true);
+    expect(priorityTrigger.props.disabled).toBe(true);
+    expect(getPriorityInputs(firstRow)).toHaveLength(0);
   });
 
   it('renders the provided empty state when there are no rows', () => {

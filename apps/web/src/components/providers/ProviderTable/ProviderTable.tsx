@@ -1,4 +1,5 @@
 import {
+  useEffect,
   useRef,
   useState,
   type ChangeEvent,
@@ -11,8 +12,6 @@ import { Button } from '@/components/ui/Button';
 import { ToggleSwitch } from '@/components/ui/ToggleSwitch';
 import {
   IconCheck,
-  IconChevronDown,
-  IconChevronUp,
   IconEye,
   IconPencil,
   IconTrash2,
@@ -47,8 +46,6 @@ const priorityToDraft = (priority: number | undefined) =>
 interface PriorityControlProps {
   row: ProviderRow;
   disabled: boolean;
-  decreaseLabel: string;
-  increaseLabel: string;
   editLabel: string;
   onPriorityChange: (row: ProviderRow, priority: number) => void;
 }
@@ -56,22 +53,21 @@ interface PriorityControlProps {
 function PriorityControl({
   row,
   disabled,
-  decreaseLabel,
-  increaseLabel,
   editLabel,
   onPriorityChange,
 }: PriorityControlProps) {
   const [draft, setDraft] = useState(() => priorityToDraft(row.priority));
+  const [isEditing, setIsEditing] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
   const skipNextBlurCommitRef = useRef(false);
   const currentPriority = Number.isFinite(row.priority) ? Math.trunc(row.priority ?? 0) : 0;
+  const displayPriority = priorityToDraft(row.priority) || '—';
 
-  const getDraftPriority = () => {
-    const trimmed = draft.trim();
-    if (!trimmed) return currentPriority;
-
-    const parsed = Number(trimmed);
-    return Number.isFinite(parsed) ? Math.trunc(parsed) : currentPriority;
-  };
+  useEffect(() => {
+    if (!isEditing) return;
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, [isEditing]);
 
   const commitDraft = () => {
     if (skipNextBlurCommitRef.current) {
@@ -82,33 +78,30 @@ function PriorityControl({
     const trimmed = draft.trim();
     if (!trimmed) {
       setDraft(priorityToDraft(row.priority));
+      setIsEditing(false);
       return;
     }
 
     const parsed = Number(trimmed);
     if (!Number.isFinite(parsed)) {
       setDraft(priorityToDraft(row.priority));
+      setIsEditing(false);
       return;
     }
 
     const nextPriority = Math.trunc(parsed);
     setDraft(String(nextPriority));
+    setIsEditing(false);
     if (nextPriority !== currentPriority || row.priority === undefined) {
       onPriorityChange(row, nextPriority);
     }
   };
 
-  const handleStepMouseDown = (event: MouseEvent<HTMLButtonElement>) => {
-    event.preventDefault();
-    skipNextBlurCommitRef.current = true;
-  };
-
-  const stepPriority = (delta: number) => {
-    const nextPriority = getDraftPriority() + delta;
-    setDraft(String(nextPriority));
-    if (nextPriority !== currentPriority || row.priority === undefined) {
-      onPriorityChange(row, nextPriority);
-    }
+  const startEditing = () => {
+    if (disabled) return;
+    skipNextBlurCommitRef.current = false;
+    setDraft(priorityToDraft(row.priority));
+    setIsEditing(true);
   };
 
   const handleInputChange = (event: ChangeEvent<HTMLInputElement>) => {
@@ -125,52 +118,41 @@ function PriorityControl({
       event.preventDefault();
       skipNextBlurCommitRef.current = true;
       setDraft(priorityToDraft(row.priority));
+      setIsEditing(false);
       event.currentTarget.blur();
     }
   };
 
   return (
     <div className={styles.priorityControl} onClick={stopPropagation}>
-      <Button
-        variant="secondary"
-        size="xs"
-        iconOnly
-        className={styles.priorityButton}
-        onMouseDown={handleStepMouseDown}
-        onClick={() => stepPriority(-1)}
-        disabled={disabled}
-        aria-label={decreaseLabel}
-        title={decreaseLabel}
-      >
-        <IconChevronDown size={14} />
-      </Button>
-      <input
-        className={styles.priorityInput}
-        type="number"
-        step={1}
-        inputMode="numeric"
-        value={draft}
-        placeholder="—"
-        disabled={disabled}
-        aria-label={editLabel}
-        title={editLabel}
-        onChange={handleInputChange}
-        onBlur={commitDraft}
-        onKeyDown={handleInputKeyDown}
-      />
-      <Button
-        variant="secondary"
-        size="xs"
-        iconOnly
-        className={styles.priorityButton}
-        onMouseDown={handleStepMouseDown}
-        onClick={() => stepPriority(1)}
-        disabled={disabled}
-        aria-label={increaseLabel}
-        title={increaseLabel}
-      >
-        <IconChevronUp size={14} />
-      </Button>
+      {isEditing ? (
+        <input
+          ref={inputRef}
+          className={styles.priorityInput}
+          type="number"
+          step={1}
+          inputMode="numeric"
+          value={draft}
+          placeholder="—"
+          disabled={disabled}
+          aria-label={editLabel}
+          title={editLabel}
+          onChange={handleInputChange}
+          onBlur={commitDraft}
+          onKeyDown={handleInputKeyDown}
+        />
+      ) : (
+        <button
+          type="button"
+          className={styles.priorityValueButton}
+          disabled={disabled}
+          aria-label={editLabel}
+          title={editLabel}
+          onClick={startEditing}
+        >
+          {displayPriority}
+        </button>
+      )}
     </div>
   );
 }
@@ -284,8 +266,6 @@ export function ProviderTable({
                 key={`${row.key}:${row.priority ?? 'unset'}`}
                 row={row}
                 disabled={actionsDisabled}
-                decreaseLabel={t('ai_providers.priority_decrease')}
-                increaseLabel={t('ai_providers.priority_increase')}
                 editLabel={t('ai_providers.priority_edit')}
                 onPriorityChange={onPriorityChange}
               />

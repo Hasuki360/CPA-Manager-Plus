@@ -2,7 +2,7 @@
 @use '@/styles/mixins.scss' as *;
 
 // 类型 / 标识 / 地址 / 模型 / 优先级 / 近期请求 / 启用 / 操作
-$table-columns: 92px minmax(132px, 0.72fr) minmax(180px, 1fr) 96px 152px minmax(188px, 0.68fr) 68px 112px;
+$table-columns: 92px minmax(132px, 0.72fr) minmax(180px, 1fr) 96px 72px minmax(188px, 0.68fr) 68px 112px;
 
 @mixin provider-card-layout {
   @include narrow-laptop {
@@ -225,7 +225,6 @@ $table-columns: 92px minmax(132px, 0.72fr) minmax(180px, 1fr) 96px 152px minmax(
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 5px;
   cursor: default;
 
   @include provider-card-layout {
@@ -233,20 +232,58 @@ $table-columns: 92px minmax(132px, 0.72fr) minmax(180px, 1fr) 96px 152px minmax(
   }
 }
 
-.priorityButton:global(.btn) {
-  color: var(--text-secondary);
+.priorityValueButton {
+  max-width: 100%;
+  min-width: 0;
+  height: 30px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 6px;
+  outline: none;
+  background: transparent;
+  text-align: center;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 30px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  transition:
+    background $transition-fast,
+    color $transition-fast,
+    box-shadow $transition-fast;
+
+  &:hover:not(:disabled) {
+    background: var(--app-accent-soft);
+    color: var(--primary-color);
+  }
+
+  &:focus {
+    background: var(--focus-bg);
+    color: var(--focus-text);
+    box-shadow: inset 0 0 0 1px var(--focus-inset);
+  }
+
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.62;
+  }
 }
 
 .priorityInput {
-  width: 30px;
-  min-width: 30px;
+  width: 36px;
+  min-width: 36px;
   height: 30px;
-  padding: 0 2px;
-  border: 1px solid var(--app-border);
-  border-radius: 10px;
+  padding: 0 3px;
+  border: 0;
+  border-radius: 6px;
   outline: none;
   appearance: textfield;
-  background: var(--app-surface-muted);
+  background: transparent;
   text-align: center;
   font: inherit;
   font-size: 12px;
@@ -254,19 +291,11 @@ $table-columns: 92px minmax(132px, 0.72fr) minmax(180px, 1fr) 96px 152px minmax(
   font-variant-numeric: tabular-nums;
   color: var(--text-primary);
   transition:
-    border-color $transition-fast,
     background $transition-fast,
     color $transition-fast,
     box-shadow $transition-fast;
 
-  &:hover:not(:disabled) {
-    border-color: var(--border-hover);
-    background: var(--app-accent-soft);
-    color: var(--primary-color);
-  }
-
   &:focus {
-    border-color: var(--focus-border);
     background: var(--focus-bg);
     color: var(--focus-text);
     box-shadow: inset 0 0 0 1px var(--focus-inset);
