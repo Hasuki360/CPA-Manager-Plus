@@ -1,6 +1,16 @@
 export type MonitoringDataTab = 'accounts' | 'apiKeys' | 'realtime';
 export type MonitoringCenterTimeRange = 'today' | '7d' | '14d' | '30d' | 'all' | 'custom';
 export type MonitoringCenterStatusFilter = 'all' | 'success' | 'failed';
+export type MonitoringRealtimeVisibleColumnKey =
+  | 'reasoning'
+  | 'recent'
+  | 'successRate'
+  | 'calls'
+  | 'tps'
+  | 'latency'
+  | 'time'
+  | 'usage'
+  | 'cost';
 
 export const MONITORING_DATA_TABS: readonly MonitoringDataTab[] = [
   'accounts',
@@ -13,6 +23,17 @@ export const DEFAULT_MONITORING_TIME_RANGE: MonitoringCenterTimeRange = 'today';
 export const DEFAULT_MONITORING_AUTO_REFRESH_MS = '5000';
 export const DEFAULT_MONITORING_TABLE_PAGE_SIZE = 12;
 export const DEFAULT_MONITORING_REALTIME_PAGE_SIZE = 10;
+export const DEFAULT_MONITORING_REALTIME_VISIBLE_COLUMNS: MonitoringRealtimeVisibleColumnKey[] = [
+  'reasoning',
+  'recent',
+  'successRate',
+  'calls',
+  'tps',
+  'latency',
+  'time',
+  'usage',
+  'cost',
+];
 
 export const MONITORING_CENTER_UI_STATE_STORAGE_KEY = 'monitoring.centerUiState';
 
@@ -32,6 +53,7 @@ export type MonitoringCenterUiState = {
   selectedStatus: MonitoringCenterStatusFilter;
   apiKeyPageSize: number;
   realtimePageSize: number;
+  realtimeVisibleColumns: MonitoringRealtimeVisibleColumnKey[];
 };
 
 const TAB_SET = new Set<MonitoringDataTab>(MONITORING_DATA_TABS);
@@ -47,6 +69,9 @@ const STATUS_FILTER_SET = new Set<MonitoringCenterStatusFilter>(['all', 'success
 const AUTO_REFRESH_MS_SET = new Set(['0', '5000', '10000', '30000', '60000', '300000']);
 const TABLE_PAGE_SIZE_OPTIONS = [12, 20, 50, 100] as const;
 const REALTIME_PAGE_SIZE_OPTIONS = [10, 50, 100, 150, 300] as const;
+const REALTIME_VISIBLE_COLUMN_SET = new Set<MonitoringRealtimeVisibleColumnKey>(
+  DEFAULT_MONITORING_REALTIME_VISIBLE_COLUMNS
+);
 
 export const normalizeMonitoringDataTab = (value: unknown): MonitoringDataTab =>
   typeof value === 'string' && TAB_SET.has(value as MonitoringDataTab)
@@ -87,6 +112,23 @@ const normalizePageSize = (
   return typeof parsed === 'number' && options.includes(parsed) ? parsed : fallback;
 };
 
+const normalizeRealtimeVisibleColumns = (value: unknown): MonitoringRealtimeVisibleColumnKey[] => {
+  if (!Array.isArray(value)) {
+    return DEFAULT_MONITORING_REALTIME_VISIBLE_COLUMNS;
+  }
+
+  const normalized = value.filter(
+    (column): column is MonitoringRealtimeVisibleColumnKey =>
+      typeof column === 'string' &&
+      REALTIME_VISIBLE_COLUMN_SET.has(column as MonitoringRealtimeVisibleColumnKey)
+  );
+  const deduped = DEFAULT_MONITORING_REALTIME_VISIBLE_COLUMNS.filter((column) =>
+    normalized.includes(column)
+  );
+
+  return deduped.length > 0 ? deduped : DEFAULT_MONITORING_REALTIME_VISIBLE_COLUMNS;
+};
+
 export const getDefaultMonitoringCenterUiState = (): MonitoringCenterUiState => ({
   activeDataTab: DEFAULT_MONITORING_DATA_TAB,
   timeRange: DEFAULT_MONITORING_TIME_RANGE,
@@ -103,6 +145,7 @@ export const getDefaultMonitoringCenterUiState = (): MonitoringCenterUiState => 
   selectedStatus: 'all',
   apiKeyPageSize: DEFAULT_MONITORING_TABLE_PAGE_SIZE,
   realtimePageSize: DEFAULT_MONITORING_REALTIME_PAGE_SIZE,
+  realtimeVisibleColumns: DEFAULT_MONITORING_REALTIME_VISIBLE_COLUMNS,
 });
 
 export const normalizeMonitoringCenterUiState = (value: unknown): MonitoringCenterUiState => {
@@ -138,6 +181,7 @@ export const normalizeMonitoringCenterUiState = (value: unknown): MonitoringCent
       REALTIME_PAGE_SIZE_OPTIONS,
       defaults.realtimePageSize
     ),
+    realtimeVisibleColumns: normalizeRealtimeVisibleColumns(record.realtimeVisibleColumns),
   };
 };
 

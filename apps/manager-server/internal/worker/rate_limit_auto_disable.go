@@ -359,7 +359,7 @@ func quotaUsageLimitResetTimeFromEvent(event usage.Event, now time.Time, provide
 		var resetAt time.Time
 		found := false
 		forEachJSONValue(text, func(decoded any) bool {
-			if at, ok := usageLimitResetFromJSON(decoded, now); ok {
+			if at, ok := usageLimitResetFromJSON(decoded, now, provider); ok {
 				resetAt = at
 				found = true
 				return true
@@ -515,32 +515,47 @@ func tryDecodeAllJSON(text string, fn func(any) bool) bool {
 	}
 }
 
-func usageLimitResetFromJSON(value any, now time.Time) (time.Time, bool) {
+func usageLimitResetFromJSON(value any, now time.Time, provider string) (time.Time, bool) {
 	switch typed := value.(type) {
 	case map[string]any:
+		if provider == "antigravity" && isAntigravityQuotaExhaustedMap(typed) {
+			if resetAt, ok := explicitAntigravityResetTime(typed, now); ok {
+				return resetAt, true
+			}
+		}
 		if isUsageLimitMap(typed) {
 			if resetAt, ok := explicitCodexResetTime(typed, now); ok {
 				return resetAt, true
 			}
 		}
 		if rawError, ok := typed["error"]; ok {
-			if errorMap, ok := rawError.(map[string]any); ok && isUsageLimitMap(errorMap) {
-				if resetAt, ok := explicitCodexResetTime(errorMap, now); ok {
-					return resetAt, true
+			if errorMap, ok := rawError.(map[string]any); ok {
+				if provider == "antigravity" && isAntigravityQuotaExhaustedMap(errorMap) {
+					if resetAt, ok := explicitAntigravityResetTime(errorMap, now); ok {
+						return resetAt, true
+					}
+					if resetAt, ok := explicitAntigravityResetTime(typed, now); ok {
+						return resetAt, true
+					}
 				}
-				if resetAt, ok := explicitCodexResetTime(typed, now); ok {
-					return resetAt, true
+				if isUsageLimitMap(errorMap) {
+					if resetAt, ok := explicitCodexResetTime(errorMap, now); ok {
+						return resetAt, true
+					}
+					if resetAt, ok := explicitCodexResetTime(typed, now); ok {
+						return resetAt, true
+					}
 				}
 			}
 		}
 		for _, child := range typed {
-			if resetAt, ok := usageLimitResetFromJSON(child, now); ok {
+			if resetAt, ok := usageLimitResetFromJSON(child, now, provider); ok {
 				return resetAt, true
 			}
 		}
 	case []any:
 		for _, child := range typed {
-			if resetAt, ok := usageLimitResetFromJSON(child, now); ok {
+			if resetAt, ok := usageLimitResetFromJSON(child, now, provider); ok {
 				return resetAt, true
 			}
 		}
@@ -550,6 +565,47 @@ func usageLimitResetFromJSON(value any, now time.Time) (time.Time, bool) {
 
 func isUsageLimitMap(value map[string]any) bool {
 	return strings.EqualFold(strings.TrimSpace(fmt.Sprint(value["type"])), "usage_limit_reached")
+}
+
+func isAntigravityQuotaExhaustedMap(value map[string]any) bool {
+	status := strings.ToUpper(strings.TrimSpace(fmt.Sprint(value["status"])))
+	reason := strings.ToUpper(strings.TrimSpace(fmt.Sprint(value["reason"])))
+	code := strings.ToUpper(strings.TrimSpace(fmt.Sprint(value["code"])))
+	message := strings.ToLower(strings.TrimSpace(fmt.Sprint(value["message"])))
+	domain := strings.ToLower(strings.TrimSpace(fmt.Sprint(value["domain"])))
+	return status == "RESOURCE_EXHAUSTED" ||
+		reason == "QUOTA_EXHAUSTED" ||
+		code == "RESOURCE_EXHAUSTED" ||
+		code == "QUOTA_EXHAUSTED" ||
+		strings.Contains(domain, "cloudcode-pa.googleapis.com") && strings.Contains(message, "quota")
+}
+
+func explicitAntigravityResetTime(value map[string]any, now time.Time) (time.Time, bool) {
+	if metadata, ok := value["metadata"].(map[string]any); ok {
+		if resetAt, ok := explicitAntigravityResetTime(metadata, now); ok {
+			return resetAt, true
+		}
+	}
+	if details, ok := value["details"].([]any); ok {
+		for _, detail := range details {
+			if detailMap, ok := detail.(map[string]any); ok {
+				if resetAt, ok := explicitAntigravityResetTime(detailMap, now); ok {
+					return resetAt, true
+				}
+			}
+		}
+	}
+	for _, key := range []string{"quotaResetTimeStamp", "quotaResetTimestamp", "quota_reset_timestamp", "quota_reset_time_stamp"} {
+		if raw, ok := value[key]; ok {
+			return parseResetValue(raw, now, false)
+		}
+	}
+	for _, key := range []string{"quotaResetDelay", "quota_reset_delay", "retryDelay", "retry_delay"} {
+		if raw, ok := value[key]; ok {
+			return parseDurationResetValue(raw, now)
+		}
+	}
+	return time.Time{}, false
 }
 
 func explicitCodexResetTime(value map[string]any, now time.Time) (time.Time, bool) {
@@ -584,6 +640,20 @@ func parseResetValue(value any, now time.Time, relative bool) (time.Time, bool) 
 	default:
 		return parseResetNumberString(strings.TrimSpace(fmt.Sprint(typed)), now, relative)
 	}
+}
+
+func parseDurationResetValue(value any, now time.Time) (time.Time, bool) {
+	if value == nil {
+		return time.Time{}, false
+	}
+	text := strings.TrimSpace(fmt.Sprint(value))
+	if text == "" || strings.EqualFold(text, "null") {
+		return time.Time{}, false
+	}
+	if parsed, err := time.ParseDuration(text); err == nil {
+		return now.Add(parsed), true
+	}
+	return parseResetNumberString(text, now, true)
 }
 
 func parseResetNumberString(text string, now time.Time, relative bool) (time.Time, bool) {

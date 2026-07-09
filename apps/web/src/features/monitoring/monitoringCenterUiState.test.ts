@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   DEFAULT_MONITORING_DATA_TAB,
+  DEFAULT_MONITORING_REALTIME_VISIBLE_COLUMNS,
   MONITORING_CENTER_UI_STATE_STORAGE_KEY,
   getDefaultMonitoringCenterUiState,
   normalizeMonitoringCenterUiState,
@@ -96,6 +97,7 @@ describe('monitoringCenterUiState', () => {
         selectedStatus: 'failed',
         apiKeyPageSize: 50,
         realtimePageSize: 150,
+        realtimeVisibleColumns: ['latency', 'latency', 'usage', 'bad'],
       })
     ).toEqual({
       ...getDefaultMonitoringCenterUiState(),
@@ -113,6 +115,7 @@ describe('monitoringCenterUiState', () => {
       selectedStatus: 'failed',
       apiKeyPageSize: 50,
       realtimePageSize: 150,
+      realtimeVisibleColumns: ['latency', 'usage'],
     });
   });
 
@@ -121,19 +124,29 @@ describe('monitoringCenterUiState', () => {
       activeDataTab: 'apiKeys',
       selectedProvider: 'claude',
       apiKeyPageSize: 20,
+      realtimeVisibleColumns: ['latency', 'usage'],
     });
     expect(JSON.parse(storage.getItem(MONITORING_CENTER_UI_STATE_STORAGE_KEY) ?? '{}')).toEqual({
       ...getDefaultMonitoringCenterUiState(),
       activeDataTab: 'apiKeys',
       selectedProvider: 'claude',
       apiKeyPageSize: 20,
+      realtimeVisibleColumns: ['latency', 'usage'],
     });
     expect(readMonitoringCenterUiState()).toEqual({
       ...getDefaultMonitoringCenterUiState(),
       activeDataTab: 'apiKeys',
       selectedProvider: 'claude',
       apiKeyPageSize: 20,
+      realtimeVisibleColumns: ['latency', 'usage'],
     });
+  });
+
+  it('falls back to default realtime columns when none are valid', () => {
+    expect(
+      normalizeMonitoringCenterUiState({ realtimeVisibleColumns: ['bad', 123] })
+        .realtimeVisibleColumns
+    ).toEqual(DEFAULT_MONITORING_REALTIME_VISIBLE_COLUMNS);
   });
 
   it('returns defaults when stored payload is invalid JSON', () => {

@@ -33,6 +33,10 @@ import { useNotificationStore } from '@/stores';
 import { copyToClipboard } from '@/utils/clipboard';
 import { maskSensitiveText, truncateText } from '@/utils/format';
 import { formatCompactNumber, formatUsd } from '@/utils/usage';
+import {
+  DEFAULT_MONITORING_REALTIME_VISIBLE_COLUMNS,
+  type MonitoringRealtimeVisibleColumnKey,
+} from '@/features/monitoring/monitoringCenterUiState';
 import styles from '../MonitoringCenterPage.module.scss';
 
 type RealtimeLogRow = MonitoringEventRow & {
@@ -97,28 +101,9 @@ const FAILURE_TOOLTIP_CLOSE_DELAY_MS = 120;
 
 type FailureTooltipPlacement = 'above' | 'below';
 
-export type RealtimeVisibleColumnKey =
-  | 'reasoning'
-  | 'recent'
-  | 'successRate'
-  | 'calls'
-  | 'tps'
-  | 'latency'
-  | 'time'
-  | 'usage'
-  | 'cost';
+export type RealtimeVisibleColumnKey = MonitoringRealtimeVisibleColumnKey;
 
-export const DEFAULT_REALTIME_VISIBLE_COLUMNS: RealtimeVisibleColumnKey[] = [
-  'reasoning',
-  'recent',
-  'successRate',
-  'calls',
-  'tps',
-  'latency',
-  'time',
-  'usage',
-  'cost',
-];
+export const DEFAULT_REALTIME_VISIBLE_COLUMNS = DEFAULT_MONITORING_REALTIME_VISIBLE_COLUMNS;
 
 const realtimeBaseColumnCount = 3;
 

@@ -1191,7 +1191,7 @@
   top: calc(100% + 8px);
   right: 0;
   z-index: 20;
-  width: min(320px, calc(100vw - 32px));
+  width: min(360px, calc(100vw - 32px));
   padding: 10px;
   border: 1px solid var(--monitor-line);
   border-radius: 12px;
@@ -1213,8 +1213,18 @@
 }
 
 .realtimeColumnMenuOption {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  align-items: center;
   min-width: 0;
   padding: 4px 2px;
+}
+
+.realtimeColumnMenuOption > div:last-child {
+  min-width: 0;
+  line-height: 1.25;
+  white-space: normal;
+  word-break: keep-all;
 }
 
 .errorBox,

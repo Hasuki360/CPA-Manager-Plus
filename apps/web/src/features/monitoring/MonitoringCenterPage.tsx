@@ -64,7 +64,6 @@ import {
 import { MonitoringSummarySection } from '@/features/monitoring/components/MonitoringSummarySection';
 import type { MonitoringTab } from '@/features/monitoring/components/MonitoringTabsBar';
 import {
-  DEFAULT_REALTIME_VISIBLE_COLUMNS,
   RealtimeEventsPanel,
   RealtimeEventsPanelActions,
   type RealtimeVisibleColumnKey,
@@ -263,8 +262,9 @@ export function MonitoringCenterPage() {
   const [realtimePageSize, setRealtimePageSize] = useState(
     initialMonitoringCenterUiState.current.realtimePageSize
   );
-  const [realtimeVisibleColumns, setRealtimeVisibleColumns] =
-    useState<RealtimeVisibleColumnKey[]>(DEFAULT_REALTIME_VISIBLE_COLUMNS);
+  const [realtimeVisibleColumns, setRealtimeVisibleColumns] = useState<RealtimeVisibleColumnKey[]>(
+    initialMonitoringCenterUiState.current.realtimeVisibleColumns
+  );
   const focusSnapshotRef = useRef<FocusSnapshot | null>(null);
   const previousAccountPageResetStateRef = useRef<AccountOverviewPageResetState | null>(null);
   const accountQuotaStatesRef = useRef<Record<string, AccountQuotaState>>({});
@@ -504,6 +504,7 @@ export function MonitoringCenterPage() {
       selectedStatus,
       apiKeyPageSize,
       realtimePageSize,
+      realtimeVisibleColumns,
     });
   }, [
     activeDataTab,
@@ -512,6 +513,7 @@ export function MonitoringCenterPage() {
     customEndInput,
     customStartInput,
     realtimePageSize,
+    realtimeVisibleColumns,
     searchInput,
     selectedAccount,
     selectedApiKeyHash,

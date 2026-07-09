@@ -46,12 +46,17 @@ func TestQuotaAutoDisableCandidateRequiresStrictQuotaUsageLimit(t *testing.T) {
 	antigravity.EventHash = "evt-antigravity"
 	antigravity.Provider = "antigravity"
 	antigravity.AuthFileSnapshot = "antigravity-auth.json"
+	antigravity.FailBody = `{"error":{"code":429,"message":"Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 39h49m8s.","status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"QUOTA_EXHAUSTED","domain":"cloudcode-pa.googleapis.com","metadata":{"uiMessage":"true","model":"gemini-3-flash-agent","quotaResetDelay":"39h49m8.445762022s","quotaResetTimeStamp":"2026-07-11T07:00:30Z"}},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"143348.445762022s"}]}}`
 	candidate, ok = quotaAutoDisableCandidateFromEvent(antigravity, "http://cpa", "key", now)
 	if !ok {
 		t.Fatalf("antigravity candidate not detected")
 	}
 	if candidate.Provider != "antigravity" || candidate.FileName != "antigravity-auth.json" {
 		t.Fatalf("antigravity candidate = %#v", candidate)
+	}
+	// 2026-07-11T07:00:30Z is unix 1783753230
+	if candidate.ResetAt.Unix() != 1783753230 {
+		t.Fatalf("antigravity reset time = %v, want 1783753230", candidate.ResetAt.Unix())
 	}
 
 	cases := []struct {
