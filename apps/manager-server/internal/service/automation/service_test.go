@@ -41,9 +41,10 @@ func mustStatus(t *testing.T, svc *Service, ctx context.Context) Status {
 
 func TestStatusExposesEffectiveFlagsAndKeys(t *testing.T) {
 	cfg := config.Config{
-		QuotaCooldownEnabled:      true,
-		AccountActionsEnabled:     true,
-		AccountActionsAutoDisable: false,
+		QuotaCooldownEnabled:            true,
+		AntigravityQuotaCooldownEnabled: true,
+		AccountActionsEnabled:           true,
+		AccountActionsAutoDisable:       false,
 	}
 	status := mustStatus(t, New(cfg), context.Background())
 
@@ -56,6 +57,12 @@ func TestStatusExposesEffectiveFlagsAndKeys(t *testing.T) {
 	}
 	if status.QuotaCooldown.DependsOn != "" {
 		t.Fatalf("quotaCooldown should not declare a dependency, got %q", status.QuotaCooldown.DependsOn)
+	}
+	if !status.AntigravityQuotaCooldown.Enabled || status.AntigravityQuotaCooldown.EnvKey != "USAGE_ANTIGRAVITY_QUOTA_COOLDOWN_ENABLED" || status.AntigravityQuotaCooldown.ConfigFileKey != "antigravityQuotaCooldownEnabled" {
+		t.Fatalf("antigravityQuotaCooldown = %#v", status.AntigravityQuotaCooldown)
+	}
+	if status.AntigravityQuotaCooldown.DependsOn != "" {
+		t.Fatalf("antigravityQuotaCooldown should not declare a dependency, got %q", status.AntigravityQuotaCooldown.DependsOn)
 	}
 
 	if !status.AccountActions.Enabled || status.AccountActions.EnvKey != "USAGE_ACCOUNT_ACTIONS_ENABLED" || status.AccountActions.ConfigFileKey != "accountActionsEnabled" {
@@ -109,15 +116,19 @@ func TestStatusUsesDBSettingsUnlessEnvLocked(t *testing.T) {
 	ctx := context.Background()
 
 	if _, err := st.SaveAutomationSettings(ctx, store.AutomationSettings{
-		QuotaCooldownEnabled:      boolPtr(true),
-		AccountActionsEnabled:     boolPtr(false),
-		AccountActionsAutoDisable: boolPtr(true),
+		QuotaCooldownEnabled:            boolPtr(true),
+		AntigravityQuotaCooldownEnabled: boolPtr(true),
+		AccountActionsEnabled:           boolPtr(false),
+		AccountActionsAutoDisable:       boolPtr(true),
 	}); err != nil {
 		t.Fatalf("save automation settings: %v", err)
 	}
 	status := mustStatus(t, New(config.Config{}, st), ctx)
 	if !status.QuotaCooldown.Enabled || status.QuotaCooldown.Source != SourceDB || status.QuotaCooldown.Locked {
 		t.Fatalf("quotaCooldown = %#v", status.QuotaCooldown)
+	}
+	if !status.AntigravityQuotaCooldown.Enabled || status.AntigravityQuotaCooldown.Source != SourceDB || status.AntigravityQuotaCooldown.Locked {
+		t.Fatalf("antigravityQuotaCooldown = %#v", status.AntigravityQuotaCooldown)
 	}
 	if status.AccountActions.Enabled || status.AccountActions.Source != SourceDB {
 		t.Fatalf("accountActions = %#v", status.AccountActions)
@@ -146,7 +157,7 @@ func TestUpdateRejectsEnvLockedFields(t *testing.T) {
 
 func TestStatusDefaultsAllOff(t *testing.T) {
 	status := mustStatus(t, New(config.Config{}), context.Background())
-	if status.QuotaCooldown.Enabled || status.AccountActions.Enabled || status.AccountActionsAutoDisable.Enabled {
+	if status.QuotaCooldown.Enabled || status.AntigravityQuotaCooldown.Enabled || status.AccountActions.Enabled || status.AccountActionsAutoDisable.Enabled {
 		t.Fatalf("expected all capabilities disabled by default, got %#v", status)
 	}
 }
@@ -207,6 +218,7 @@ func TestUpdateSerializesConcurrentPatches(t *testing.T) {
 
 	patches := []UpdateRequest{
 		{QuotaCooldownEnabled: boolPtr(true)},
+		{AntigravityQuotaCooldownEnabled: boolPtr(true)},
 		{AccountActionsEnabled: boolPtr(true)},
 		{AccountActionsAutoDisable: boolPtr(true)},
 	}
@@ -226,6 +238,9 @@ func TestUpdateSerializesConcurrentPatches(t *testing.T) {
 	status := mustStatus(t, svc, ctx)
 	if !status.QuotaCooldown.Enabled {
 		t.Fatalf("quotaCooldown field lost under concurrent updates: %#v", status)
+	}
+	if !status.AntigravityQuotaCooldown.Enabled {
+		t.Fatalf("antigravityQuotaCooldown field lost under concurrent updates: %#v", status)
 	}
 	if !status.AccountActions.Enabled {
 		t.Fatalf("accountActions field lost under concurrent updates: %#v", status)

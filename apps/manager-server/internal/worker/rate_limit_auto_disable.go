@@ -27,7 +27,7 @@ const (
 )
 
 // RateLimitAutoDisableWorker reacts to request-monitoring events in near real time.
-// It only handles Codex 429 usage_limit_reached responses that include an explicit
+// It handles quota 429 usage_limit_reached responses that include an explicit
 // reset time. Disables are persisted with CPAMP ownership, so recovery never relies
 // solely on in-memory timers and never re-enables pre-existing/manual disables.
 type RateLimitAutoDisableWorker struct {
@@ -193,7 +193,7 @@ func (w *RateLimitAutoDisableWorker) handleCandidate(ctx context.Context, candid
 	}
 
 	resolvedAuthIndex := firstNonEmpty(candidate.AuthIndex, current.AuthIndex)
-	log.Printf("[quota-auto-disable] Codex usage limit reached for auth file %q account=%q provider=%q resetAt=%s, disabling", candidate.FileName, candidate.DisplayAccount, candidate.Provider, candidate.ResetAt.Format(time.RFC3339))
+	log.Printf("[quota-auto-disable] %s usage limit reached for auth file %q account=%q resetAt=%s, disabling", candidate.Provider, candidate.FileName, candidate.DisplayAccount, candidate.ResetAt.Format(time.RFC3339))
 	if err := w.patchAuthFile(ctx, candidate.BaseURL, candidate.ManagementKey, candidate.FileName, resolvedAuthIndex, true); err != nil {
 		log.Printf("[quota-auto-disable] failed to disable auth file %q: %v", candidate.FileName, err)
 		return
@@ -318,17 +318,18 @@ func (w *RateLimitAutoDisableWorker) recoverCooldown(ctx context.Context, baseUR
 		log.Printf("[quota-auto-disable] enabled auth file %q but failed to mark cooldown recovered: %v", item.AuthFileName, err)
 		return
 	}
-	log.Printf("[quota-auto-disable] enabled auth file %q after Codex usage-limit reset", item.AuthFileName)
+	log.Printf("[quota-auto-disable] enabled auth file %q after %s usage-limit reset", item.AuthFileName, item.Provider)
 }
 
 func quotaAutoDisableCandidateFromEvent(event usage.Event, baseURL string, managementKey string, now time.Time) (quotaAutoDisableCandidate, bool) {
-	resetAt, ok := codexUsageLimitResetTimeFromEvent(event, now)
+	provider := strings.ToLower(strings.TrimSpace(firstNonEmpty(event.Provider, event.AuthProviderSnapshot)))
+	resetAt, ok := quotaUsageLimitResetTimeFromEvent(event, now, provider)
 	if !ok {
 		return quotaAutoDisableCandidate{}, false
 	}
 	fileName := strings.TrimSpace(event.AuthFileSnapshot)
 	if fileName == "" {
-		log.Printf("[quota-auto-disable] Codex usage-limit event %q has no auth file snapshot, skip auto disable", event.EventHash)
+		log.Printf("[quota-auto-disable] %s usage-limit event %q has no auth file snapshot, skip auto disable", provider, event.EventHash)
 		return quotaAutoDisableCandidate{}, false
 	}
 	return quotaAutoDisableCandidate{
@@ -337,19 +338,18 @@ func quotaAutoDisableCandidateFromEvent(event usage.Event, baseURL string, manag
 		FileName:       fileName,
 		AuthIndex:      strings.TrimSpace(event.AuthIndex),
 		DisplayAccount: firstNonEmpty(event.AccountSnapshot, event.AuthLabelSnapshot, event.Source, fileName),
-		Provider:       "codex",
+		Provider:       provider,
 		ResetAt:        resetAt,
 		EventHash:      event.EventHash,
 		Reason:         event.FailSummary,
 	}, true
 }
 
-func codexUsageLimitResetTimeFromEvent(event usage.Event, now time.Time) (time.Time, bool) {
+func quotaUsageLimitResetTimeFromEvent(event usage.Event, now time.Time, provider string) (time.Time, bool) {
 	if !event.Failed || event.FailStatusCode != http.StatusTooManyRequests {
 		return time.Time{}, false
 	}
-	provider := strings.ToLower(strings.TrimSpace(firstNonEmpty(event.Provider, event.AuthProviderSnapshot)))
-	if provider != "codex" {
+	if provider != "codex" && provider != "antigravity" {
 		return time.Time{}, false
 	}
 	if resetAt, ok := codexUsageLimitResetTimeFromHeaders(event, now); ok {

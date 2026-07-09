@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"log"
+	"strings"
 
 	collectorpkg "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/collector"
 	automationsvc "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/automation"
@@ -84,7 +85,7 @@ func (r *AutomationRuntime) logState(ctx context.Context, action string) {
 		return
 	}
 	settings := r.settings.RuntimeSettings(ctx)
-	log.Printf("[automation] runtime settings %s quotaCooldown=%t accountActions=%t accountActionsAutoDisable=%t", action, settings.QuotaCooldownEnabled, settings.AccountActionsEnabled, settings.AccountActionsAutoDisable)
+	log.Printf("[automation] runtime settings %s codexQuotaCooldown=%t antigravityQuotaCooldown=%t accountActions=%t accountActionsAutoDisable=%t", action, settings.QuotaCooldownEnabled, settings.AntigravityQuotaCooldownEnabled, settings.AccountActionsEnabled, settings.AccountActionsAutoDisable)
 }
 
 type automationUsageHandler struct {
@@ -98,13 +99,40 @@ func (h *automationUsageHandler) HandleUsageEvents(ctx context.Context, cfg coll
 		return
 	}
 	settings := h.settings.RuntimeSettings(ctx)
-	if settings.QuotaCooldownEnabled && h.quotaWorker != nil {
-		h.quotaWorker.HandleUsageEvents(ctx, cfg, events)
+	if h.quotaWorker != nil {
+		quotaEvents := filterQuotaCooldownEvents(events, settings)
+		if len(quotaEvents) > 0 {
+			h.quotaWorker.HandleUsageEvents(ctx, cfg, quotaEvents)
+		}
 	}
 	if settings.AccountActionsEnabled && h.accountWorker != nil {
 		h.accountWorker.SetAutoDisable(settings.AccountActionsAutoDisable)
 		h.accountWorker.HandleUsageEvents(ctx, cfg, events)
 	}
+}
+
+func filterQuotaCooldownEvents(events []usage.Event, settings automationsvc.RuntimeSettings) []usage.Event {
+	if len(events) == 0 || (!settings.QuotaCooldownEnabled && !settings.AntigravityQuotaCooldownEnabled) {
+		return nil
+	}
+	filtered := make([]usage.Event, 0, len(events))
+	for _, event := range events {
+		switch normalizedQuotaProvider(event) {
+		case "codex":
+			if settings.QuotaCooldownEnabled {
+				filtered = append(filtered, event)
+			}
+		case "antigravity":
+			if settings.AntigravityQuotaCooldownEnabled {
+				filtered = append(filtered, event)
+			}
+		}
+	}
+	return filtered
+}
+
+func normalizedQuotaProvider(event usage.Event) string {
+	return strings.ToLower(strings.TrimSpace(firstNonEmpty(event.Provider, event.AuthProviderSnapshot)))
 }
 
 func (h *automationUsageHandler) UpdateRuntimeConfig(ctx context.Context, cfg collectorpkg.RuntimeConfig) {

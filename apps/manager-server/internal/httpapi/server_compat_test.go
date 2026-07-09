@@ -244,7 +244,7 @@ func TestServerCompatAccountProcessingPolicyPatchReloadsRuntime(t *testing.T) {
 	server := New(cfg, db, manager, runtime)
 	handler := server.Handler()
 
-	body := `{"codexQuotaCooldownEnabled":true,"authIssueQueueEnabled":true,"authIssueAutoDisableEnabled":true}`
+	body := `{"codexQuotaCooldownEnabled":true,"antigravityQuotaCooldownEnabled":true,"authIssueQueueEnabled":true,"authIssueAutoDisableEnabled":true}`
 	rr := testutil.Request(t, handler, http.MethodPatch, "/usage-service/account-processing-policy", body, testutil.AdminKey)
 	testutil.RequireStatus(t, rr, http.StatusOK)
 	if runtime.reloadCount != 1 {
@@ -255,6 +255,10 @@ func TestServerCompatAccountProcessingPolicyPatchReloadsRuntime(t *testing.T) {
 			Enabled bool   `json:"enabled"`
 			Source  string `json:"source"`
 		} `json:"codexQuotaCooldown"`
+		AntigravityQuotaCooldown struct {
+			Enabled bool   `json:"enabled"`
+			Source  string `json:"source"`
+		} `json:"antigravityQuotaCooldown"`
 		AccountActionsAutoDisable struct {
 			Enabled    bool   `json:"enabled"`
 			Configured bool   `json:"configured"`
@@ -264,6 +268,9 @@ func TestServerCompatAccountProcessingPolicyPatchReloadsRuntime(t *testing.T) {
 	testutil.DecodeJSON(t, rr, &response)
 	if !response.QuotaCooldown.Enabled || response.QuotaCooldown.Source != "database" {
 		t.Fatalf("quotaCooldown response = %#v", response.QuotaCooldown)
+	}
+	if !response.AntigravityQuotaCooldown.Enabled || response.AntigravityQuotaCooldown.Source != "database" {
+		t.Fatalf("antigravityQuotaCooldown response = %#v", response.AntigravityQuotaCooldown)
 	}
 	if !response.AccountActionsAutoDisable.Enabled || !response.AccountActionsAutoDisable.Configured || response.AccountActionsAutoDisable.Source != "database" {
 		t.Fatalf("auto-disable response = %#v", response.AccountActionsAutoDisable)
@@ -279,7 +286,7 @@ func TestServerCompatAccountProcessingPolicyPatchReloadsRuntime(t *testing.T) {
 		t.Fatalf("close store: %v", err)
 	}
 	runtimeSettings := server.AppContext().AccountProcessingPolicyService.RuntimeSettings(context.Background())
-	if !runtimeSettings.QuotaCooldownEnabled || !runtimeSettings.AccountActionsEnabled || !runtimeSettings.AccountActionsAutoDisable {
+	if !runtimeSettings.QuotaCooldownEnabled || !runtimeSettings.AntigravityQuotaCooldownEnabled || !runtimeSettings.AccountActionsEnabled || !runtimeSettings.AccountActionsAutoDisable {
 		t.Fatalf("runtime settings should use the PATCH-updated cache after load failure, got %#v", runtimeSettings)
 	}
 }

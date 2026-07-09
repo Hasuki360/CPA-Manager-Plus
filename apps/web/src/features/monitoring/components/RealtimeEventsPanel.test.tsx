@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { AccountDisplayMode } from '@/features/monitoring/accountOverviewState';
 import type { MonitoringEventRow } from '@/features/monitoring/hooks/useMonitoringData';
 import styles from '../MonitoringCenterPage.module.scss';
-import { RealtimeEventsPanel } from './RealtimeEventsPanel';
+import { DEFAULT_REALTIME_VISIBLE_COLUMNS, RealtimeEventsPanel } from './RealtimeEventsPanel';
 
 const t = ((key: string, options?: Record<string, unknown>) => {
   const messages: Record<string, string> = {
@@ -41,6 +41,8 @@ const t = ((key: string, options?: Record<string, unknown>) => {
     'monitoring.realtime_api_key_hash': 'API Key hash',
     'monitoring.realtime_api_key_label': 'API Key',
     'monitoring.realtime_api_key_masked': 'Masked key',
+    'monitoring.realtime_columns_button': 'Columns',
+    'monitoring.realtime_columns_title': 'Visible columns',
     'monitoring.request_status': 'Status',
     'monitoring.result_failed': 'Failed',
     'monitoring.result_success': 'Success',
@@ -73,6 +75,7 @@ type PanelOverrides = {
   eventsLoadingMore?: boolean;
   eventsTotalCount?: number;
   eventsLoadedCount?: number;
+  locale?: string;
 };
 
 const baseRow = (overrides: Partial<PanelRow> = {}): PanelRow => ({
@@ -147,11 +150,13 @@ const renderPanel = (row: PanelRow, overrides: PanelOverrides = {}) =>
       overallLoading={false}
       hasPrices={false}
       accountDisplayMode={overrides.accountDisplayMode ?? 'masked'}
-      locale="en-US"
+      locale={overrides.locale ?? 'en-US'}
       emptyState={<span>empty</span>}
       t={t}
       onToggleFailedOnly={noop}
       onAccountDisplayModeChange={noop}
+      visibleColumns={DEFAULT_REALTIME_VISIBLE_COLUMNS}
+      onVisibleColumnsChange={noop}
       onPageChange={noop}
       onPageSizeChange={noop}
       onLoadMoreEvents={noop}
@@ -233,6 +238,26 @@ describe('RealtimeEventsPanel', () => {
     expect(markup).not.toContain('role="tooltip"');
     expect(markup).not.toContain('aria-describedby=');
     expect(markup).not.toContain('HTTP');
+  });
+
+  it('keeps I/O/R/C labels but uses Chinese compact units for zh locales', () => {
+    const markup = renderPanel(
+      baseRow({
+        inputTokens: 1_211_800,
+        outputTokens: 250,
+        reasoningTokens: 39,
+        cachedTokens: 210_900,
+        totalTokens: 212_100,
+      }),
+      { locale: 'zh-CN' }
+    );
+
+    expect(markup).toContain('21.2万');
+    expect(markup).toContain('I 121.2万');
+    expect(markup).toContain('O 250');
+    expect(markup).toContain('R 39');
+    expect(markup).toContain('C 21.1万');
+    expect(markup).not.toContain('212.1K');
   });
 
   it('renders API key alias inside the source cell without adding another column', () => {

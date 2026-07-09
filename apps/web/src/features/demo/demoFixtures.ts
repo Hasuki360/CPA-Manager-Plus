@@ -2586,16 +2586,24 @@ export const getDemoUsageServiceStatus = (): UsageServiceStatus => ({
 export const getDemoAccountProcessingPolicy = (): AccountProcessingPolicy => ({
   source: 'db',
   updatedAtMs: now() - hour,
-  codexQuotaCooldown: {
-    enabled: true,
-    configured: true,
-    source: 'db',
-    locked: false,
-    envKey: 'CPA_CODEX_QUOTA_COOLDOWN_ENABLED',
-    configFileKey: 'codexQuotaCooldownEnabled',
-  },
-  authIssueQueue: {
-    enabled: true,
+    codexQuotaCooldown: {
+      enabled: true,
+      configured: true,
+      source: 'db',
+      locked: false,
+      envKey: 'CPA_CODEX_QUOTA_COOLDOWN_ENABLED',
+      configFileKey: 'codexQuotaCooldownEnabled',
+    },
+    antigravityQuotaCooldown: {
+      enabled: true,
+      configured: true,
+      source: 'db',
+      locked: false,
+      envKey: 'USAGE_ANTIGRAVITY_QUOTA_COOLDOWN_ENABLED',
+      configFileKey: 'antigravityQuotaCooldownEnabled',
+    },
+    authIssueQueue: {
+      enabled: true,
     configured: true,
     source: 'db',
     locked: false,

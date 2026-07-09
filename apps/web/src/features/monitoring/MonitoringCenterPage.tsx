@@ -64,8 +64,10 @@ import {
 import { MonitoringSummarySection } from '@/features/monitoring/components/MonitoringSummarySection';
 import type { MonitoringTab } from '@/features/monitoring/components/MonitoringTabsBar';
 import {
+  DEFAULT_REALTIME_VISIBLE_COLUMNS,
   RealtimeEventsPanel,
   RealtimeEventsPanelActions,
+  type RealtimeVisibleColumnKey,
 } from '@/features/monitoring/components/RealtimeEventsPanel';
 import { type AccountQuotaState } from '@/features/monitoring/components/accountOverviewPresentation';
 import {
@@ -261,6 +263,8 @@ export function MonitoringCenterPage() {
   const [realtimePageSize, setRealtimePageSize] = useState(
     initialMonitoringCenterUiState.current.realtimePageSize
   );
+  const [realtimeVisibleColumns, setRealtimeVisibleColumns] =
+    useState<RealtimeVisibleColumnKey[]>(DEFAULT_REALTIME_VISIBLE_COLUMNS);
   const focusSnapshotRef = useRef<FocusSnapshot | null>(null);
   const previousAccountPageResetStateRef = useRef<AccountOverviewPageResetState | null>(null);
   const accountQuotaStatesRef = useRef<Record<string, AccountQuotaState>>({});
@@ -1175,6 +1179,8 @@ export function MonitoringCenterPage() {
         t={t}
         onToggleFailedOnly={toggleFailedOnly}
         onAccountDisplayModeChange={setAccountDisplayMode}
+        visibleColumns={realtimeVisibleColumns}
+        onVisibleColumnsChange={setRealtimeVisibleColumns}
       />
     );
   }, [
@@ -1187,6 +1193,7 @@ export function MonitoringCenterPage() {
     failedOnlyActive,
     handleAccountSortKeyChange,
     overallLoading,
+    realtimeVisibleColumns,
     realtimeLogRows.length,
     refreshAll,
     scopedFailureCount,
@@ -1488,6 +1495,8 @@ export function MonitoringCenterPage() {
               t={t}
               onToggleFailedOnly={toggleFailedOnly}
               onAccountDisplayModeChange={setAccountDisplayMode}
+              visibleColumns={realtimeVisibleColumns}
+              onVisibleColumnsChange={setRealtimeVisibleColumns}
               onPageChange={setRealtimePage}
               onPageSizeChange={handleRealtimePageSizeChange}
               onLoadMoreEvents={loadMoreEvents}

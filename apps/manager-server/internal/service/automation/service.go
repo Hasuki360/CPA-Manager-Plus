@@ -37,14 +37,16 @@ type Status struct {
 	Source                    string     `json:"source"`
 	UpdatedAtMS               int64      `json:"updatedAtMs,omitempty"`
 	QuotaCooldown             Capability `json:"codexQuotaCooldown"`
+	AntigravityQuotaCooldown  Capability `json:"antigravityQuotaCooldown"`
 	AccountActions            Capability `json:"authIssueQueue"`
 	AccountActionsAutoDisable Capability `json:"authIssueAutoDisable"`
 }
 
 type UpdateRequest struct {
-	QuotaCooldownEnabled      *bool `json:"codexQuotaCooldownEnabled,omitempty"`
-	AccountActionsEnabled     *bool `json:"authIssueQueueEnabled,omitempty"`
-	AccountActionsAutoDisable *bool `json:"authIssueAutoDisableEnabled,omitempty"`
+	QuotaCooldownEnabled            *bool `json:"codexQuotaCooldownEnabled,omitempty"`
+	AntigravityQuotaCooldownEnabled *bool `json:"antigravityQuotaCooldownEnabled,omitempty"`
+	AccountActionsEnabled           *bool `json:"authIssueQueueEnabled,omitempty"`
+	AccountActionsAutoDisable       *bool `json:"authIssueAutoDisableEnabled,omitempty"`
 }
 
 type Service struct {
@@ -99,6 +101,12 @@ func (s *Service) Update(ctx context.Context, req UpdateRequest) (Status, error)
 		}
 		current.QuotaCooldownEnabled = boolPtr(*req.QuotaCooldownEnabled)
 	}
+	if req.AntigravityQuotaCooldownEnabled != nil {
+		if s.cfg.AntigravityQuotaCooldownEnvSet {
+			return Status{}, errors.New("antigravityQuotaCooldownEnabled is locked by environment variable")
+		}
+		current.AntigravityQuotaCooldownEnabled = boolPtr(*req.AntigravityQuotaCooldownEnabled)
+	}
 	if req.AccountActionsEnabled != nil {
 		if s.cfg.AccountActionsEnvSet {
 			return Status{}, errors.New("accountActionsEnabled is locked by environment variable")
@@ -150,9 +158,10 @@ func (s *Service) RuntimeSettings(ctx context.Context) RuntimeSettings {
 }
 
 type RuntimeSettings struct {
-	QuotaCooldownEnabled      bool
-	AccountActionsEnabled     bool
-	AccountActionsAutoDisable bool
+	QuotaCooldownEnabled            bool
+	AntigravityQuotaCooldownEnabled bool
+	AccountActionsEnabled           bool
+	AccountActionsAutoDisable       bool
 }
 
 func (s *Service) loadSettings(ctx context.Context) (store.AutomationSettings, bool, error) {
@@ -163,28 +172,34 @@ func (s *Service) loadSettings(ctx context.Context) (store.AutomationSettings, b
 }
 
 type resolved struct {
-	quotaValue, quotaLocked     bool
-	quotaSource                 string
-	accountValue, accountLocked bool
-	accountSource               string
-	autoConfigured, autoLocked  bool
-	autoSource                  string
+	quotaValue, quotaLocked           bool
+	quotaSource                       string
+	antigravityValue, antigravityLocked bool
+	antigravitySource                 string
+	accountValue, accountLocked       bool
+	accountSource                     string
+	autoConfigured, autoLocked        bool
+	autoSource                        string
 }
 
 func (s *Service) resolve(settings store.AutomationSettings) resolved {
 	quotaValue, quotaSource, quotaLocked := s.resolveField(settings.QuotaCooldownEnabled, s.cfg.QuotaCooldownEnabled, s.cfg.QuotaCooldownEnvSet)
+	antigravityValue, antigravitySource, antigravityLocked := s.resolveField(settings.AntigravityQuotaCooldownEnabled, s.cfg.AntigravityQuotaCooldownEnabled, s.cfg.AntigravityQuotaCooldownEnvSet)
 	accountValue, accountSource, accountLocked := s.resolveField(settings.AccountActionsEnabled, s.cfg.AccountActionsEnabled, s.cfg.AccountActionsEnvSet)
 	autoConfigured, autoSource, autoLocked := s.resolveField(settings.AccountActionsAutoDisable, s.cfg.AccountActionsAutoDisable, s.cfg.AccountActionsAutoEnvSet)
 	return resolved{
-		quotaValue:     quotaValue,
-		quotaSource:    quotaSource,
-		quotaLocked:    quotaLocked,
-		accountValue:   accountValue,
-		accountSource:  accountSource,
-		accountLocked:  accountLocked,
-		autoConfigured: autoConfigured,
-		autoSource:     autoSource,
-		autoLocked:     autoLocked,
+		quotaValue:        quotaValue,
+		quotaSource:       quotaSource,
+		quotaLocked:       quotaLocked,
+		antigravityValue:  antigravityValue,
+		antigravitySource: antigravitySource,
+		antigravityLocked: antigravityLocked,
+		accountValue:      accountValue,
+		accountSource:     accountSource,
+		accountLocked:     accountLocked,
+		autoConfigured:    autoConfigured,
+		autoSource:        autoSource,
+		autoLocked:        autoLocked,
 	}
 }
 
@@ -193,7 +208,7 @@ func (s *Service) statusFromSettings(settings store.AutomationSettings) Status {
 	autoEffective := r.accountValue && r.autoConfigured
 
 	return Status{
-		Source:      overallSource(r.quotaSource, r.accountSource, r.autoSource),
+		Source:      overallSource(r.quotaSource, r.antigravitySource, r.accountSource, r.autoSource),
 		UpdatedAtMS: settings.UpdatedAtMS,
 		QuotaCooldown: Capability{
 			Enabled:       r.quotaValue,
@@ -202,6 +217,14 @@ func (s *Service) statusFromSettings(settings store.AutomationSettings) Status {
 			Locked:        r.quotaLocked,
 			EnvKey:        "USAGE_QUOTA_COOLDOWN_ENABLED",
 			ConfigFileKey: "quotaCooldownEnabled",
+		},
+		AntigravityQuotaCooldown: Capability{
+			Enabled:       r.antigravityValue,
+			Configured:    r.antigravityValue,
+			Source:        r.antigravitySource,
+			Locked:        r.antigravityLocked,
+			EnvKey:        "USAGE_ANTIGRAVITY_QUOTA_COOLDOWN_ENABLED",
+			ConfigFileKey: "antigravityQuotaCooldownEnabled",
 		},
 		AccountActions: Capability{
 			Enabled:       r.accountValue,
@@ -226,9 +249,10 @@ func (s *Service) statusFromSettings(settings store.AutomationSettings) Status {
 func (s *Service) runtimeFromSettings(settings store.AutomationSettings) RuntimeSettings {
 	r := s.resolve(settings)
 	return RuntimeSettings{
-		QuotaCooldownEnabled:      r.quotaValue,
-		AccountActionsEnabled:     r.accountValue,
-		AccountActionsAutoDisable: r.accountValue && r.autoConfigured,
+		QuotaCooldownEnabled:            r.quotaValue,
+		AntigravityQuotaCooldownEnabled: r.antigravityValue,
+		AccountActionsEnabled:           r.accountValue,
+		AccountActionsAutoDisable:       r.accountValue && r.autoConfigured,
 	}
 }
 

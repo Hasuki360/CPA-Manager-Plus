@@ -1181,6 +1181,42 @@
   color: var(--monitor-red);
 }
 
+.realtimeColumnMenuWrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.realtimeColumnMenu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 20;
+  width: min(320px, calc(100vw - 32px));
+  padding: 10px;
+  border: 1px solid var(--monitor-line);
+  border-radius: 12px;
+  background: var(--monitor-surface);
+  box-shadow: var(--shadow-lg);
+}
+
+.realtimeColumnMenuTitle {
+  padding: 0 2px 8px;
+  color: var(--monitor-muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.realtimeColumnMenuGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px 10px;
+}
+
+.realtimeColumnMenuOption {
+  min-width: 0;
+  padding: 4px 2px;
+}
+
 .errorBox,
 .callout {
   display: flex;

@@ -31,16 +31,32 @@ func TestAutomationUsageHandlerGatesNewEvents(t *testing.T) {
 	if _, err := settings.Update(ctx, automationsvc.UpdateRequest{QuotaCooldownEnabled: boolPtr(true)}); err != nil {
 		t.Fatalf("enable quota: %v", err)
 	}
-	handler.HandleUsageEvents(ctx, collectorpkg.RuntimeConfig{}, []usage.Event{{EventHash: "evt-quota"}})
+	handler.HandleUsageEvents(ctx, collectorpkg.RuntimeConfig{}, []usage.Event{{EventHash: "evt-quota", Provider: "codex"}})
 	if quota.handleCount != 1 || account.handleCount != 0 {
 		t.Fatalf("quota-only counts quota=%d account=%d", quota.handleCount, account.handleCount)
+	}
+	if len(quota.lastEvents) != 1 || quota.lastEvents[0].EventHash != "evt-quota" {
+		t.Fatalf("quota events = %#v", quota.lastEvents)
+	}
+
+	handler.HandleUsageEvents(ctx, collectorpkg.RuntimeConfig{}, []usage.Event{{EventHash: "evt-antigravity-off", Provider: "antigravity"}})
+	if quota.handleCount != 1 {
+		t.Fatalf("antigravity event should be gated off, quota=%d events=%#v", quota.handleCount, quota.lastEvents)
+	}
+
+	if _, err := settings.Update(ctx, automationsvc.UpdateRequest{AntigravityQuotaCooldownEnabled: boolPtr(true)}); err != nil {
+		t.Fatalf("enable antigravity quota: %v", err)
+	}
+	handler.HandleUsageEvents(ctx, collectorpkg.RuntimeConfig{}, []usage.Event{{EventHash: "evt-antigravity", Provider: "antigravity"}})
+	if quota.handleCount != 2 || len(quota.lastEvents) != 1 || quota.lastEvents[0].EventHash != "evt-antigravity" {
+		t.Fatalf("antigravity quota counts=%d events=%#v", quota.handleCount, quota.lastEvents)
 	}
 
 	if _, err := settings.Update(ctx, automationsvc.UpdateRequest{AccountActionsEnabled: boolPtr(true), AccountActionsAutoDisable: boolPtr(true)}); err != nil {
 		t.Fatalf("enable account actions: %v", err)
 	}
-	handler.HandleUsageEvents(ctx, collectorpkg.RuntimeConfig{}, []usage.Event{{EventHash: "evt-both"}})
-	if quota.handleCount != 2 || account.handleCount != 1 || !account.autoDisable {
+	handler.HandleUsageEvents(ctx, collectorpkg.RuntimeConfig{}, []usage.Event{{EventHash: "evt-both", Provider: "codex"}})
+	if quota.handleCount != 3 || account.handleCount != 1 || !account.autoDisable {
 		t.Fatalf("enabled counts quota=%d account=%d auto=%t", quota.handleCount, account.handleCount, account.autoDisable)
 	}
 }
@@ -71,14 +87,16 @@ type recordingQuotaAutomationWorker struct {
 	startCount   int
 	handleCount  int
 	runtimeCount int
+	lastEvents   []usage.Event
 }
 
 func (w *recordingQuotaAutomationWorker) Start(context.Context) {
 	w.startCount++
 }
 
-func (w *recordingQuotaAutomationWorker) HandleUsageEvents(context.Context, collectorpkg.RuntimeConfig, []usage.Event) {
+func (w *recordingQuotaAutomationWorker) HandleUsageEvents(_ context.Context, _ collectorpkg.RuntimeConfig, events []usage.Event) {
 	w.handleCount++
+	w.lastEvents = events
 }
 
 func (w *recordingQuotaAutomationWorker) UpdateRuntimeConfig(context.Context, collectorpkg.RuntimeConfig) {

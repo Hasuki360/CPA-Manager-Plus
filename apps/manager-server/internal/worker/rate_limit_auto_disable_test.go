@@ -18,7 +18,7 @@ import (
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usage"
 )
 
-func TestQuotaAutoDisableCandidateRequiresStrictCodexUsageLimit(t *testing.T) {
+func TestQuotaAutoDisableCandidateRequiresStrictQuotaUsageLimit(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	base := usage.Event{
 		EventHash:        "evt-1",
@@ -40,6 +40,18 @@ func TestQuotaAutoDisableCandidateRequiresStrictCodexUsageLimit(t *testing.T) {
 	}
 	if got := candidate.ResetAt.Unix(); got != 1_700_000_060 {
 		t.Fatalf("reset unix = %d", got)
+	}
+
+	antigravity := base
+	antigravity.EventHash = "evt-antigravity"
+	antigravity.Provider = "antigravity"
+	antigravity.AuthFileSnapshot = "antigravity-auth.json"
+	candidate, ok = quotaAutoDisableCandidateFromEvent(antigravity, "http://cpa", "key", now)
+	if !ok {
+		t.Fatalf("antigravity candidate not detected")
+	}
+	if candidate.Provider != "antigravity" || candidate.FileName != "antigravity-auth.json" {
+		t.Fatalf("antigravity candidate = %#v", candidate)
 	}
 
 	cases := []struct {

@@ -13,6 +13,14 @@ function policy(overrides: Partial<AccountProcessingPolicy> = {}): AccountProces
       envKey: 'USAGE_QUOTA_COOLDOWN_ENABLED',
       configFileKey: 'quotaCooldownEnabled',
     },
+    antigravityQuotaCooldown: {
+      enabled: false,
+      configured: false,
+      source: 'startup',
+      locked: false,
+      envKey: 'USAGE_ANTIGRAVITY_QUOTA_COOLDOWN_ENABLED',
+      configFileKey: 'antigravityQuotaCooldownEnabled',
+    },
     authIssueQueue: {
       enabled: false,
       configured: false,
@@ -40,7 +48,10 @@ describe('buildAccountProcessingPolicyViewModel', () => {
 
     expect(groups).toHaveLength(2);
     expect(groups[0].key).toBe('quota');
-    expect(groups[0].items.map((item) => item.key)).toEqual(['codexQuotaCooldown']);
+    expect(groups[0].items.map((item) => item.key)).toEqual([
+      'codexQuotaCooldown',
+      'antigravityQuotaCooldown',
+    ]);
     expect(groups[1].key).toBe('authIssues');
     expect(groups[1].items.map((item) => item.key)).toEqual([
       'authIssueQueue',

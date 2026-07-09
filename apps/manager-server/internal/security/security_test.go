@@ -37,6 +37,18 @@ func TestAdminCredentialStillAcceptsLegacyAdminKeyPrefix(t *testing.T) {
 	}
 }
 
+func TestAdminCredentialAcceptsSimplePassword(t *testing.T) {
+	const adminKey = "123456"
+
+	credential, err := NewAdminCredential(adminKey, "test")
+	if err != nil {
+		t.Fatalf("create credential: %v", err)
+	}
+	if !VerifyAdminKey(credential, adminKey) {
+		t.Fatal("simple admin password did not verify")
+	}
+}
+
 func TestGenerateAdminKeyUsesExpectedPrefixAndEntropyLength(t *testing.T) {
 	adminKey, err := GenerateAdminKey()
 	if err != nil {

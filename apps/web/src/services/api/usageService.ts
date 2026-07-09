@@ -100,12 +100,14 @@ export interface AccountProcessingPolicy {
   source: string;
   updatedAtMs?: number;
   codexQuotaCooldown: AccountPolicyCapability;
+  antigravityQuotaCooldown: AccountPolicyCapability;
   authIssueQueue: AccountPolicyCapability;
   authIssueAutoDisable: AccountPolicyCapability;
 }
 
 export interface AccountProcessingPolicyPatch {
   codexQuotaCooldownEnabled?: boolean;
+  antigravityQuotaCooldownEnabled?: boolean;
   authIssueQueueEnabled?: boolean;
   authIssueAutoDisableEnabled?: boolean;
 }
@@ -1361,6 +1363,11 @@ const getDemoPatchedAccountProcessingPolicy = (
     codexQuotaCooldown: {
       ...policy.codexQuotaCooldown,
       enabled: patch.codexQuotaCooldownEnabled ?? policy.codexQuotaCooldown.enabled,
+    },
+    antigravityQuotaCooldown: {
+      ...policy.antigravityQuotaCooldown,
+      enabled:
+        patch.antigravityQuotaCooldownEnabled ?? policy.antigravityQuotaCooldown.enabled,
     },
     authIssueQueue: {
       ...policy.authIssueQueue,
