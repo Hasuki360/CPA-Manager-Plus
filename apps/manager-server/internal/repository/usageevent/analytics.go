@@ -623,12 +623,26 @@ order by timestamp_ms`, where)
 	}
 	defer rows.Close()
 
-	type samples struct {
-		latencies []float64
-		ttfts     []float64
+	result := make([]LatencyPercentiles, 0)
+	var currentBucketMS int64
+	hasCurrentBucket := false
+	latencies := make([]float64, 0)
+	ttfts := make([]float64, 0)
+	flushBucket := func() {
+		if !hasCurrentBucket {
+			return
+		}
+		point := LatencyPercentiles{BucketMS: currentBucketMS}
+		if value, ok := percentile95(latencies); ok {
+			point.P95LatencyMS = sql.NullFloat64{Float64: value, Valid: true}
+		}
+		if value, ok := percentile95(ttfts); ok {
+			point.P95TTFTMS = sql.NullFloat64{Float64: value, Valid: true}
+		}
+		result = append(result, point)
+		latencies = latencies[:0]
+		ttfts = ttfts[:0]
 	}
-	grouped := map[int64]*samples{}
-	order := make([]int64, 0)
 	for rows.Next() {
 		var timestampMS int64
 		var latency sql.NullFloat64
@@ -637,55 +651,10 @@ order by timestamp_ms`, where)
 			return nil, err
 		}
 		bucketMS := resolveBucketMS(timestampMS, granularity, location)
-		entry := grouped[bucketMS]
-		if entry == nil {
-			entry = &samples{}
-			grouped[bucketMS] = entry
-			order = append(order, bucketMS)
-		}
-		if latency.Valid && latency.Float64 > 0 {
-			entry.latencies = append(entry.latencies, latency.Float64)
-		}
-		if ttft.Valid && ttft.Float64 > 0 {
-			entry.ttfts = append(entry.ttfts, ttft.Float64)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	result := make([]LatencyPercentiles, 0, len(order))
-	for _, bucketMS := range order {
-		entry := grouped[bucketMS]
-		point := LatencyPercentiles{BucketMS: bucketMS}
-		if value, ok := percentile95(entry.latencies); ok {
-			point.P95LatencyMS = sql.NullFloat64{Float64: value, Valid: true}
-		}
-		if value, ok := percentile95(entry.ttfts); ok {
-			point.P95TTFTMS = sql.NullFloat64{Float64: value, Valid: true}
-		}
-		result = append(result, point)
-	}
-	return result, nil
-}
-
-func (r *repository) LatencySummaryWithFilter(ctx context.Context, filter AnalyticsFilter) (LatencySummary, error) {
-	where, args := analyticsWhere(filter)
-	rows, err := r.db.QueryContext(ctx, `select latency_ms, ttft_ms
-from usage_events `+where+`
-and (latency_ms > 0 or ttft_ms > 0)`, args...)
-	if err != nil {
-		return LatencySummary{}, err
-	}
-	defer rows.Close()
-
-	latencies := make([]float64, 0)
-	ttfts := make([]float64, 0)
-	for rows.Next() {
-		var latency sql.NullFloat64
-		var ttft sql.NullFloat64
-		if err := rows.Scan(&latency, &ttft); err != nil {
-			return LatencySummary{}, err
+		if !hasCurrentBucket || bucketMS != currentBucketMS {
+			flushBucket()
+			currentBucketMS = bucketMS
+			hasCurrentBucket = true
 		}
 		if latency.Valid && latency.Float64 > 0 {
 			latencies = append(latencies, latency.Float64)
@@ -695,15 +664,54 @@ and (latency_ms > 0 or ttft_ms > 0)`, args...)
 		}
 	}
 	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	flushBucket()
+	return result, nil
+}
+
+func (r *repository) LatencySummaryWithFilter(ctx context.Context, filter AnalyticsFilter) (LatencySummary, error) {
+	where, args := analyticsWhere(filter)
+	query := fmt.Sprintf(`with samples(kind, value) as (
+	select 'latency', latency_ms from usage_events %s and latency_ms > 0
+	union all
+	select 'ttft', ttft_ms from usage_events %s and ttft_ms > 0
+), ranked as (
+	select
+		kind,
+		value,
+		row_number() over (partition by kind order by value) as sample_number,
+		count(*) over (partition by kind) as sample_count
+	from samples
+)
+select kind, value
+from ranked
+where sample_number = ((sample_count * 95) + 99) / 100`, where, where)
+	queryArgs := make([]any, 0, len(args)*2)
+	queryArgs = append(queryArgs, args...)
+	queryArgs = append(queryArgs, args...)
+	rows, err := r.db.QueryContext(ctx, query, queryArgs...)
+	if err != nil {
 		return LatencySummary{}, err
 	}
+	defer rows.Close()
 
 	var summary LatencySummary
-	if value, ok := percentile95(latencies); ok {
-		summary.P95LatencyMS = sql.NullFloat64{Float64: value, Valid: true}
+	for rows.Next() {
+		var kind string
+		var value float64
+		if err := rows.Scan(&kind, &value); err != nil {
+			return LatencySummary{}, err
+		}
+		switch kind {
+		case "latency":
+			summary.P95LatencyMS = sql.NullFloat64{Float64: value, Valid: true}
+		case "ttft":
+			summary.P95TTFTMS = sql.NullFloat64{Float64: value, Valid: true}
+		}
 	}
-	if value, ok := percentile95(ttfts); ok {
-		summary.P95TTFTMS = sql.NullFloat64{Float64: value, Valid: true}
+	if err := rows.Err(); err != nil {
+		return LatencySummary{}, err
 	}
 	return summary, nil
 }

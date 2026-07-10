@@ -176,6 +176,7 @@ Manager Server 管理：
 |---|---|---|
 | `CPA_MANAGER_CONFIG` | 空 | 可选配置文件路径；原生包默认使用二进制旁边的 `config.json`。 |
 | `HTTP_ADDR` | `0.0.0.0:18317` | Manager Server 监听地址。 |
+| `CPA_MANAGER_PPROF_ADDR` | 空 | 可选 Go pprof 监听地址；仅接受 `localhost`、`127.0.0.1` 或 `::1`。 |
 | `USAGE_DATA_DIR` | Docker: `/data`; native: `./data` | 数据目录。 |
 | `USAGE_DB_PATH` | Docker: `/data/usage.sqlite`; native: `./data/usage.sqlite` | SQLite 路径。 |
 | `CPA_MANAGER_ADMIN_KEY` | 空 | 可选管理员密钥。 |
@@ -205,6 +206,15 @@ Manager Server 管理：
 environment variables > config.json > defaults
 ```
 
+需要诊断 CPU、堆或 goroutine 时，可临时启用仅本机可访问的 pprof 服务：
+
+```bash
+CPA_MANAGER_PPROF_ADDR=127.0.0.1:6060 ./cpa-manager-plus
+go tool pprof http://127.0.0.1:6060/debug/pprof/heap
+```
+
+配置文件中的等价字段是 `pprofAddr`。该服务默认关闭，不应通过 Docker 端口映射或反向代理暴露。
+
 如果 `USAGE_QUOTA_COOLDOWN_ENABLED`、`USAGE_ACCOUNT_ACTIONS_ENABLED` 或 `USAGE_ACCOUNT_ACTIONS_AUTO_DISABLE` 由环境变量设置，面板中的对应开关会显示为环境变量来源并被锁定。要改成面板可编辑，需要移除环境变量并重启 Manager Server。
 
 ## 运行时接口
@@ -223,6 +233,7 @@ environment variables > config.json > defaults
 | `GET /v0/management/usage` | 兼容 usage data。 |
 | `GET /v0/management/usage/export` | 导出 JSONL usage events。 |
 | `POST /v0/management/usage/import` | 导入 JSONL 或兼容旧快照。 |
+| `GET /v0/management/model-prices/usage-summary` | 返回模型价格页使用的轻量模型调用汇总。 |
 | `GET /v0/management/model-prices` | 模型价格。 |
 | `PUT /v0/management/model-prices` | 替换保存的模型价格。 |
 | `POST /v0/management/model-prices/sync` | 价格同步。 |

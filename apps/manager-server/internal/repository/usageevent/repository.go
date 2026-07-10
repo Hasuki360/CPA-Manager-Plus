@@ -3,7 +3,7 @@ package usageevent
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
+	"io"
 	"time"
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/model"
@@ -13,9 +13,12 @@ import (
 type Repository interface {
 	InsertBatch(ctx context.Context, events []model.UsageEvent) (model.InsertResult, error)
 	ListRecent(ctx context.Context, limit int) ([]model.UsageEvent, error)
+	ModelUsageSummary(ctx context.Context, limit int) (model.ModelUsageSummary, error)
 	BackfillResponseMetadata(ctx context.Context, batchLimit int) (int, error)
 	Count(ctx context.Context) (int64, error)
 	ExportJSONL(ctx context.Context) ([]byte, error)
+	WriteCompatibleUsage(ctx context.Context, writer io.Writer, limit int) error
+	WriteExportJSONL(ctx context.Context, writer io.Writer, limit int) error
 	AggregateBetween(ctx context.Context, fromMs, toMs int64) (Aggregate, error)
 	TopModelsBetween(ctx context.Context, fromMs, toMs int64, limit int) ([]ModelStat, error)
 	ModelStatsBetween(ctx context.Context, fromMs, toMs int64) ([]ModelStat, error)
@@ -303,28 +306,6 @@ func (r *repository) Count(ctx context.Context) (int64, error) {
 		return 0, err
 	}
 	return count, nil
-}
-
-func (r *repository) ExportJSONL(ctx context.Context) ([]byte, error) {
-	events, err := r.ListRecent(ctx, 0)
-	if err != nil {
-		return nil, err
-	}
-	output := make([]byte, 0)
-	for i := len(events) - 1; i >= 0; i-- {
-		event := events[i]
-		// Export intentionally omits raw_json and raw fail_body. fail_summary is
-		// the redacted/truncated diagnostic field intended for portable JSONL.
-		event.FailBody = ""
-		event.RawJSON = ""
-		line, err := json.Marshal(event)
-		if err != nil {
-			return nil, err
-		}
-		output = append(output, line...)
-		output = append(output, '\n')
-	}
-	return output, nil
 }
 
 func nullString(value string) any {

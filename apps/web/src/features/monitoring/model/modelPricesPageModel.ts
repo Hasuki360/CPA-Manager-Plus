@@ -1,9 +1,9 @@
-import { collectUsageDetailsWithEndpoint, type ModelPrice } from '@/utils/usage';
+import type { ModelPrice } from '@/utils/usage';
 import type {
+  ModelPriceUsageSummaryResponse,
   ModelPriceSyncCandidate,
   ModelPriceSyncCandidateSet,
 } from '@/services/api/usageService';
-import type { UsagePayload } from '@/features/monitoring/hooks/useUsageData';
 
 export type ModelPriceFilter = 'all' | 'missing' | 'saved' | 'candidates';
 
@@ -72,14 +72,13 @@ export const applyCandidatePrice = (
   },
 });
 
-export const buildSyncPriceModelsFromUsage = (
-  usage: UsagePayload | null,
+export const buildSyncPriceModelsFromSummary = (
+  summary: ModelPriceUsageSummaryResponse | null,
   prices: Record<string, ModelPrice>
 ) => {
   const models = new Set<string>(Object.keys(prices));
-  collectUsageDetailsWithEndpoint(usage).forEach((detail) => {
-    if (detail.__modelName) models.add(detail.__modelName);
-    if (detail.__resolvedModel) models.add(detail.__resolvedModel);
+  summary?.models?.forEach((item) => {
+    if (item.model) models.add(item.model);
   });
   return Array.from(models)
     .filter(Boolean)
@@ -96,7 +95,7 @@ export const buildCandidateMap = (candidateSets: ModelPriceSyncCandidateSet[] = 
 };
 
 export const buildModelPriceRows = (
-  usage: UsagePayload | null,
+  summary: ModelPriceUsageSummaryResponse | null,
   prices: Record<string, ModelPrice>,
   candidateSets: ModelPriceSyncCandidateSet[] = []
 ): ModelPriceRow[] => {
@@ -123,17 +122,12 @@ export const buildModelPriceRows = (
   Object.keys(prices).forEach(ensureRow);
   candidateMap.forEach((_candidates, model) => ensureRow(model));
 
-  collectUsageDetailsWithEndpoint(usage).forEach((detail) => {
-    if (detail.__modelName) {
-      const row = ensureRow(detail.__modelName);
-      row.calls += 1;
-      row.requestedCalls += 1;
-    }
-    if (detail.__resolvedModel && detail.__resolvedModel !== detail.__modelName) {
-      const row = ensureRow(detail.__resolvedModel);
-      row.calls += 1;
-      row.resolvedCalls += 1;
-    }
+  summary?.models?.forEach((item) => {
+    if (!item.model) return;
+    const row = ensureRow(item.model);
+    row.calls += Number(item.calls) || 0;
+    row.requestedCalls += Number(item.requested_calls) || 0;
+    row.resolvedCalls += Number(item.resolved_calls) || 0;
   });
 
   return Array.from(rowMap.values()).sort(

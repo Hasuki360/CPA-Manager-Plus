@@ -6,6 +6,7 @@ import type {
   CodexInspectionRunsResponse,
   DashboardSummaryResponse,
   ManagerConfigResponse,
+  ModelPriceUsageSummaryResponse,
   ModelPricesResponse,
   MonitoringAnalyticsRequest,
   MonitoringAnalyticsResponse,
@@ -62,10 +63,7 @@ const splitTokens = (totalTokens: number) => {
   const cachedTokens = Math.round(totalTokens * 0.13);
   const cacheReadTokens = Math.round(cachedTokens * 0.78);
   const cacheCreationTokens = cachedTokens - cacheReadTokens;
-  const reasoningTokens = Math.max(
-    0,
-    totalTokens - inputTokens - outputTokens - cachedTokens
-  );
+  const reasoningTokens = Math.max(0, totalTokens - inputTokens - outputTokens - cachedTokens);
   return {
     input_tokens: inputTokens,
     output_tokens: outputTokens,
@@ -613,6 +611,18 @@ const demoModelPrices: ModelPricesResponse = {
   },
 };
 
+const demoModelPriceUsageSummary: ModelPriceUsageSummaryResponse = {
+  sampled_events: 1_638,
+  total_events: 1_638,
+  truncated: false,
+  models: [
+    { model: 'gpt-4.1-mini', calls: 520, requested_calls: 520, resolved_calls: 0 },
+    { model: 'claude-sonnet-4-5', calls: 416, requested_calls: 416, resolved_calls: 0 },
+    { model: 'gemini-2.5-pro', calls: 384, requested_calls: 384, resolved_calls: 0 },
+    { model: 'gpt-4.1', calls: 318, requested_calls: 318, resolved_calls: 0 },
+  ],
+};
+
 const demoApiAliases: ApiKeyAlias[] = [
   { apiKeyHash: 'hash_openai_primary', alias: 'OpenAI Primary', updatedAtMs: now() - day },
   { apiKeyHash: 'hash_codex_team', alias: 'Codex Team', updatedAtMs: now() - 2 * hour },
@@ -702,7 +712,10 @@ const dashboardBase = (inputNow = now()): DashboardSummaryResponse => {
   const todayTokens = splitTokens(totalTokens);
   const totalCost = round2((totalTokens / 1_000_000) * 22.9);
   const timeline = Array.from({ length: 24 }, (_, hourIndex) => {
-    const hourPoints = healthPoints.slice(hourIndex * bucketsPerHour, (hourIndex + 1) * bucketsPerHour);
+    const hourPoints = healthPoints.slice(
+      hourIndex * bucketsPerHour,
+      (hourIndex + 1) * bucketsPerHour
+    );
     const calls = hourPoints.reduce((sum, point) => sum + point.calls, 0);
     const tokens = hourPoints.reduce((sum, point) => sum + point.tokens, 0);
     const success = hourPoints.reduce((sum, point) => sum + point.success, 0);
@@ -724,11 +737,35 @@ const dashboardBase = (inputNow = now()): DashboardSummaryResponse => {
   const rollingCalls = rollingPoints.reduce((sum, point) => sum + point.calls, 0);
   const rollingTokens = rollingPoints.reduce((sum, point) => sum + point.tokens, 0);
   const modelMix = [
-    { model: 'gpt-4.1-mini', callShare: 0.28, tokenShare: 0.21, costShare: 0.11, successRate: 0.991 },
-    { model: 'claude-sonnet-4-5', callShare: 0.22, tokenShare: 0.27, costShare: 0.3, successRate: 0.982 },
-    { model: 'gemini-2.5-pro', callShare: 0.2, tokenShare: 0.23, costShare: 0.25, successRate: 0.986 },
+    {
+      model: 'gpt-4.1-mini',
+      callShare: 0.28,
+      tokenShare: 0.21,
+      costShare: 0.11,
+      successRate: 0.991,
+    },
+    {
+      model: 'claude-sonnet-4-5',
+      callShare: 0.22,
+      tokenShare: 0.27,
+      costShare: 0.3,
+      successRate: 0.982,
+    },
+    {
+      model: 'gemini-2.5-pro',
+      callShare: 0.2,
+      tokenShare: 0.23,
+      costShare: 0.25,
+      successRate: 0.986,
+    },
     { model: 'gpt-4.1', callShare: 0.17, tokenShare: 0.19, costShare: 0.24, successRate: 0.976 },
-    { model: 'gemini-2.5-flash', callShare: 0.13, tokenShare: 0.1, costShare: 0.1, successRate: 0.994 },
+    {
+      model: 'gemini-2.5-flash',
+      callShare: 0.13,
+      tokenShare: 0.1,
+      costShare: 0.1,
+      successRate: 0.994,
+    },
   ].map((item) => ({
     model: item.model,
     calls: Math.round(totalCalls * item.callShare),
@@ -787,10 +824,26 @@ const dashboardBase = (inputNow = now()): DashboardSummaryResponse => {
       points: healthPoints,
     },
     token_mix: [
-      { key: 'input', tokens: todayTokens.input_tokens, share: safeRate(todayTokens.input_tokens, totalTokens) },
-      { key: 'output', tokens: todayTokens.output_tokens, share: safeRate(todayTokens.output_tokens, totalTokens) },
-      { key: 'cached', tokens: todayTokens.cached_tokens, share: safeRate(todayTokens.cached_tokens, totalTokens) },
-      { key: 'reasoning', tokens: todayTokens.reasoning_tokens, share: safeRate(todayTokens.reasoning_tokens, totalTokens) },
+      {
+        key: 'input',
+        tokens: todayTokens.input_tokens,
+        share: safeRate(todayTokens.input_tokens, totalTokens),
+      },
+      {
+        key: 'output',
+        tokens: todayTokens.output_tokens,
+        share: safeRate(todayTokens.output_tokens, totalTokens),
+      },
+      {
+        key: 'cached',
+        tokens: todayTokens.cached_tokens,
+        share: safeRate(todayTokens.cached_tokens, totalTokens),
+      },
+      {
+        key: 'reasoning',
+        tokens: todayTokens.reasoning_tokens,
+        share: safeRate(todayTokens.reasoning_tokens, totalTokens),
+      },
     ],
     channel_health: [
       {
@@ -884,10 +937,11 @@ const paginateDemoEvents = (
   beforeMs?: number | null
 ): DemoMonitoringEventsResponse => {
   const sorted = [...items].sort((left, right) => right.timestamp_ms - left.timestamp_ms);
-  const filtered = beforeMs
-    ? sorted.filter((item) => item.timestamp_ms < beforeMs)
-    : sorted;
-  const safeLimit = Math.max(1, Math.min(Math.trunc(limit || filtered.length), filtered.length || 1));
+  const filtered = beforeMs ? sorted.filter((item) => item.timestamp_ms < beforeMs) : sorted;
+  const safeLimit = Math.max(
+    1,
+    Math.min(Math.trunc(limit || filtered.length), filtered.length || 1)
+  );
   const pageItems = filtered.slice(0, safeLimit);
   const last = pageItems[pageItems.length - 1];
   return {
@@ -937,7 +991,14 @@ const buildMonitoringAnalytics = (
 
   const modelStats = [
     buildNestedModelRow('gpt-4.1-mini', 6200, 48, 4_680_000, 56.2, analyticsNow - 8 * minute),
-    buildNestedModelRow('claude-sonnet-4-5', 4380, 96, 5_720_000, 158.7, analyticsNow - 13 * minute),
+    buildNestedModelRow(
+      'claude-sonnet-4-5',
+      4380,
+      96,
+      5_720_000,
+      158.7,
+      analyticsNow - 13 * minute
+    ),
     buildNestedModelRow('gemini-2.5-pro', 3620, 74, 4_960_000, 124.4, analyticsNow - 21 * minute),
     buildNestedModelRow('gpt-4.1', 2940, 81, 3_840_000, 102.8, analyticsNow - 16 * minute),
     buildNestedModelRow('gemini-2.5-flash', 2140, 24, 1_780_000, 28.9, analyticsNow - 6 * minute),
@@ -952,10 +1013,7 @@ const buildMonitoringAnalytics = (
   const summaryInputTokens = modelStats.reduce((sum, row) => sum + row.input_tokens, 0);
   const summaryOutputTokens = modelStats.reduce((sum, row) => sum + row.output_tokens, 0);
   const summaryCachedTokens = modelStats.reduce((sum, row) => sum + row.cached_tokens, 0);
-  const summaryCacheReadTokens = modelStats.reduce(
-    (sum, row) => sum + row.cache_read_tokens,
-    0
-  );
+  const summaryCacheReadTokens = modelStats.reduce((sum, row) => sum + row.cache_read_tokens, 0);
   const summaryCacheCreationTokens = modelStats.reduce(
     (sum, row) => sum + row.cache_creation_tokens,
     0
@@ -1007,14 +1065,7 @@ const buildMonitoringAnalytics = (
           145.6,
           analyticsNow - 13 * minute
         ),
-        buildNestedModelRow(
-          'claude-haiku-4-5',
-          460,
-          8,
-          600_000,
-          13.1,
-          analyticsNow - 52 * minute
-        ),
+        buildNestedModelRow('claude-haiku-4-5', 460, 8, 600_000, 13.1, analyticsNow - 52 * minute),
       ],
     },
     {
@@ -1065,14 +1116,7 @@ const buildMonitoringAnalytics = (
       average_latency_ms: 1080,
       last_seen_ms: analyticsNow - 10 * minute,
       models: [
-        buildNestedModelRow(
-          'gpt-4.1-mini',
-          2720,
-          24,
-          2_040_000,
-          25.0,
-          analyticsNow - 10 * minute
-        ),
+        buildNestedModelRow('gpt-4.1-mini', 2720, 24, 2_040_000, 25.0, analyticsNow - 10 * minute),
         buildNestedModelRow('gpt-4.1', 820, 15, 660_000, 20.8, analyticsNow - 36 * minute),
       ],
     },
@@ -1092,14 +1136,7 @@ const buildMonitoringAnalytics = (
       last_seen_ms: analyticsNow - 18 * minute,
       models: [
         buildNestedModelRow('gpt-4.1', 440, 24, 520_000, 22.6, analyticsNow - 18 * minute),
-        buildNestedModelRow(
-          'gpt-4.1-mini',
-          1120,
-          22,
-          740_000,
-          9.1,
-          analyticsNow - 28 * minute
-        ),
+        buildNestedModelRow('gpt-4.1-mini', 1120, 22, 740_000, 9.1, analyticsNow - 28 * minute),
       ],
     },
     {
@@ -1117,14 +1154,7 @@ const buildMonitoringAnalytics = (
       average_latency_ms: 980,
       last_seen_ms: analyticsNow - 11 * minute,
       models: [
-        buildNestedModelRow(
-          'gpt-4.1-mini',
-          1800,
-          18,
-          1_240_000,
-          15.2,
-          analyticsNow - 11 * minute
-        ),
+        buildNestedModelRow('gpt-4.1-mini', 1800, 18, 1_240_000, 15.2, analyticsNow - 11 * minute),
         buildNestedModelRow('gpt-4.1', 680, 10, 680_000, 17.2, analyticsNow - 32 * minute),
       ],
     },
@@ -1151,14 +1181,7 @@ const buildMonitoringAnalytics = (
           65.1,
           analyticsNow - 19 * minute
         ),
-        buildNestedModelRow(
-          'claude-haiku-4-5',
-          820,
-          12,
-          860_000,
-          18.4,
-          analyticsNow - 52 * minute
-        ),
+        buildNestedModelRow('claude-haiku-4-5', 820, 12, 860_000, 18.4, analyticsNow - 52 * minute),
       ],
     },
     {
@@ -1184,14 +1207,7 @@ const buildMonitoringAnalytics = (
           15.8,
           analyticsNow - 24 * minute
         ),
-        buildNestedModelRow(
-          'gemini-2.5-pro',
-          600,
-          11,
-          820_000,
-          22.4,
-          analyticsNow - 43 * minute
-        ),
+        buildNestedModelRow('gemini-2.5-pro', 600, 11, 820_000, 22.4, analyticsNow - 43 * minute),
       ],
     },
     {
@@ -1208,7 +1224,9 @@ const buildMonitoringAnalytics = (
       cost: 15.8,
       average_latency_ms: 1710,
       last_seen_ms: analyticsNow - 48 * minute,
-      models: [buildNestedModelRow('qwen-plus', 1220, 36, 980_000, 15.8, analyticsNow - 48 * minute)],
+      models: [
+        buildNestedModelRow('qwen-plus', 1220, 36, 980_000, 15.8, analyticsNow - 48 * minute),
+      ],
     },
     {
       id: 'acct_builder_lab',
@@ -1225,14 +1243,7 @@ const buildMonitoringAnalytics = (
       average_latency_ms: 1320,
       last_seen_ms: analyticsNow - 27 * minute,
       models: [
-        buildNestedModelRow(
-          'gemini-2.5-flash',
-          960,
-          12,
-          820_000,
-          14.4,
-          analyticsNow - 27 * minute
-        ),
+        buildNestedModelRow('gemini-2.5-flash', 960, 12, 820_000, 14.4, analyticsNow - 27 * minute),
       ],
     },
     {
@@ -1249,7 +1260,9 @@ const buildMonitoringAnalytics = (
       cost: 12.2,
       average_latency_ms: 1490,
       last_seen_ms: analyticsNow - 55 * minute,
-      models: [buildNestedModelRow('grok-4-fast', 860, 14, 690_000, 12.2, analyticsNow - 55 * minute)],
+      models: [
+        buildNestedModelRow('grok-4-fast', 860, 14, 690_000, 12.2, analyticsNow - 55 * minute),
+      ],
     },
     {
       id: 'acct_edge_experiments',
@@ -1265,7 +1278,9 @@ const buildMonitoringAnalytics = (
       cost: 6.8,
       average_latency_ms: 1580,
       last_seen_ms: analyticsNow - 44 * minute,
-      models: [buildNestedModelRow('deepseek-chat', 740, 20, 610_000, 6.8, analyticsNow - 44 * minute)],
+      models: [
+        buildNestedModelRow('deepseek-chat', 740, 20, 610_000, 6.8, analyticsNow - 44 * minute),
+      ],
     },
   ].map((row) => {
     const tokenSplit = splitTokens(row.total_tokens);
@@ -1333,7 +1348,16 @@ const buildMonitoringAnalytics = (
       cost: 124.4,
       average_latency_ms: 1160,
       last_seen_ms: analyticsNow - 21 * minute,
-      models: [buildNestedModelRow('gemini-2.5-pro', 3620, 74, 4_960_000, 124.4, analyticsNow - 21 * minute)],
+      models: [
+        buildNestedModelRow(
+          'gemini-2.5-pro',
+          3620,
+          74,
+          4_960_000,
+          124.4,
+          analyticsNow - 21 * minute
+        ),
+      ],
     },
     {
       id: 'vertex-regional-01',
@@ -1351,7 +1375,16 @@ const buildMonitoringAnalytics = (
       cost: 28.9,
       average_latency_ms: 1040,
       last_seen_ms: analyticsNow - 6 * minute,
-      models: [buildNestedModelRow('gemini-2.5-flash', 2140, 24, 1_400_000, 28.9, analyticsNow - 6 * minute)],
+      models: [
+        buildNestedModelRow(
+          'gemini-2.5-flash',
+          2140,
+          24,
+          1_400_000,
+          28.9,
+          analyticsNow - 6 * minute
+        ),
+      ],
     },
     {
       id: 'codex-fallback-02',
@@ -1824,7 +1857,8 @@ const buildMonitoringAnalytics = (
       provider: 'vertex',
       source: 'regional',
       sourceHash: 'src_vertex_regional',
-      endpoint: '/v1/projects/demo-vertex-regional/locations/us-central1/publishers/google/models/gemini-2.5-flash:generateContent',
+      endpoint:
+        '/v1/projects/demo-vertex-regional/locations/us-central1/publishers/google/models/gemini-2.5-flash:generateContent',
       executor: 'worker',
     },
     {
@@ -2213,10 +2247,7 @@ const buildMonitoringAnalytics = (
     timeline,
     hourly_distribution: Array.from({ length: 24 }, (_, hourIndex) => ({
       hour: hourIndex,
-      calls:
-        24 +
-        ((hourIndex * 11) % 80) +
-        (hourIndex >= 9 && hourIndex <= 18 ? 42 : 0),
+      calls: 24 + ((hourIndex * 11) % 80) + (hourIndex >= 9 && hourIndex <= 18 ? 42 : 0),
       tokens: 24_000 + ((hourIndex * 7100) % 90_000),
     })),
     heatmap,
@@ -2515,6 +2546,7 @@ export const getDemoDashboardSummary = () => clone(dashboardBase());
 export const getDemoMonitoringAnalytics = (request?: MonitoringAnalyticsRequest) =>
   clone(buildMonitoringAnalytics(undefined, request));
 export const getDemoModelPrices = () => clone(demoModelPrices);
+export const getDemoModelPriceUsageSummary = () => clone(demoModelPriceUsageSummary);
 export const getDemoUsagePayload = () => {
   const dashboard = dashboardBase();
   return {
@@ -2829,7 +2861,9 @@ export const getDemoApiCallResult = (payload: DemoApiCallPayload = {}) => {
       paidTier: {
         id: 'g1-pro-tier',
         name: 'Pro',
-        availableCredits: [{ creditType: 'monthly', creditAmount: 260, minimumCreditAmountForUsage: 1 }],
+        availableCredits: [
+          { creditType: 'monthly', creditAmount: 260, minimumCreditAmountForUsage: 1 },
+        ],
       },
     };
   }

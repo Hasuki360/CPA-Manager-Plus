@@ -2,6 +2,8 @@ package usage
 
 import (
 	"errors"
+	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -160,6 +162,75 @@ not-json`
 	}
 	if result.Format != ImportFormatJSONL || len(result.Events) != 1 || result.Failed != 1 {
 		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestStreamImportPayloadBatchesJSONLAndCountsBadLines(t *testing.T) {
+	var payload strings.Builder
+	for index := 0; index < 600; index++ {
+		_, _ = fmt.Fprintf(&payload, `{"event_hash":"stream-%d","timestamp_ms":%d,"timestamp":"2026-01-02T03:04:05Z","model":"gpt-4o","endpoint":"GET /v1/models"}`+"\n", index, index+1)
+		if index == 300 {
+			payload.WriteString("not-json\n")
+		}
+	}
+
+	var batchSizes []int
+	result, err := StreamImportPayload(strings.NewReader(payload.String()), 256, func(events []Event) error {
+		batchSizes = append(batchSizes, len(events))
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("stream import: %v", err)
+	}
+	if result.Format != ImportFormatJSONL || result.Total != 600 || result.Failed != 1 {
+		t.Fatalf("result = %#v", result)
+	}
+	if !reflect.DeepEqual(batchSizes, []int{256, 256, 88}) {
+		t.Fatalf("batch sizes = %#v", batchSizes)
+	}
+}
+
+func TestStreamImportPayloadStreamsTopLevelArray(t *testing.T) {
+	var payload strings.Builder
+	payload.WriteByte('[')
+	for index := 0; index < 300; index++ {
+		if index > 0 {
+			payload.WriteByte(',')
+		}
+		_, _ = fmt.Fprintf(&payload, `{"event_hash":"array-%d","timestamp_ms":%d,"timestamp":"2026-01-02T03:04:05Z","model":"gpt-4o","endpoint":"GET /v1/models"}`, index, index+1)
+	}
+	payload.WriteByte(']')
+
+	var batchSizes []int
+	result, err := StreamImportPayload(strings.NewReader(payload.String()), 256, func(events []Event) error {
+		batchSizes = append(batchSizes, len(events))
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("stream import array: %v", err)
+	}
+	if result.Total != 300 || result.Failed != 0 || !reflect.DeepEqual(batchSizes, []int{256, 44}) {
+		t.Fatalf("result = %#v batches = %#v", result, batchSizes)
+	}
+}
+
+func TestStreamImportPayloadKeepsCompletedBatchesOnLaterConsumerError(t *testing.T) {
+	payload := strings.Repeat(`{"timestamp":"2026-01-02T03:04:05Z","model":"gpt-4o","endpoint":"GET /v1/models"}`+"\n", 600)
+	completed := 0
+	batchCalls := 0
+	result, err := StreamImportPayload(strings.NewReader(payload), 256, func(events []Event) error {
+		batchCalls++
+		if batchCalls == 2 {
+			return errors.New("insert failed")
+		}
+		completed += len(events)
+		return nil
+	})
+	if err == nil || err.Error() != "insert failed" {
+		t.Fatalf("error = %v", err)
+	}
+	if completed != 256 || result.Total != 512 {
+		t.Fatalf("completed = %d result = %#v", completed, result)
 	}
 }
 

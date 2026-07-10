@@ -2,10 +2,15 @@ package main
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log"
+	"net"
 	"net/http"
+	httppprof "net/http/pprof"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 	_ "time/tzdata"
@@ -110,6 +115,18 @@ func runServer() {
 		Handler:           serverApp.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
+	pprofServer, err := newPprofServer(cfg.PprofAddr)
+	if err != nil {
+		log.Fatalf("configure pprof: %v", err)
+	}
+	if pprofServer != nil {
+		go func() {
+			log.Printf("cpa-manager-plus pprof listening on %s", pprofServer.Addr)
+			if err := pprofServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Printf("pprof server: %v", err)
+			}
+		}()
+	}
 
 	go func() {
 		log.Printf("cpa-manager-plus listening on %s", cfg.HTTPAddr)
@@ -122,9 +139,43 @@ func runServer() {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	collectorWorker.Stop(context.Background())
+	if pprofServer != nil {
+		if err := pprofServer.Shutdown(shutdownCtx); err != nil {
+			log.Printf("shutdown pprof: %v", err)
+		}
+	}
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Printf("shutdown: %v", err)
 	}
+}
+
+func newPprofServer(addr string) (*http.Server, error) {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return nil, nil
+	}
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid address %q: %w", addr, err)
+	}
+	if !strings.EqualFold(host, "localhost") {
+		ip := net.ParseIP(host)
+		if ip == nil || !ip.IsLoopback() {
+			return nil, fmt.Errorf("pprof address must use a loopback host: %q", addr)
+		}
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/debug/pprof/", httppprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", httppprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", httppprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", httppprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", httppprof.Trace)
+	return &http.Server{
+		Addr:              addr,
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+	}, nil
 }
 
 func runUsageResponseMetadataBackfill(ctx context.Context, db *store.Store) {

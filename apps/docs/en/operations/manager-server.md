@@ -178,6 +178,7 @@ Saving CPAMP configuration does not rewrite the full CPA `config.yaml`.
 |---|---|---|
 | `CPA_MANAGER_CONFIG` | empty | Optional config file path. Native packages default to `config.json` next to the binary. |
 | `HTTP_ADDR` | `0.0.0.0:18317` | Manager Server listen address. |
+| `CPA_MANAGER_PPROF_ADDR` | empty | Optional Go pprof listen address; only `localhost`, `127.0.0.1`, or `::1` is accepted. |
 | `USAGE_DATA_DIR` | Docker: `/data`; native: `./data` | Base data directory. |
 | `USAGE_DB_PATH` | Docker: `/data/usage.sqlite`; native: `./data/usage.sqlite` | SQLite database path. |
 | `CPA_MANAGER_ADMIN_KEY` | empty | Optional admin key. |
@@ -207,6 +208,15 @@ Startup precedence:
 environment variables > config.json > defaults
 ```
 
+Temporarily enable the loopback-only pprof server when diagnosing CPU, heap, or goroutine behavior:
+
+```bash
+CPA_MANAGER_PPROF_ADDR=127.0.0.1:6060 ./cpa-manager-plus
+go tool pprof http://127.0.0.1:6060/debug/pprof/heap
+```
+
+The equivalent config-file field is `pprofAddr`. The service is disabled by default and should not be exposed through Docker port mappings or a reverse proxy.
+
 When `USAGE_QUOTA_COOLDOWN_ENABLED`, `USAGE_ACCOUNT_ACTIONS_ENABLED`, or `USAGE_ACCOUNT_ACTIONS_AUTO_DISABLE` is set through the environment, the matching panel switch is shown as environment-sourced and locked. Remove the environment variable and restart Manager Server if you want the setting to be editable from the panel.
 
 ## Runtime Endpoints
@@ -225,6 +235,7 @@ When `USAGE_QUOTA_COOLDOWN_ENABLED`, `USAGE_ACCOUNT_ACTIONS_ENABLED`, or `USAGE_
 | `GET /v0/management/usage` | Compatible usage data. |
 | `GET /v0/management/usage/export` | Export JSONL usage events. |
 | `POST /v0/management/usage/import` | Import JSONL or compatible legacy snapshots. |
+| `GET /v0/management/model-prices/usage-summary` | Return the lightweight model-call summary used by the Model Prices page. |
 | `GET /v0/management/model-prices` | Model pricing. |
 | `PUT /v0/management/model-prices` | Replace saved model pricing. |
 | `POST /v0/management/model-prices/sync` | Price sync. |

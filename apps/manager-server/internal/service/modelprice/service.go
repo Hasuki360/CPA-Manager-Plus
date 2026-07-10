@@ -115,6 +115,10 @@ func (s *Service) List(ctx context.Context) (map[string]store.ModelPrice, error)
 	return s.store.LoadModelPrices(ctx)
 }
 
+func (s *Service) UsageSummary(ctx context.Context, limit int) (store.ModelUsageSummary, error) {
+	return s.store.ModelUsageSummary(ctx, limit)
+}
+
 func (s *Service) Replace(ctx context.Context, prices map[string]store.ModelPrice) (map[string]store.ModelPrice, error) {
 	if prices == nil {
 		return nil, errors.New("prices are required")

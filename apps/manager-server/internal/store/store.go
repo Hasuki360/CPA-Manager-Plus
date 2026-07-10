@@ -1,8 +1,10 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"io"
 	"time"
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/model"
@@ -35,6 +37,8 @@ type CodexInspectionLog = model.CodexInspectionLog
 type InsertResult = model.InsertResult
 type ModelPrice = model.ModelPrice
 type ModelPriceSyncResult = model.ModelPriceSyncResult
+type ModelUsageStat = model.ModelUsageStat
+type ModelUsageSummary = model.ModelUsageSummary
 type APIKeyAlias = model.APIKeyAlias
 type QuotaCooldown = model.QuotaCooldown
 type QuotaCooldownUpsert = model.QuotaCooldownUpsert
@@ -168,6 +172,10 @@ func (s *Store) SaveModelPrices(ctx context.Context, prices map[string]ModelPric
 
 func (s *Store) UpsertSyncedModelPrices(ctx context.Context, prices map[string]ModelPrice) (ModelPriceSyncResult, error) {
 	return s.ModelPrices.UpsertSynced(ctx, prices)
+}
+
+func (s *Store) ModelUsageSummary(ctx context.Context, limit int) (ModelUsageSummary, error) {
+	return s.UsageEvents.ModelUsageSummary(ctx, limit)
 }
 
 func (s *Store) LoadAPIKeyAliases(ctx context.Context) ([]APIKeyAlias, error) {
@@ -319,7 +327,19 @@ func (s *Store) Counts(ctx context.Context) (events int64, deadLetters int64, er
 }
 
 func (s *Store) ExportJSONL(ctx context.Context) ([]byte, error) {
-	return s.UsageEvents.ExportJSONL(ctx)
+	var output bytes.Buffer
+	if err := s.WriteExportJSONL(ctx, &output, 0); err != nil {
+		return nil, err
+	}
+	return output.Bytes(), nil
+}
+
+func (s *Store) WriteCompatibleUsage(ctx context.Context, writer io.Writer, limit int) error {
+	return s.UsageEvents.WriteCompatibleUsage(ctx, writer, limit)
+}
+
+func (s *Store) WriteExportJSONL(ctx context.Context, writer io.Writer, limit int) error {
+	return s.UsageEvents.WriteExportJSONL(ctx, writer, limit)
 }
 
 // AggregateBetween computes summary metrics over [fromMs, toMs).
