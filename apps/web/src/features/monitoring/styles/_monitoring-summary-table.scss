@@ -709,71 +709,72 @@
   }
 
   .realtimeTable {
-    --realtime-col-source: 21%;
-    --realtime-col-model: 12%;
-    --realtime-col-effort: 7%;
-    --realtime-col-recent: 6%;
-    --realtime-col-status: 7%;
-    --realtime-col-success-rate: 7%;
-    --realtime-col-total-calls: 5%;
-    --realtime-col-tps: 5%;
-    --realtime-col-latency: 10%;
-    --realtime-col-time: 8%;
-    --realtime-col-usage: 7%;
-    --realtime-col-cost: 5%;
+    --realtime-col-source: 265px;
+    --realtime-col-model: 190px;
+    --realtime-col-effort: 88px;
+    --realtime-col-recent: 76px;
+    --realtime-col-status: 90px;
+    --realtime-col-success-rate: 88px;
+    --realtime-col-total-calls: 70px;
+    --realtime-col-tps: 72px;
+    --realtime-col-latency: 126px;
+    --realtime-col-time: 104px;
+    --realtime-col-usage: 92px;
+    --realtime-col-cost: 70px;
 
-    min-width: 1260px;
+    width: var(--realtime-table-width, 1260px) !important;
+    min-width: var(--realtime-table-width, 1260px) !important;
     border-collapse: separate;
     border-spacing: 0 8px;
     background: transparent;
     table-layout: fixed;
   }
 
-  .realtimeTable col:nth-child(1) {
+  .realtimeColSource {
     width: var(--realtime-col-source);
   }
 
-  .realtimeTable col:nth-child(2) {
+  .realtimeColModel {
     width: var(--realtime-col-model);
   }
 
-  .realtimeTable col:nth-child(3) {
+  .realtimeColEffort {
     width: var(--realtime-col-effort);
   }
 
-  .realtimeTable col:nth-child(4) {
+  .realtimeColRecent {
     width: var(--realtime-col-recent);
   }
 
-  .realtimeTable col:nth-child(5) {
+  .realtimeColStatus {
     width: var(--realtime-col-status);
   }
 
-  .realtimeTable col:nth-child(6) {
+  .realtimeColSuccessRate {
     width: var(--realtime-col-success-rate);
   }
 
-  .realtimeTable col:nth-child(7) {
+  .realtimeColTotalCalls {
     width: var(--realtime-col-total-calls);
   }
 
-  .realtimeTable col:nth-child(8) {
+  .realtimeColTps {
     width: var(--realtime-col-tps);
   }
 
-  .realtimeTable col:nth-child(9) {
+  .realtimeColLatency {
     width: var(--realtime-col-latency);
   }
 
-  .realtimeTable col:nth-child(10) {
+  .realtimeColTime {
     width: var(--realtime-col-time);
   }
 
-  .realtimeTable col:nth-child(11) {
+  .realtimeColUsage {
     width: var(--realtime-col-usage);
   }
 
-  .realtimeTable col:nth-child(12) {
+  .realtimeColCost {
     width: var(--realtime-col-cost);
   }
 

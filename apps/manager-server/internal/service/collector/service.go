@@ -46,14 +46,17 @@ func (s *Service) Status() collectorpkg.Status {
 
 func RuntimeConfigFromManagerConfig(cfg store.ManagerConfig) collectorpkg.RuntimeConfig {
 	return collectorpkg.RuntimeConfig{
-		CPAUpstreamURL: cfg.CPAConnection.CPABaseURL,
-		ManagementKey:  cfg.CPAConnection.ManagementKey,
-		CollectorMode:  cfg.Collector.CollectorMode,
-		Queue:          cfg.Collector.Queue,
-		PopSide:        cfg.Collector.PopSide,
-		BatchSize:      cfg.Collector.BatchSize,
-		PollInterval:   time.Duration(cfg.Collector.PollIntervalMS) * time.Millisecond,
-		TLSSkipVerify:  cfg.Collector.TLSSkipVerify,
+		CPAUpstreamURL:                 cfg.CPAConnection.CPABaseURL,
+		ManagementKey:                  cfg.CPAConnection.ManagementKey,
+		CollectorMode:                  cfg.Collector.CollectorMode,
+		Queue:                          cfg.Collector.Queue,
+		PopSide:                        cfg.Collector.PopSide,
+		BatchSize:                      cfg.Collector.BatchSize,
+		PollInterval:                   time.Duration(cfg.Collector.PollIntervalMS) * time.Millisecond,
+		TLSSkipVerify:                  cfg.Collector.TLSSkipVerify,
+		HTTP500CooldownWindowMinutes:   store.NormalizeHTTP500CooldownWindowMinutes(0),
+		HTTP500CooldownThreshold:       store.NormalizeHTTP500CooldownThreshold(0),
+		HTTP500CooldownDurationMinutes: store.NormalizeHTTP500CooldownDurationMinutes(0),
 	}
 }
 
@@ -67,14 +70,17 @@ func RuntimeConfigFromManagerConfigWithFallback(managerCfg store.ManagerConfig, 
 		batchSize = base.BatchSize
 	}
 	return collectorpkg.RuntimeConfig{
-		CPAUpstreamURL: managerCfg.CPAConnection.CPABaseURL,
-		ManagementKey:  managerCfg.CPAConnection.ManagementKey,
-		CollectorMode:  valueOr(managerCfg.Collector.CollectorMode, base.CollectorMode),
-		Queue:          valueOr(managerCfg.Collector.Queue, base.Queue),
-		PopSide:        valueOr(managerCfg.Collector.PopSide, base.PopSide),
-		BatchSize:      batchSize,
-		PollInterval:   pollInterval,
-		TLSSkipVerify:  managerCfg.Collector.TLSSkipVerify,
+		CPAUpstreamURL:                 managerCfg.CPAConnection.CPABaseURL,
+		ManagementKey:                  managerCfg.CPAConnection.ManagementKey,
+		CollectorMode:                  valueOr(managerCfg.Collector.CollectorMode, base.CollectorMode),
+		Queue:                          valueOr(managerCfg.Collector.Queue, base.Queue),
+		PopSide:                        valueOr(managerCfg.Collector.PopSide, base.PopSide),
+		BatchSize:                      batchSize,
+		PollInterval:                   pollInterval,
+		TLSSkipVerify:                  managerCfg.Collector.TLSSkipVerify,
+		HTTP500CooldownWindowMinutes:   store.NormalizeHTTP500CooldownWindowMinutes(0),
+		HTTP500CooldownThreshold:       store.NormalizeHTTP500CooldownThreshold(0),
+		HTTP500CooldownDurationMinutes: store.NormalizeHTTP500CooldownDurationMinutes(0),
 	}
 }
 

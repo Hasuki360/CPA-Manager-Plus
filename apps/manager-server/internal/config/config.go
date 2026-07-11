@@ -44,8 +44,11 @@ type Config struct {
 	DashboardHourlyRollupEnabled    bool
 	QuotaCooldownEnvSet             bool
 	AntigravityQuotaCooldownEnvSet bool
-	AccountActionsEnvSet            bool
-	AccountActionsAutoEnvSet        bool
+	AccountActionsEnvSet               bool
+	AccountActionsAutoEnvSet           bool
+	CharityModelMonitorEnabled         bool
+	CharityModelMonitorIntervalMinutes int
+	CharityModelMonitorEnvSet          bool
 }
 
 type LoadOptions struct {
@@ -75,6 +78,8 @@ type fileConfig struct {
 	AntigravityQuotaCooldownEnabled bool `json:"antigravityQuotaCooldownEnabled,omitempty"`
 	AccountActionsEnabled     bool     `json:"accountActionsEnabled,omitempty"`
 	AccountActionsAutoDisable bool     `json:"accountActionsAutoDisable,omitempty"`
+	CharityModelMonitorEnabled bool `json:"charityModelMonitorEnabled,omitempty"`
+	CharityModelMonitorIntervalMinutes int `json:"charityModelMonitorIntervalMinutes,omitempty"`
 }
 
 func Load() (Config, error) {
@@ -144,13 +149,16 @@ func LoadWithOptions(options LoadOptions) (Config, error) {
 		TLSSkipVerify:                   envBool("USAGE_RESP_TLS_SKIP_VERIFY", cfgFile.TLSSkipVerify),
 		QuotaCooldownEnabled:            envBool("USAGE_QUOTA_COOLDOWN_ENABLED", cfgFile.QuotaCooldownEnabled),
 		AntigravityQuotaCooldownEnabled: envBool("USAGE_ANTIGRAVITY_QUOTA_COOLDOWN_ENABLED", cfgFile.AntigravityQuotaCooldownEnabled),
-		AccountActionsEnabled:           envBool("USAGE_ACCOUNT_ACTIONS_ENABLED", cfgFile.AccountActionsEnabled),
-		AccountActionsAutoDisable:       envBool("USAGE_ACCOUNT_ACTIONS_AUTO_DISABLE", cfgFile.AccountActionsAutoDisable),
-		DashboardHourlyRollupEnabled:    envBool("USAGE_DASHBOARD_HOURLY_ROLLUP_ENABLED", true),
-		QuotaCooldownEnvSet:             hasEnv("USAGE_QUOTA_COOLDOWN_ENABLED"),
-		AntigravityQuotaCooldownEnvSet: hasEnv("USAGE_ANTIGRAVITY_QUOTA_COOLDOWN_ENABLED"),
-		AccountActionsEnvSet:            hasEnv("USAGE_ACCOUNT_ACTIONS_ENABLED"),
-		AccountActionsAutoEnvSet:        hasEnv("USAGE_ACCOUNT_ACTIONS_AUTO_DISABLE"),
+		AccountActionsEnabled:                 envBool("USAGE_ACCOUNT_ACTIONS_ENABLED", cfgFile.AccountActionsEnabled),
+		AccountActionsAutoDisable:             envBool("USAGE_ACCOUNT_ACTIONS_AUTO_DISABLE", cfgFile.AccountActionsAutoDisable),
+		DashboardHourlyRollupEnabled:          envBool("USAGE_DASHBOARD_HOURLY_ROLLUP_ENABLED", true),
+		CharityModelMonitorEnabled:           envBool("USAGE_CHARITY_MODEL_MONITOR_ENABLED", cfgFile.CharityModelMonitorEnabled),
+		CharityModelMonitorIntervalMinutes:   envInt("USAGE_CHARITY_MODEL_MONITOR_INTERVAL_MINUTES", intFallback(cfgFile.CharityModelMonitorIntervalMinutes, 15)),
+		QuotaCooldownEnvSet:                   hasEnv("USAGE_QUOTA_COOLDOWN_ENABLED"),
+		AntigravityQuotaCooldownEnvSet:       hasEnv("USAGE_ANTIGRAVITY_QUOTA_COOLDOWN_ENABLED"),
+		AccountActionsEnvSet:                  hasEnv("USAGE_ACCOUNT_ACTIONS_ENABLED"),
+		AccountActionsAutoEnvSet:              hasEnv("USAGE_ACCOUNT_ACTIONS_AUTO_DISABLE"),
+		CharityModelMonitorEnvSet:             hasEnv("USAGE_CHARITY_MODEL_MONITOR_ENABLED"),
 	}, nil
 }
 

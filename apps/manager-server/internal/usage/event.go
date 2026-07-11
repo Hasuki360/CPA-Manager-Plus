@@ -481,13 +481,26 @@ func readFailFields(record map[string]any) (int64, string) {
 	if nested, ok := first(record, "fail").(map[string]any); ok {
 		fail = nested
 	}
-	statusCode := readIntFrom(fail, "status_code", "statusCode")
+	statusCode := readIntFrom(fail, "status_code", "statusCode", "status", "http_status", "httpStatus")
 	if statusCode == 0 {
-		statusCode = readInt(record, "fail_status_code", "failStatusCode")
+		statusCode = readInt(record,
+			"fail_status_code",
+			"failStatusCode",
+			"status_code",
+			"statusCode",
+			"status",
+			"http_status",
+			"httpStatus",
+		)
 	}
 	body := readString(fail, "body")
 	if body == "" {
 		body = readString(record, "fail_body", "failBody")
+	}
+	if body == "" {
+		if compacted, ok := compactJSON(first(record, "error", "error_message", "errorMessage")); ok && compacted != "{}" && compacted != "[]" && compacted != "null" {
+			body = compacted
+		}
 	}
 	if headers, ok := compactJSON(first(record, "response_headers", "responseHeaders", "headers")); ok && headers != "{}" && headers != "[]" {
 		if body == "" {

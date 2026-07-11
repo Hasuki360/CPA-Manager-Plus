@@ -97,6 +97,46 @@ export interface AccountPolicyCapability {
   dependsOn?: string;
 }
 
+export interface CharityModelMonitorSite {
+  key: string;
+  name: string;
+  enabled: boolean;
+  pricingUrl?: string;
+  referer?: string;
+  codexProviderSection?: string;
+  codexBaseUrl?: string;
+  claudeProviderSection?: string;
+  claudeBaseUrl?: string;
+  monitorGpt?: boolean;
+  monitorClaude?: boolean;
+  syncCodexHeadersOnly?: boolean;
+}
+
+export interface CharityModelMonitorProviderState {
+  site: string;
+  label: string;
+  section: string;
+  provider: string;
+  desiredEnabled: boolean;
+  changed?: boolean;
+  switchChanged?: boolean;
+  headersChanged?: boolean;
+  checkMode?: string;
+  customModels?: string[];
+  matchedModels?: string[];
+  reason?: string;
+}
+
+export interface CharityModelMonitorState {
+  updatedAtMs?: number;
+  lastCheck?: string;
+  lastTotalModels?: number;
+  lastCodexCliVersion?: string;
+  seen?: string[];
+  lastProviderSync?: CharityModelMonitorProviderState[];
+  lastProviderError?: string[];
+}
+
 export interface AccountProcessingPolicy {
   source: string;
   updatedAtMs?: number;
@@ -104,6 +144,13 @@ export interface AccountProcessingPolicy {
   antigravityQuotaCooldown: AccountPolicyCapability;
   authIssueQueue: AccountPolicyCapability;
   authIssueAutoDisable: AccountPolicyCapability;
+  charityModelMonitor: AccountPolicyCapability;
+  charityModelMonitorIntervalMinutes?: number;
+  charityModelMonitorSites?: CharityModelMonitorSite[];
+  charityModelMonitorState?: CharityModelMonitorState;
+  http500CooldownWindowMinutes?: number;
+  http500CooldownThreshold?: number;
+  http500CooldownDurationMinutes?: number;
 }
 
 export interface AccountProcessingPolicyPatch {
@@ -111,6 +158,12 @@ export interface AccountProcessingPolicyPatch {
   antigravityQuotaCooldownEnabled?: boolean;
   authIssueQueueEnabled?: boolean;
   authIssueAutoDisableEnabled?: boolean;
+  charityModelMonitorEnabled?: boolean;
+  charityModelMonitorIntervalMinutes?: number;
+  charityModelMonitorSites?: CharityModelMonitorSite[];
+  http500CooldownWindowMinutes?: number;
+  http500CooldownThreshold?: number;
+  http500CooldownDurationMinutes?: number;
 }
 
 export interface QuotaCooldownInfo {
@@ -1378,6 +1431,14 @@ const getDemoPatchedAccountProcessingPolicy = (
   return {
     ...policy,
     updatedAtMs: Date.now(),
+    http500CooldownWindowMinutes:
+      patch.http500CooldownWindowMinutes ?? policy.http500CooldownWindowMinutes,
+    http500CooldownThreshold: patch.http500CooldownThreshold ?? policy.http500CooldownThreshold,
+    http500CooldownDurationMinutes:
+      patch.http500CooldownDurationMinutes ?? policy.http500CooldownDurationMinutes,
+    charityModelMonitorIntervalMinutes:
+      patch.charityModelMonitorIntervalMinutes ?? policy.charityModelMonitorIntervalMinutes,
+    charityModelMonitorSites: patch.charityModelMonitorSites ?? policy.charityModelMonitorSites,
     codexQuotaCooldown: {
       ...policy.codexQuotaCooldown,
       enabled: patch.codexQuotaCooldownEnabled ?? policy.codexQuotaCooldown.enabled,
@@ -1394,6 +1455,10 @@ const getDemoPatchedAccountProcessingPolicy = (
     authIssueAutoDisable: {
       ...policy.authIssueAutoDisable,
       enabled: patch.authIssueAutoDisableEnabled ?? policy.authIssueAutoDisable.enabled,
+    },
+    charityModelMonitor: {
+      ...policy.charityModelMonitor,
+      enabled: patch.charityModelMonitorEnabled ?? policy.charityModelMonitor.enabled,
     },
   };
 };

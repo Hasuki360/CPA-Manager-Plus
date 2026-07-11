@@ -13,6 +13,7 @@ import (
 
 const managerConfigKey = "manager_config_v1"
 const automationSettingsKey = "automation_settings_v1"
+const charityModelMonitorStateKey = "charity_model_monitor_state_v1"
 const adminCredentialKey = "admin_credential_v1"
 const bootstrapStateKey = "bootstrap_state_v1"
 
@@ -21,6 +22,8 @@ type Repository interface {
 	LoadManagerConfig(ctx context.Context) (model.ManagerConfig, bool, error)
 	SaveAutomationSettings(ctx context.Context, settings model.AutomationSettings) (model.AutomationSettings, error)
 	LoadAutomationSettings(ctx context.Context) (model.AutomationSettings, bool, error)
+	SaveCharityModelMonitorState(ctx context.Context, state model.CharityModelMonitorState) (model.CharityModelMonitorState, error)
+	LoadCharityModelMonitorState(ctx context.Context) (model.CharityModelMonitorState, bool, error)
 	SaveSetup(ctx context.Context, setup model.Setup) error
 	LoadSetup(ctx context.Context) (model.Setup, bool, error)
 	SaveAdminCredential(ctx context.Context, credential model.AdminCredential) error
@@ -163,6 +166,43 @@ func (r *repository) LoadAutomationSettings(ctx context.Context) (model.Automati
 		return model.AutomationSettings{}, false, err
 	}
 	return settings, true, nil
+}
+
+func (r *repository) SaveCharityModelMonitorState(ctx context.Context, state model.CharityModelMonitorState) (model.CharityModelMonitorState, error) {
+	state.UpdatedAtMS = time.Now().UnixMilli()
+	data, err := json.Marshal(state)
+	if err != nil {
+		return model.CharityModelMonitorState{}, err
+	}
+	_, err = r.db.ExecContext(
+		ctx,
+		`insert into settings(key, value, updated_at_ms)
+		 values(?, ?, ?)
+		 on conflict(key) do update set value = excluded.value, updated_at_ms = excluded.updated_at_ms`,
+		charityModelMonitorStateKey,
+		string(data),
+		state.UpdatedAtMS,
+	)
+	if err != nil {
+		return model.CharityModelMonitorState{}, err
+	}
+	return state, nil
+}
+
+func (r *repository) LoadCharityModelMonitorState(ctx context.Context) (model.CharityModelMonitorState, bool, error) {
+	var raw string
+	err := r.db.QueryRowContext(ctx, `select value from settings where key = ?`, charityModelMonitorStateKey).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.CharityModelMonitorState{}, false, nil
+	}
+	if err != nil {
+		return model.CharityModelMonitorState{}, false, err
+	}
+	var state model.CharityModelMonitorState
+	if err := json.Unmarshal([]byte(raw), &state); err != nil {
+		return model.CharityModelMonitorState{}, false, err
+	}
+	return state, true, nil
 }
 
 func (r *repository) SaveAdminCredential(ctx context.Context, credential model.AdminCredential) error {

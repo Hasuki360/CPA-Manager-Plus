@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -215,6 +216,113 @@ func TestQuotaAutoDisableCandidateIgnoresGenericRetryAfterHeader(t *testing.T) {
 	}
 }
 
+func TestAntigravityQuotaCheckPrefersExhaustedWeeklyReset(t *testing.T) {
+	now := time.Date(2026, 7, 10, 10, 0, 0, 0, time.UTC)
+	weeklyReset := now.Add(6 * 24 * time.Hour)
+	body := fmt.Sprintf(`{
+		"groups":[{
+			"displayName":"Gemini",
+			"buckets":[
+				{"displayName":"5 小时限额","window":"5h","remainingFraction":0.45,"resetTime":%q},
+				{"displayName":"周限额","window":"weekly","remainingFraction":0,"resetTime":%q}
+			]
+		}]
+	}`, now.Add(3*time.Hour).Format(time.RFC3339), weeklyReset.Format(time.RFC3339))
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer test-management-key" {
+			http.Error(w, "missing auth", http.StatusUnauthorized)
+			return
+		}
+		switch r.URL.Path {
+		case "/v0/management/auth-files":
+			_ = json.NewEncoder(w).Encode([]map[string]any{{
+				"name":       "antigravity-auth.json",
+				"auth_index": "ag-1",
+				"provider":   "antigravity",
+				"project_id": "project-weekly",
+			}})
+		case "/v0/management/api-call":
+			var payload map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode api-call payload: %v", err)
+			}
+			if payload["authIndex"] != "ag-1" {
+				t.Fatalf("api-call authIndex = %v", payload["authIndex"])
+			}
+			if payload["data"] != `{"project":"project-weekly"}` {
+				t.Fatalf("api-call data = %v", payload["data"])
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"status_code": 200, "body": body})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	event := usage.Event{
+		EventHash:        "evt-antigravity-weekly",
+		Failed:           true,
+		FailStatusCode:   http.StatusTooManyRequests,
+		FailBody:         `{"error":{"code":429,"status":"RESOURCE_EXHAUSTED","details":[{"metadata":{"quotaResetTimeStamp":"2026-07-10T13:00:00Z"}}]}}`,
+		AuthFileSnapshot: "antigravity-auth.json",
+		AuthIndex:        "ag-1",
+		AccountSnapshot:  "ag@example.com",
+		Provider:         "antigravity",
+	}
+	worker := NewRateLimitAutoDisableWorker(nil)
+	candidate, ok := worker.quotaAutoDisableCandidateFromEvent(context.Background(), event, collectorpkg.RuntimeConfig{}, server.URL, "test-management-key", now)
+	if !ok {
+		t.Fatal("candidate not detected")
+	}
+	if !candidate.ResetAt.Equal(weeklyReset) {
+		t.Fatalf("resetAt = %s, want weekly %s", candidate.ResetAt, weeklyReset)
+	}
+}
+
+func TestAntigravityQuotaCheckFallsBackToErrorBodyWhenUnavailable(t *testing.T) {
+	now := time.Date(2026, 7, 10, 10, 0, 0, 0, time.UTC)
+	fallbackReset := now.Add(3 * time.Hour)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer test-management-key" {
+			http.Error(w, "missing auth", http.StatusUnauthorized)
+			return
+		}
+		switch r.URL.Path {
+		case "/v0/management/auth-files":
+			_ = json.NewEncoder(w).Encode([]map[string]any{{
+				"name":       "antigravity-auth.json",
+				"auth_index": "ag-1",
+				"provider":   "antigravity",
+			}})
+		case "/v0/management/api-call":
+			_ = json.NewEncoder(w).Encode(map[string]any{"status_code": 500, "body": map[string]any{"error": "temporary"}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	event := usage.Event{
+		EventHash:        "evt-antigravity-fallback",
+		Failed:           true,
+		FailStatusCode:   http.StatusTooManyRequests,
+		FailBody:         fmt.Sprintf(`{"error":{"code":429,"status":"RESOURCE_EXHAUSTED","details":[{"metadata":{"quotaResetTimeStamp":%q}}]}}`, fallbackReset.Format(time.RFC3339)),
+		AuthFileSnapshot: "antigravity-auth.json",
+		AuthIndex:        "ag-1",
+		AccountSnapshot:  "ag@example.com",
+		Provider:         "antigravity",
+	}
+	worker := NewRateLimitAutoDisableWorker(nil)
+	candidate, ok := worker.quotaAutoDisableCandidateFromEvent(context.Background(), event, collectorpkg.RuntimeConfig{}, server.URL, "test-management-key", now)
+	if !ok {
+		t.Fatal("candidate not detected")
+	}
+	if !candidate.ResetAt.Equal(fallbackReset) {
+		t.Fatalf("resetAt = %s, want fallback %s", candidate.ResetAt, fallbackReset)
+	}
+}
+
 func TestRateLimitAutoDisableWorkerRecoversDueCooldownFromManagerRuntimeConfigAfterRestart(t *testing.T) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
 	if err != nil {
@@ -414,6 +522,76 @@ func TestRateLimitAutoDisableWorkerPersistsAndRecoversAfterRestart(t *testing.T)
 	}
 	if actions[1].Name != "codex-auth.json" || actions[1].Disabled || disabled {
 		t.Fatalf("enable action = %#v disabled=%v", actions[1], disabled)
+	}
+}
+
+func TestHTTP500AIProviderChannelClosesAndRecovers(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	var mu sync.Mutex
+	entry := map[string]any{"base-url": "https://anyrouter.top/v1", "api-key": "sk-test-provider"}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer test-management-key" {
+			http.Error(w, "missing auth", http.StatusUnauthorized)
+			return
+		}
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v0/management/config":
+			mu.Lock()
+			defer mu.Unlock()
+			_ = json.NewEncoder(w).Encode(map[string]any{"codex-api-key": []any{entry}})
+		case r.Method == http.MethodPut && r.URL.Path == "/v0/management/codex-api-key":
+			var entries []map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&entries); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			mu.Lock()
+			entry = entries[0]
+			mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	worker := NewRateLimitAutoDisableWorker(st, collectorpkg.RuntimeConfig{CPAUpstreamURL: server.URL, ManagementKey: "test-management-key"})
+	worker.handleCandidate(ctx, quotaAutoDisableCandidate{
+		BaseURL:         server.URL,
+		ManagementKey:   "test-management-key",
+		FileName:        aiProviderCooldownKey("codex-api-key", "https://anyrouter.top/v1"),
+		DisplayAccount:  "https://anyrouter.top/v1",
+		Provider:        "codex",
+		ProviderSection: "codex-api-key",
+		ProviderBaseURL: "https://anyrouter.top/v1",
+		ResetAt:         time.Now().Add(time.Minute),
+		EventHash:       "evt-http500-provider",
+		HTTPStatusCode:  http.StatusInternalServerError,
+		TriggerCount:    3,
+	})
+
+	mu.Lock()
+	if !isDisabledByExcludedModels(entry) {
+		mu.Unlock()
+		t.Fatalf("provider was not closed: %#v", entry)
+	}
+	mu.Unlock()
+	active, err := st.QuotaCooldowns.ListActive(ctx)
+	if err != nil || len(active) != 1 || active[0].Owner != model.QuotaCooldownOwnerHTTP500Provider {
+		t.Fatalf("active provider cooldowns = %#v err=%v", active, err)
+	}
+
+	worker.enableDue(ctx, time.Now().Add(2*time.Minute))
+	mu.Lock()
+	defer mu.Unlock()
+	if isDisabledByExcludedModels(entry) {
+		t.Fatalf("provider was not reopened: %#v", entry)
 	}
 }
 

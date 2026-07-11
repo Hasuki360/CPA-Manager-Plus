@@ -31,14 +31,17 @@ type Status struct {
 }
 
 type RuntimeConfig struct {
-	CPAUpstreamURL string
-	ManagementKey  string
-	CollectorMode  string
-	Queue          string
-	PopSide        string
-	BatchSize      int
-	PollInterval   time.Duration
-	TLSSkipVerify  bool
+	CPAUpstreamURL                 string
+	ManagementKey                  string
+	CollectorMode                  string
+	Queue                          string
+	PopSide                        string
+	BatchSize                      int
+	PollInterval                   time.Duration
+	TLSSkipVerify                  bool
+	HTTP500CooldownWindowMinutes   int
+	HTTP500CooldownThreshold       int
+	HTTP500CooldownDurationMinutes int
 }
 
 type UsageEventHandler interface {

@@ -2650,6 +2650,30 @@ export const getDemoAccountProcessingPolicy = (): AccountProcessingPolicy => ({
     envKey: 'CPA_AUTH_ISSUE_AUTO_DISABLE_ENABLED',
     configFileKey: 'authIssueAutoDisableEnabled',
   },
+  charityModelMonitor: {
+    enabled: true,
+    configured: true,
+    source: 'db',
+    locked: false,
+    envKey: 'USAGE_CHARITY_MODEL_MONITOR_ENABLED',
+    configFileKey: 'charityModelMonitorEnabled',
+  },
+  charityModelMonitorIntervalMinutes: 15,
+  charityModelMonitorSites: [
+    {
+      key: 'x666',
+      name: '薄荷公益站',
+      enabled: true,
+      pricingUrl: 'https://x666.me/api/pricing',
+      referer: 'https://x666.me/pricing',
+      codexProviderSection: 'codex-api-key',
+      codexBaseUrl: 'https://x666.me/v1',
+      claudeProviderSection: 'claude-api-key',
+      claudeBaseUrl: 'https://x666.me',
+      monitorGpt: true,
+      monitorClaude: true,
+    },
+  ],
 });
 
 export const getDemoQuotaCooldowns = (): QuotaCooldownInfo[] => [

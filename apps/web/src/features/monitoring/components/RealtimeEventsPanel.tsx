@@ -108,6 +108,34 @@ export const DEFAULT_REALTIME_VISIBLE_COLUMNS = DEFAULT_MONITORING_REALTIME_VISI
 
 const realtimeBaseColumnCount = 3;
 
+const realtimeColumnMinWidths: Record<RealtimeVisibleColumnKey | 'source' | 'model' | 'status', number> = {
+  source: 265,
+  model: 190,
+  status: 90,
+  reasoning: 88,
+  recent: 76,
+  successRate: 88,
+  calls: 70,
+  tps: 72,
+  latency: 126,
+  time: 104,
+  usage: 92,
+  cost: 70,
+};
+
+const buildRealtimeTableStyle = (visibleColumns: RealtimeVisibleColumnKey[]): CSSProperties => {
+  const width = visibleColumns.reduce(
+    (sum, column) => sum + realtimeColumnMinWidths[column],
+    realtimeColumnMinWidths.source + realtimeColumnMinWidths.model + realtimeColumnMinWidths.status
+  );
+
+  return {
+    '--realtime-table-width': `${width}px`,
+    width: `${width}px`,
+    minWidth: `${width}px`,
+  } as CSSProperties;
+};
+
 type FailureTooltipPosition = {
   placement: FailureTooltipPlacement;
   style: CSSProperties;
@@ -909,20 +937,23 @@ export function RealtimeEventsPanel({
   const content = (
     <>
       <div className={styles.tableWrapper}>
-        <table className={`${styles.table} ${styles.realtimeTable}`}>
+        <table
+          className={`${styles.table} ${styles.realtimeTable}`}
+          style={buildRealtimeTableStyle(visibleColumns)}
+        >
           <colgroup>
-            <col />
-            <col />
-            {isColumnVisible('reasoning') ? <col /> : null}
-            {isColumnVisible('recent') ? <col /> : null}
-            <col />
-            {isColumnVisible('successRate') ? <col /> : null}
-            {isColumnVisible('calls') ? <col /> : null}
-            {isColumnVisible('tps') ? <col /> : null}
-            {isColumnVisible('latency') ? <col /> : null}
-            {isColumnVisible('time') ? <col /> : null}
-            {isColumnVisible('usage') ? <col /> : null}
-            {isColumnVisible('cost') ? <col /> : null}
+            <col className={styles.realtimeColSource} />
+            <col className={styles.realtimeColModel} />
+            {isColumnVisible('reasoning') ? <col className={styles.realtimeColEffort} /> : null}
+            {isColumnVisible('recent') ? <col className={styles.realtimeColRecent} /> : null}
+            <col className={styles.realtimeColStatus} />
+            {isColumnVisible('successRate') ? <col className={styles.realtimeColSuccessRate} /> : null}
+            {isColumnVisible('calls') ? <col className={styles.realtimeColTotalCalls} /> : null}
+            {isColumnVisible('tps') ? <col className={styles.realtimeColTps} /> : null}
+            {isColumnVisible('latency') ? <col className={styles.realtimeColLatency} /> : null}
+            {isColumnVisible('time') ? <col className={styles.realtimeColTime} /> : null}
+            {isColumnVisible('usage') ? <col className={styles.realtimeColUsage} /> : null}
+            {isColumnVisible('cost') ? <col className={styles.realtimeColCost} /> : null}
           </colgroup>
           <thead>
             <tr>

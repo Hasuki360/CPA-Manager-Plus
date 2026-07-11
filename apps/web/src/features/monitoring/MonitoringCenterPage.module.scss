@@ -1278,8 +1278,8 @@
 @include summaryTable.styles;
 @include accountOverview.styles;
 .realtimeTable {
-  --realtime-col-source: 18%;
-  --realtime-col-model: 15%;
+  --realtime-col-source: 265px;
+  --realtime-col-model: 190px;
 }
 
 .realtimeTable .logTypeCell .primaryCell > span {

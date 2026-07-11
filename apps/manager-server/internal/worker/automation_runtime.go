@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"log"
+	"net/http"
 	"strings"
 
 	collectorpkg "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/collector"
@@ -22,15 +23,26 @@ type accountAutomationWorker interface {
 	HandleUsageEvents(ctx context.Context, cfg collectorpkg.RuntimeConfig, events []usage.Event)
 }
 
+type charityModelMonitorWorker interface {
+	Start(ctx context.Context)
+	UpdateConfig(ctx context.Context, cfg CharityModelMonitorConfig)
+}
+
 type AutomationRuntime struct {
 	settings      *automationsvc.Service
 	manager       *collectorpkg.Manager
 	quotaWorker   quotaAutomationWorker
 	accountWorker accountAutomationWorker
+	charityWorker charityModelMonitorWorker
+	charityBase   CharityModelMonitorConfig
 	handler       *automationUsageHandler
 }
 
-func NewAutomationRuntime(settings *automationsvc.Service, manager *collectorpkg.Manager, quotaWorker quotaAutomationWorker, accountWorker accountAutomationWorker) *AutomationRuntime {
+func NewAutomationRuntime(settings *automationsvc.Service, manager *collectorpkg.Manager, quotaWorker quotaAutomationWorker, accountWorker accountAutomationWorker, charityBase CharityModelMonitorConfig, charityWorker ...charityModelMonitorWorker) *AutomationRuntime {
+	var charity charityModelMonitorWorker
+	if len(charityWorker) > 0 {
+		charity = charityWorker[0]
+	}
 	handler := &automationUsageHandler{
 		settings:      settings,
 		quotaWorker:   quotaWorker,
@@ -41,6 +53,8 @@ func NewAutomationRuntime(settings *automationsvc.Service, manager *collectorpkg
 		manager:       manager,
 		quotaWorker:   quotaWorker,
 		accountWorker: accountWorker,
+		charityWorker: charity,
+		charityBase:   normalizeCharityMonitorConfig(charityBase),
 		handler:       handler,
 	}
 }
@@ -54,6 +68,10 @@ func (r *AutomationRuntime) Start(ctx context.Context) {
 	}
 	if r.accountWorker != nil {
 		r.accountWorker.Start(ctx)
+	}
+	if r.charityWorker != nil {
+		r.charityWorker.UpdateConfig(ctx, r.charityConfig(ctx))
+		r.charityWorker.Start(ctx)
 	}
 	if r.manager != nil && r.handler != nil {
 		r.manager.SetUsageEventHandler(r.handler)
@@ -76,6 +94,9 @@ func (r *AutomationRuntime) Reload(ctx context.Context) error {
 	if r.accountWorker != nil {
 		r.accountWorker.SetAutoDisable(settings.AccountActionsAutoDisable)
 	}
+	if r.charityWorker != nil {
+		r.charityWorker.UpdateConfig(ctx, r.charityConfigFromSettings(settings))
+	}
 	r.logState(ctx, "reloaded")
 	return nil
 }
@@ -85,7 +106,22 @@ func (r *AutomationRuntime) logState(ctx context.Context, action string) {
 		return
 	}
 	settings := r.settings.RuntimeSettings(ctx)
-	log.Printf("[automation] runtime settings %s codexQuotaCooldown=%t antigravityQuotaCooldown=%t accountActions=%t accountActionsAutoDisable=%t", action, settings.QuotaCooldownEnabled, settings.AntigravityQuotaCooldownEnabled, settings.AccountActionsEnabled, settings.AccountActionsAutoDisable)
+	log.Printf("[automation] runtime settings %s codexQuotaCooldown=%t antigravityQuotaCooldown=%t accountActions=%t accountActionsAutoDisable=%t charityModelMonitor=%t", action, settings.QuotaCooldownEnabled, settings.AntigravityQuotaCooldownEnabled, settings.AccountActionsEnabled, settings.AccountActionsAutoDisable, settings.CharityModelMonitorEnabled)
+}
+
+func (r *AutomationRuntime) charityConfig(ctx context.Context) CharityModelMonitorConfig {
+	if r == nil || r.settings == nil {
+		return CharityModelMonitorConfig{}
+	}
+	return r.charityConfigFromSettings(r.settings.RuntimeSettings(ctx))
+}
+
+func (r *AutomationRuntime) charityConfigFromSettings(settings automationsvc.RuntimeSettings) CharityModelMonitorConfig {
+	cfg := r.charityBase
+	cfg.Enabled = settings.CharityModelMonitorEnabled
+	cfg.IntervalMinutes = settings.CharityModelMonitorIntervalMinutes
+	cfg.Sites = settings.CharityModelMonitorSites
+	return cfg
 }
 
 type automationUsageHandler struct {
@@ -99,6 +135,7 @@ func (h *automationUsageHandler) HandleUsageEvents(ctx context.Context, cfg coll
 		return
 	}
 	settings := h.settings.RuntimeSettings(ctx)
+	cfg = runtimeConfigWithHTTP500Settings(cfg, settings)
 	if h.quotaWorker != nil {
 		quotaEvents := filterQuotaCooldownEvents(events, settings)
 		if len(quotaEvents) > 0 {
@@ -111,12 +148,23 @@ func (h *automationUsageHandler) HandleUsageEvents(ctx context.Context, cfg coll
 	}
 }
 
+func runtimeConfigWithHTTP500Settings(cfg collectorpkg.RuntimeConfig, settings automationsvc.RuntimeSettings) collectorpkg.RuntimeConfig {
+	cfg.HTTP500CooldownWindowMinutes = settings.HTTP500CooldownWindowMinutes
+	cfg.HTTP500CooldownThreshold = settings.HTTP500CooldownThreshold
+	cfg.HTTP500CooldownDurationMinutes = settings.HTTP500CooldownDurationMinutes
+	return cfg
+}
+
 func filterQuotaCooldownEvents(events []usage.Event, settings automationsvc.RuntimeSettings) []usage.Event {
 	if len(events) == 0 || (!settings.QuotaCooldownEnabled && !settings.AntigravityQuotaCooldownEnabled) {
 		return nil
 	}
 	filtered := make([]usage.Event, 0, len(events))
 	for _, event := range events {
+		if event.Failed && event.FailStatusCode == http.StatusInternalServerError {
+			filtered = append(filtered, event)
+			continue
+		}
 		switch normalizedQuotaProvider(event) {
 		case "codex":
 			if settings.QuotaCooldownEnabled {

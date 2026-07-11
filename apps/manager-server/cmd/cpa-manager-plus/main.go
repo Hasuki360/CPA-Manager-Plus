@@ -90,6 +90,13 @@ func runServer() {
 		ManagementKey:  cfg.ManagementKey,
 	})
 	accountActionWorker := worker.NewAccountActionCandidateWorker(db, runtimeSettings.AccountActionsAutoDisable)
+	charityBaseConfig := worker.CharityModelMonitorConfig{
+		CPAUpstreamURL:  cfg.CPAUpstreamURL,
+		ManagementKey:   cfg.ManagementKey,
+		IntervalMinutes: runtimeSettings.CharityModelMonitorIntervalMinutes,
+		Sites:           runtimeSettings.CharityModelMonitorSites,
+	}
+	charityModelMonitorWorker := worker.NewCharityModelMonitorWorker(db, charityBaseConfig)
 	accountHistoryRollupWorker := worker.NewAccountHistoryRollupWorker(db)
 	accountHistoryRollupWorker.Start(ctx)
 	var dashboardHourlyRollupWorker *worker.DashboardHourlyRollupWorker
@@ -108,6 +115,8 @@ func runServer() {
 		manager,
 		rateLimitAutoDisableWorker,
 		accountActionWorker,
+		charityBaseConfig,
+		charityModelMonitorWorker,
 	)
 	serverApp.AppContext().AutomationRuntimeService = automationRuntime
 	automationRuntime.Start(ctx)

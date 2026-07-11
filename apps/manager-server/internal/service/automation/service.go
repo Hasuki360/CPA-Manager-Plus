@@ -21,6 +21,7 @@ const (
 type settingsStore interface {
 	LoadAutomationSettings(ctx context.Context) (store.AutomationSettings, bool, error)
 	SaveAutomationSettings(ctx context.Context, settings store.AutomationSettings) (store.AutomationSettings, error)
+	LoadCharityModelMonitorState(ctx context.Context) (store.CharityModelMonitorState, bool, error)
 }
 
 type Capability struct {
@@ -34,12 +35,19 @@ type Capability struct {
 }
 
 type Status struct {
-	Source                    string     `json:"source"`
-	UpdatedAtMS               int64      `json:"updatedAtMs,omitempty"`
-	QuotaCooldown             Capability `json:"codexQuotaCooldown"`
-	AntigravityQuotaCooldown  Capability `json:"antigravityQuotaCooldown"`
-	AccountActions            Capability `json:"authIssueQueue"`
-	AccountActionsAutoDisable Capability `json:"authIssueAutoDisable"`
+	Source                             string                            `json:"source"`
+	UpdatedAtMS                        int64                             `json:"updatedAtMs,omitempty"`
+	QuotaCooldown                      Capability                        `json:"codexQuotaCooldown"`
+	AntigravityQuotaCooldown           Capability                        `json:"antigravityQuotaCooldown"`
+	AccountActions                     Capability                        `json:"authIssueQueue"`
+	AccountActionsAutoDisable          Capability                        `json:"authIssueAutoDisable"`
+	CharityModelMonitor                Capability                        `json:"charityModelMonitor"`
+	CharityModelMonitorIntervalMinutes int                               `json:"charityModelMonitorIntervalMinutes"`
+	CharityModelMonitorSites           []store.CharityModelMonitorSite    `json:"charityModelMonitorSites"`
+	CharityModelMonitorState           *store.CharityModelMonitorState    `json:"charityModelMonitorState,omitempty"`
+	HTTP500CooldownWindowMinutes       int                               `json:"http500CooldownWindowMinutes"`
+	HTTP500CooldownThreshold           int                               `json:"http500CooldownThreshold"`
+	HTTP500CooldownDurationMinutes     int                               `json:"http500CooldownDurationMinutes"`
 }
 
 type UpdateRequest struct {
@@ -47,6 +55,12 @@ type UpdateRequest struct {
 	AntigravityQuotaCooldownEnabled *bool `json:"antigravityQuotaCooldownEnabled,omitempty"`
 	AccountActionsEnabled           *bool `json:"authIssueQueueEnabled,omitempty"`
 	AccountActionsAutoDisable       *bool `json:"authIssueAutoDisableEnabled,omitempty"`
+	CharityModelMonitorEnabled         *bool                         `json:"charityModelMonitorEnabled,omitempty"`
+	CharityModelMonitorIntervalMinutes *int                          `json:"charityModelMonitorIntervalMinutes,omitempty"`
+	CharityModelMonitorSites           []store.CharityModelMonitorSite `json:"charityModelMonitorSites,omitempty"`
+	HTTP500CooldownWindowMinutes       *int                          `json:"http500CooldownWindowMinutes,omitempty"`
+	HTTP500CooldownThreshold        *int  `json:"http500CooldownThreshold,omitempty"`
+	HTTP500CooldownDurationMinutes  *int  `json:"http500CooldownDurationMinutes,omitempty"`
 }
 
 type Service struct {
@@ -78,7 +92,17 @@ func (s *Service) Status(ctx context.Context) (Status, error) {
 	if err != nil {
 		return Status{}, err
 	}
-	return s.statusFromSettings(settings), nil
+	status := s.statusFromSettings(settings)
+	if s.store != nil {
+		state, ok, err := s.store.LoadCharityModelMonitorState(ctx)
+		if err != nil {
+			return Status{}, err
+		}
+		if ok {
+			status.CharityModelMonitorState = &state
+		}
+	}
+	return status, nil
 }
 
 func (s *Service) Update(ctx context.Context, req UpdateRequest) (Status, error) {
@@ -119,6 +143,27 @@ func (s *Service) Update(ctx context.Context, req UpdateRequest) (Status, error)
 		}
 		current.AccountActionsAutoDisable = boolPtr(*req.AccountActionsAutoDisable)
 	}
+	if req.CharityModelMonitorEnabled != nil {
+		if s.cfg.CharityModelMonitorEnvSet {
+			return Status{}, errors.New("charityModelMonitorEnabled is locked by environment variable")
+		}
+		current.CharityModelMonitorEnabled = boolPtr(*req.CharityModelMonitorEnabled)
+	}
+	if req.CharityModelMonitorIntervalMinutes != nil {
+		current.CharityModelMonitorIntervalMinutes = intPtr(store.NormalizeCharityModelMonitorInterval(*req.CharityModelMonitorIntervalMinutes))
+	}
+	if req.CharityModelMonitorSites != nil {
+		current.CharityModelMonitorSites = store.NormalizeCharityModelMonitorSites(req.CharityModelMonitorSites)
+	}
+	if req.HTTP500CooldownWindowMinutes != nil {
+		current.HTTP500CooldownWindowMinutes = intPtr(store.NormalizeHTTP500CooldownWindowMinutes(*req.HTTP500CooldownWindowMinutes))
+	}
+	if req.HTTP500CooldownThreshold != nil {
+		current.HTTP500CooldownThreshold = intPtr(store.NormalizeHTTP500CooldownThreshold(*req.HTTP500CooldownThreshold))
+	}
+	if req.HTTP500CooldownDurationMinutes != nil {
+		current.HTTP500CooldownDurationMinutes = intPtr(store.NormalizeHTTP500CooldownDurationMinutes(*req.HTTP500CooldownDurationMinutes))
+	}
 	// SaveAutomationSettings returns the record it persisted (including the
 	// UpdatedAtMS it assigned). We build the response from that record instead
 	// of re-reading, so a transient read failure after a successful save cannot
@@ -158,10 +203,16 @@ func (s *Service) RuntimeSettings(ctx context.Context) RuntimeSettings {
 }
 
 type RuntimeSettings struct {
-	QuotaCooldownEnabled            bool
-	AntigravityQuotaCooldownEnabled bool
-	AccountActionsEnabled           bool
-	AccountActionsAutoDisable       bool
+	QuotaCooldownEnabled              bool
+	AntigravityQuotaCooldownEnabled   bool
+	AccountActionsEnabled             bool
+	AccountActionsAutoDisable         bool
+	CharityModelMonitorEnabled        bool
+	CharityModelMonitorIntervalMinutes int
+	CharityModelMonitorSites          []store.CharityModelMonitorSite
+	HTTP500CooldownWindowMinutes      int
+	HTTP500CooldownThreshold          int
+	HTTP500CooldownDurationMinutes    int
 }
 
 func (s *Service) loadSettings(ctx context.Context) (store.AutomationSettings, bool, error) {
@@ -180,6 +231,8 @@ type resolved struct {
 	accountSource                     string
 	autoConfigured, autoLocked        bool
 	autoSource                        string
+	charityValue, charityLocked       bool
+	charitySource                     string
 }
 
 func (s *Service) resolve(settings store.AutomationSettings) resolved {
@@ -187,6 +240,7 @@ func (s *Service) resolve(settings store.AutomationSettings) resolved {
 	antigravityValue, antigravitySource, antigravityLocked := s.resolveField(settings.AntigravityQuotaCooldownEnabled, s.cfg.AntigravityQuotaCooldownEnabled, s.cfg.AntigravityQuotaCooldownEnvSet)
 	accountValue, accountSource, accountLocked := s.resolveField(settings.AccountActionsEnabled, s.cfg.AccountActionsEnabled, s.cfg.AccountActionsEnvSet)
 	autoConfigured, autoSource, autoLocked := s.resolveField(settings.AccountActionsAutoDisable, s.cfg.AccountActionsAutoDisable, s.cfg.AccountActionsAutoEnvSet)
+	charityValue, charitySource, charityLocked := s.resolveField(settings.CharityModelMonitorEnabled, s.cfg.CharityModelMonitorEnabled, s.cfg.CharityModelMonitorEnvSet)
 	return resolved{
 		quotaValue:        quotaValue,
 		quotaSource:       quotaSource,
@@ -200,6 +254,9 @@ func (s *Service) resolve(settings store.AutomationSettings) resolved {
 		autoConfigured:    autoConfigured,
 		autoSource:        autoSource,
 		autoLocked:        autoLocked,
+		charityValue:      charityValue,
+		charitySource:     charitySource,
+		charityLocked:     charityLocked,
 	}
 }
 
@@ -208,8 +265,13 @@ func (s *Service) statusFromSettings(settings store.AutomationSettings) Status {
 	autoEffective := r.accountValue && r.autoConfigured
 
 	return Status{
-		Source:      overallSource(r.quotaSource, r.antigravitySource, r.accountSource, r.autoSource),
-		UpdatedAtMS: settings.UpdatedAtMS,
+		Source:                         overallSource(r.quotaSource, r.antigravitySource, r.accountSource, r.autoSource),
+		UpdatedAtMS:                    settings.UpdatedAtMS,
+		CharityModelMonitorIntervalMinutes: charityIntervalFromSettings(settings),
+		CharityModelMonitorSites:       store.NormalizeCharityModelMonitorSites(settings.CharityModelMonitorSites),
+		HTTP500CooldownWindowMinutes:   http500WindowFromSettings(settings),
+		HTTP500CooldownThreshold:       http500ThresholdFromSettings(settings),
+		HTTP500CooldownDurationMinutes: http500DurationFromSettings(settings),
 		QuotaCooldown: Capability{
 			Enabled:       r.quotaValue,
 			Configured:    r.quotaValue,
@@ -243,16 +305,30 @@ func (s *Service) statusFromSettings(settings store.AutomationSettings) Status {
 			ConfigFileKey: "accountActionsAutoDisable",
 			DependsOn:     "authIssueQueue",
 		},
+		CharityModelMonitor: Capability{
+			Configured:    settings.CharityModelMonitorEnabled != nil,
+			Enabled:       r.charityValue,
+			Locked:        r.charityLocked,
+			Source:        r.charitySource,
+			EnvKey:        "USAGE_CHARITY_MODEL_MONITOR_ENABLED",
+			ConfigFileKey: "charityModelMonitorEnabled",
+		},
 	}
 }
 
 func (s *Service) runtimeFromSettings(settings store.AutomationSettings) RuntimeSettings {
 	r := s.resolve(settings)
 	return RuntimeSettings{
-		QuotaCooldownEnabled:            r.quotaValue,
-		AntigravityQuotaCooldownEnabled: r.antigravityValue,
-		AccountActionsEnabled:           r.accountValue,
-		AccountActionsAutoDisable:       r.accountValue && r.autoConfigured,
+		QuotaCooldownEnabled:              r.quotaValue,
+		AntigravityQuotaCooldownEnabled:   r.antigravityValue,
+		AccountActionsEnabled:             r.accountValue,
+		AccountActionsAutoDisable:         r.accountValue && r.autoConfigured,
+		CharityModelMonitorEnabled:        r.charityValue,
+		CharityModelMonitorIntervalMinutes: charityIntervalFromSettings(settings),
+		CharityModelMonitorSites:          store.NormalizeCharityModelMonitorSites(settings.CharityModelMonitorSites),
+		HTTP500CooldownWindowMinutes:      http500WindowFromSettings(settings),
+		HTTP500CooldownThreshold:          http500ThresholdFromSettings(settings),
+		HTTP500CooldownDurationMinutes:    http500DurationFromSettings(settings),
 	}
 }
 
@@ -288,4 +364,36 @@ func overallSource(sources ...string) string {
 
 func boolPtr(value bool) *bool {
 	return &value
+}
+
+func intPtr(value int) *int {
+	return &value
+}
+
+func charityIntervalFromSettings(settings store.AutomationSettings) int {
+	if settings.CharityModelMonitorIntervalMinutes == nil {
+		return store.NormalizeCharityModelMonitorInterval(0)
+	}
+	return store.NormalizeCharityModelMonitorInterval(*settings.CharityModelMonitorIntervalMinutes)
+}
+
+func http500WindowFromSettings(settings store.AutomationSettings) int {
+	if settings.HTTP500CooldownWindowMinutes == nil {
+		return store.NormalizeHTTP500CooldownWindowMinutes(0)
+	}
+	return store.NormalizeHTTP500CooldownWindowMinutes(*settings.HTTP500CooldownWindowMinutes)
+}
+
+func http500ThresholdFromSettings(settings store.AutomationSettings) int {
+	if settings.HTTP500CooldownThreshold == nil {
+		return store.NormalizeHTTP500CooldownThreshold(0)
+	}
+	return store.NormalizeHTTP500CooldownThreshold(*settings.HTTP500CooldownThreshold)
+}
+
+func http500DurationFromSettings(settings store.AutomationSettings) int {
+	if settings.HTTP500CooldownDurationMinutes == nil {
+		return store.NormalizeHTTP500CooldownDurationMinutes(0)
+	}
+	return store.NormalizeHTTP500CooldownDurationMinutes(*settings.HTTP500CooldownDurationMinutes)
 }

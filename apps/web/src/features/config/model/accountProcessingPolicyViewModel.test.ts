@@ -38,6 +38,14 @@ function policy(overrides: Partial<AccountProcessingPolicy> = {}): AccountProces
       configFileKey: 'accountActionsAutoDisable',
       dependsOn: 'authIssueQueue',
     },
+    charityModelMonitor: {
+      enabled: false,
+      configured: false,
+      source: 'startup',
+      locked: false,
+      envKey: 'USAGE_CHARITY_MODEL_MONITOR_ENABLED',
+      configFileKey: 'charityModelMonitorEnabled',
+    },
     ...overrides,
   };
 }

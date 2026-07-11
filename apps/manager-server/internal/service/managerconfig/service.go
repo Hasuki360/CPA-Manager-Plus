@@ -188,13 +188,15 @@ func (s *Service) ResolveManagerConfigWithSource(ctx context.Context) (store.Man
 	if s.cfg.CPAUpstreamURL != "" && s.cfg.ManagementKey != "" {
 		cfg.CPAConnection.CPABaseURL = cpa.NormalizeBaseURL(s.cfg.CPAUpstreamURL)
 		cfg.CPAConnection.ManagementKey = s.cfg.ManagementKey
-		cfg.Collector.CollectorMode = CollectorMode(s.cfg.CollectorMode)
-		cfg.Collector.Queue = ValueOr(s.cfg.Queue, cfg.Collector.Queue)
-		cfg.Collector.PopSide = NormalizePopSide(s.cfg.PopSide, cfg.Collector.PopSide)
-		cfg.Collector.BatchSize = PositiveOrDefault(s.cfg.BatchSize, cfg.Collector.BatchSize, 100)
-		cfg.Collector.PollIntervalMS = PositiveOrDefault(int(s.cfg.PollInterval/time.Millisecond), cfg.Collector.PollIntervalMS, 500)
-		cfg.Collector.QueryLimit = PositiveOrDefault(s.cfg.QueryLimit, cfg.Collector.QueryLimit, 50000)
-		cfg.Collector.TLSSkipVerify = s.cfg.TLSSkipVerify
+		if !found {
+			cfg.Collector.CollectorMode = CollectorMode(s.cfg.CollectorMode)
+			cfg.Collector.Queue = ValueOr(s.cfg.Queue, cfg.Collector.Queue)
+			cfg.Collector.PopSide = NormalizePopSide(s.cfg.PopSide, cfg.Collector.PopSide)
+			cfg.Collector.BatchSize = PositiveOrDefault(s.cfg.BatchSize, cfg.Collector.BatchSize, 100)
+			cfg.Collector.PollIntervalMS = PositiveOrDefault(int(s.cfg.PollInterval/time.Millisecond), cfg.Collector.PollIntervalMS, 500)
+			cfg.Collector.QueryLimit = PositiveOrDefault(s.cfg.QueryLimit, cfg.Collector.QueryLimit, 50000)
+			cfg.Collector.TLSSkipVerify = s.cfg.TLSSkipVerify
+		}
 		source = SourceEnv
 		found = true
 	}
@@ -257,8 +259,11 @@ func SetupFromManagerConfig(cfg store.ManagerConfig) store.Setup {
 
 func ManagerConfigConnectionDiffers(left store.ManagerConfig, right store.ManagerConfig) bool {
 	return cpa.NormalizeBaseURL(left.CPAConnection.CPABaseURL) != cpa.NormalizeBaseURL(right.CPAConnection.CPABaseURL) ||
-		left.CPAConnection.ManagementKey != right.CPAConnection.ManagementKey ||
-		ManagerCollectorEnabled(left) != ManagerCollectorEnabled(right) ||
+		left.CPAConnection.ManagementKey != right.CPAConnection.ManagementKey
+}
+
+func ManagerConfigCollectorDiffers(left store.ManagerConfig, right store.ManagerConfig) bool {
+	return ManagerCollectorEnabled(left) != ManagerCollectorEnabled(right) ||
 		left.Collector.CollectorMode != right.Collector.CollectorMode ||
 		left.Collector.Queue != right.Collector.Queue ||
 		left.Collector.PopSide != right.Collector.PopSide ||

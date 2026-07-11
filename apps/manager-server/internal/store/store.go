@@ -45,9 +45,16 @@ type QuotaCooldownUpsert = model.QuotaCooldownUpsert
 type AccountActionCandidate = model.AccountActionCandidate
 type AccountActionCandidateUpsert = model.AccountActionCandidateUpsert
 type AutomationSettings = model.AutomationSettings
+type CharityModelMonitorSite = model.CharityModelMonitorSite
+type CharityModelMonitorState = model.CharityModelMonitorState
 
 var DefaultCodexInspectionConfig = model.DefaultCodexInspectionConfig
 var NormalizeCodexInspectionConfig = model.NormalizeCodexInspectionConfig
+var NormalizeCharityModelMonitorInterval = model.NormalizeCharityModelMonitorInterval
+var NormalizeCharityModelMonitorSites = model.NormalizeCharityModelMonitorSites
+var NormalizeHTTP500CooldownWindowMinutes = model.NormalizeHTTP500CooldownWindowMinutes
+var NormalizeHTTP500CooldownThreshold = model.NormalizeHTTP500CooldownThreshold
+var NormalizeHTTP500CooldownDurationMinutes = model.NormalizeHTTP500CooldownDurationMinutes
 
 // Aggregation result types re-exported for service-layer consumers.
 type Aggregate = usageevent.Aggregate
@@ -142,6 +149,14 @@ func (s *Store) SaveAutomationSettings(ctx context.Context, settings AutomationS
 
 func (s *Store) LoadAutomationSettings(ctx context.Context) (AutomationSettings, bool, error) {
 	return s.Settings.LoadAutomationSettings(ctx)
+}
+
+func (s *Store) SaveCharityModelMonitorState(ctx context.Context, state CharityModelMonitorState) (CharityModelMonitorState, error) {
+	return s.Settings.SaveCharityModelMonitorState(ctx, state)
+}
+
+func (s *Store) LoadCharityModelMonitorState(ctx context.Context) (CharityModelMonitorState, bool, error) {
+	return s.Settings.LoadCharityModelMonitorState(ctx)
 }
 
 func (s *Store) SaveAdminCredential(ctx context.Context, credential AdminCredential) error {
@@ -326,6 +341,14 @@ func (s *Store) RecentEvents(ctx context.Context, limit int) ([]usage.Event, err
 
 func (s *Store) BackfillUsageResponseMetadata(ctx context.Context, batchLimit int) (int, error) {
 	return s.UsageEvents.BackfillResponseMetadata(ctx, batchLimit)
+}
+
+func (s *Store) CountHTTP500ForAuthFileSince(ctx context.Context, authFileName string, sinceMS int64) (int64, error) {
+	return s.UsageEvents.CountHTTP500ForAuthFileSince(ctx, authFileName, sinceMS)
+}
+
+func (s *Store) CountHTTP500ForSourceHashSince(ctx context.Context, sourceHash string, sinceMS int64) (int64, error) {
+	return s.UsageEvents.CountHTTP500ForSourceHashSince(ctx, sourceHash, sinceMS)
 }
 
 func (s *Store) Counts(ctx context.Context) (events int64, deadLetters int64, err error) {

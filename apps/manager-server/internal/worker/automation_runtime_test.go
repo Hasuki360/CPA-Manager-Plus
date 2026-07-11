@@ -21,7 +21,7 @@ func TestAutomationUsageHandlerGatesNewEvents(t *testing.T) {
 	settings := automationsvc.New(config.Config{}, st)
 	quota := &recordingQuotaAutomationWorker{}
 	account := &recordingAccountAutomationWorker{}
-	handler := NewAutomationRuntime(settings, nil, quota, account).handler
+	handler := NewAutomationRuntime(settings, nil, quota, account, CharityModelMonitorConfig{}).handler
 
 	handler.HandleUsageEvents(ctx, collectorpkg.RuntimeConfig{}, []usage.Event{{EventHash: "evt-off"}})
 	if quota.handleCount != 0 || account.handleCount != 0 {
@@ -70,7 +70,7 @@ func TestAutomationRuntimeReloadUpdatesAutoDisable(t *testing.T) {
 	ctx := context.Background()
 	settings := automationsvc.New(config.Config{}, st)
 	account := &recordingAccountAutomationWorker{}
-	runtime := NewAutomationRuntime(settings, nil, &recordingQuotaAutomationWorker{}, account)
+	runtime := NewAutomationRuntime(settings, nil, &recordingQuotaAutomationWorker{}, account, CharityModelMonitorConfig{})
 
 	if _, err := settings.Update(ctx, automationsvc.UpdateRequest{AccountActionsEnabled: boolPtr(true), AccountActionsAutoDisable: boolPtr(true)}); err != nil {
 		t.Fatalf("enable auto-disable: %v", err)

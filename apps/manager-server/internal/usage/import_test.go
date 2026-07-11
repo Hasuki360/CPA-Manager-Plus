@@ -359,6 +359,32 @@ func TestNormalizeRawReadsCPA7118UsageFields(t *testing.T) {
 	}
 }
 
+func TestNormalizeRawReadsTopLevelHTTP500StatusAndErrorBody(t *testing.T) {
+	payload := `{
+	  "timestamp": "2026-07-09T18:25:13Z",
+	  "model": "gpt-5.5",
+	  "provider": "oneapi",
+	  "auth_file_snapshot": "oneapi-channel.json",
+	  "status_code": 500,
+	  "error": {
+	    "code": "get_channel_failed",
+	    "message": "当前模型 gpt-5.5 负载已经达到上限，请稍后重试 (request id: 20260710022511339211722Gd5pSyzF)",
+	    "type": "new_api_error"
+	  }
+	}`
+	event, err := NormalizeRaw([]byte(payload))
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	if !event.Failed || event.FailStatusCode != 500 {
+		t.Fatalf("event failure = %#v", event)
+	}
+	if !strings.Contains(event.FailSummary, "get_channel_failed") ||
+		!strings.Contains(event.FailSummary, "当前模型 gpt-5.5 负载已经达到上限") {
+		t.Fatalf("event fail summary = %q body=%q", event.FailSummary, event.FailBody)
+	}
+}
+
 func TestNormalizeRawReadsAnthropicCacheUsageFields(t *testing.T) {
 	payload := `{
 	  "timestamp": "2026-04-25T00:00:00Z",

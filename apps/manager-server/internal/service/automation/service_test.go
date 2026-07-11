@@ -30,6 +30,10 @@ func (s *stubSettingsStore) SaveAutomationSettings(ctx context.Context, settings
 	return settings, nil
 }
 
+func (s *stubSettingsStore) LoadCharityModelMonitorState(ctx context.Context) (store.CharityModelMonitorState, bool, error) {
+	return store.CharityModelMonitorState{}, false, nil
+}
+
 func mustStatus(t *testing.T, svc *Service, ctx context.Context) Status {
 	t.Helper()
 	status, err := svc.Status(ctx)
