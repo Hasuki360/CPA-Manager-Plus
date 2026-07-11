@@ -18,21 +18,23 @@ const (
 )
 
 type AccountHistoryRollupWorker struct {
-	store         *store.Store
-	wake          chan struct{}
-	running       int32
-	batchLimit    int
-	maxBatches    int
-	checkInterval time.Duration
+	store             *store.Store
+	wake              chan struct{}
+	running           int32
+	batchLimit        int
+	maxBatches        int
+	checkInterval     time.Duration
+	continuationDelay time.Duration
 }
 
 func NewAccountHistoryRollupWorker(store *store.Store) *AccountHistoryRollupWorker {
 	return &AccountHistoryRollupWorker{
-		store:         store,
-		wake:          make(chan struct{}, 1),
-		batchLimit:    defaultAccountHistoryRollupBatchLimit,
-		maxBatches:    defaultAccountHistoryRollupMaxBatches,
-		checkInterval: defaultAccountHistoryRollupCheckInterval,
+		store:             store,
+		wake:              make(chan struct{}, 1),
+		batchLimit:        defaultAccountHistoryRollupBatchLimit,
+		maxBatches:        defaultAccountHistoryRollupMaxBatches,
+		checkInterval:     defaultAccountHistoryRollupCheckInterval,
+		continuationDelay: defaultRollupContinuationDelay,
 	}
 }
 
@@ -62,37 +64,29 @@ func (w *AccountHistoryRollupWorker) Wake() {
 }
 
 func (w *AccountHistoryRollupWorker) loop(ctx context.Context) {
-	ticker := time.NewTicker(w.checkInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-w.wake:
-			w.catchUp(ctx)
-		case <-ticker.C:
-			w.catchUp(ctx)
-		}
-	}
+	runRollupLoop(ctx, w.wake, w.checkInterval, w.continuationDelay, w.catchUp)
 }
 
-func (w *AccountHistoryRollupWorker) catchUp(ctx context.Context) {
+func (w *AccountHistoryRollupWorker) catchUp(ctx context.Context) bool {
 	if !atomic.CompareAndSwapInt32(&w.running, 0, 1) {
-		return
+		return false
 	}
 	defer atomic.StoreInt32(&w.running, 0)
 
+	pending := false
 	for batch := 0; batch < w.maxBatches; batch++ {
 		if ctx.Err() != nil {
-			return
+			return false
 		}
 		result, err := w.store.CatchUpAccountHistoryRollups(ctx, w.batchLimit, time.Now().UnixMilli())
 		if err != nil {
 			log.Printf("[usage-rollup] account history catch-up failed: %v", err)
-			return
+			return false
 		}
+		pending = result.Pending
 		if result.Processed == 0 || !result.Pending {
-			return
+			return false
 		}
 	}
+	return pending
 }

@@ -1,8 +1,10 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"io"
 	"time"
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/model"
@@ -35,6 +37,8 @@ type CodexInspectionLog = model.CodexInspectionLog
 type InsertResult = model.InsertResult
 type ModelPrice = model.ModelPrice
 type ModelPriceSyncResult = model.ModelPriceSyncResult
+type ModelUsageStat = model.ModelUsageStat
+type ModelUsageSummary = model.ModelUsageSummary
 type APIKeyAlias = model.APIKeyAlias
 type QuotaCooldown = model.QuotaCooldown
 type QuotaCooldownUpsert = model.QuotaCooldownUpsert
@@ -55,6 +59,7 @@ type LatencyPercentiles = usageevent.LatencyPercentiles
 type LatencySummary = usageevent.LatencySummary
 type HourlyPoint = usageevent.HourlyPoint
 type FilterOptionValues = usageevent.FilterOptionValues
+type FilterSelectorValues = usageevent.FilterSelectorValues
 type HeatmapPoint = usageevent.HeatmapPoint
 type ChannelModelStat = usageevent.ChannelModelStat
 type FailureSourceStat = usageevent.FailureSourceStat
@@ -69,6 +74,7 @@ type HeaderSnapshot = usageevent.HeaderSnapshot
 type UsageRollupCheckpoint = usagerollup.Checkpoint
 type UsageRollupCatchUpResult = usagerollup.CatchUpResult
 type AccountHistoryRollupRow = usagerollup.AccountHistoryRow
+type DashboardHourlyRollupRow = usagerollup.DashboardHourlyRow
 
 type Store struct {
 	db *sql.DB
@@ -170,6 +176,10 @@ func (s *Store) UpsertSyncedModelPrices(ctx context.Context, prices map[string]M
 	return s.ModelPrices.UpsertSynced(ctx, prices)
 }
 
+func (s *Store) ModelUsageSummary(ctx context.Context, limit int) (ModelUsageSummary, error) {
+	return s.UsageEvents.ModelUsageSummary(ctx, limit)
+}
+
 func (s *Store) LoadAPIKeyAliases(ctx context.Context) ([]APIKeyAlias, error) {
 	return s.APIKeyAliases.LoadAll(ctx)
 }
@@ -258,8 +268,16 @@ func (s *Store) CatchUpAccountHistoryRollups(ctx context.Context, limit int, now
 	return s.UsageRollups.CatchUpAccountHistory(ctx, limit, nowMS)
 }
 
+func (s *Store) CatchUpDashboardHourlyRollups(ctx context.Context, limit int, nowMS int64) (UsageRollupCatchUpResult, error) {
+	return s.UsageRollups.CatchUpDashboardHourly(ctx, limit, nowMS)
+}
+
 func (s *Store) AccountHistoryRollupCheckpoint(ctx context.Context) (UsageRollupCheckpoint, error) {
 	return s.UsageRollups.Checkpoint(ctx, usagerollup.AccountHistoryCheckpointName)
+}
+
+func (s *Store) DashboardHourlyRollupCheckpoint(ctx context.Context) (UsageRollupCheckpoint, error) {
+	return s.UsageRollups.Checkpoint(ctx, usagerollup.DashboardHourlyCheckpointName)
 }
 
 func (s *Store) LatestUsageEventID(ctx context.Context) (int64, error) {
@@ -268,6 +286,10 @@ func (s *Store) LatestUsageEventID(ctx context.Context) (int64, error) {
 
 func (s *Store) AccountHistoryRollupRows(ctx context.Context, accountKeys []string) ([]AccountHistoryRollupRow, error) {
 	return s.UsageRollups.AccountHistoryRows(ctx, accountKeys)
+}
+
+func (s *Store) DashboardHourlyRollupRows(ctx context.Context, fromMS, toMS int64) ([]DashboardHourlyRollupRow, error) {
+	return s.UsageRollups.DashboardHourlyRows(ctx, fromMS, toMS)
 }
 
 func AccountHistoryKey(accountSnapshot, authLabelSnapshot, source, authIndex string) string {
@@ -319,7 +341,19 @@ func (s *Store) Counts(ctx context.Context) (events int64, deadLetters int64, er
 }
 
 func (s *Store) ExportJSONL(ctx context.Context) ([]byte, error) {
-	return s.UsageEvents.ExportJSONL(ctx)
+	var output bytes.Buffer
+	if err := s.WriteExportJSONL(ctx, &output, 0); err != nil {
+		return nil, err
+	}
+	return output.Bytes(), nil
+}
+
+func (s *Store) WriteCompatibleUsage(ctx context.Context, writer io.Writer, limit int) error {
+	return s.UsageEvents.WriteCompatibleUsage(ctx, writer, limit)
+}
+
+func (s *Store) WriteExportJSONL(ctx context.Context, writer io.Writer, limit int) error {
+	return s.UsageEvents.WriteExportJSONL(ctx, writer, limit)
 }
 
 // AggregateBetween computes summary metrics over [fromMs, toMs).
@@ -376,6 +410,10 @@ func (s *Store) HourlyDistributionWithFilter(ctx context.Context, filter Analyti
 
 func (s *Store) FilterOptionValuesWithFilter(ctx context.Context, filter AnalyticsFilter) (FilterOptionValues, error) {
 	return s.UsageEvents.FilterOptionValuesWithFilter(ctx, filter)
+}
+
+func (s *Store) FilterSelectorValuesWithFilter(ctx context.Context, filter AnalyticsFilter) (FilterSelectorValues, error) {
+	return s.UsageEvents.FilterSelectorValuesWithFilter(ctx, filter)
 }
 
 func (s *Store) HeatmapWithFilter(ctx context.Context, filter AnalyticsFilter, location *time.Location) ([]HeatmapPoint, error) {

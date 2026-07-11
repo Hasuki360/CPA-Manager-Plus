@@ -32,6 +32,226 @@ type ImportParseResult struct {
 	Warnings    []string
 }
 
+type ImportStreamResult struct {
+	Format      string
+	Total       int
+	Failed      int
+	Unsupported int
+	Warnings    []string
+}
+
+type importBatcher struct {
+	batchSize int
+	batch     []Event
+	total     int
+	consume   func([]Event) error
+}
+
+func StreamImportPayload(reader io.Reader, batchSize int, consume func([]Event) error) (ImportStreamResult, error) {
+	if batchSize <= 0 {
+		batchSize = 256
+	}
+	buffered := bufio.NewReader(reader)
+	first, err := peekNonWhitespaceByte(buffered)
+	if err != nil {
+		if errors.Is(err, io.EOF) {
+			return ImportStreamResult{}, errors.New("empty usage import payload")
+		}
+		return ImportStreamResult{}, err
+	}
+
+	batcher := &importBatcher{
+		batchSize: batchSize,
+		batch:     make([]Event, 0, batchSize),
+		consume:   consume,
+	}
+	var result ImportStreamResult
+	switch first {
+	case '[':
+		result, err = streamJSONArrayImport(buffered, batcher)
+	case '{':
+		result, err = streamJSONObjectOrJSONLImport(buffered, batcher)
+	default:
+		result = ImportStreamResult{Format: ImportFormatJSONL}
+		err = streamJSONLImport(buffered, batcher, &result)
+	}
+	result.Total = batcher.total
+	return result, err
+}
+
+func streamJSONArrayImport(reader io.Reader, batcher *importBatcher) (ImportStreamResult, error) {
+	result := ImportStreamResult{Format: ImportFormatJSONL}
+	decoder := json.NewDecoder(reader)
+	decoder.UseNumber()
+	token, err := decoder.Token()
+	if err != nil {
+		return result, err
+	}
+	if delimiter, ok := token.(json.Delim); !ok || delimiter != '[' {
+		return result, ErrUnsupportedImportFormat
+	}
+	for decoder.More() {
+		var item json.RawMessage
+		if err := decoder.Decode(&item); err != nil {
+			return result, err
+		}
+		event, err := eventFromJSONRecord(item)
+		if err != nil {
+			result.Failed++
+			continue
+		}
+		if err := batcher.add(event); err != nil {
+			return result, err
+		}
+	}
+	if _, err := decoder.Token(); err != nil {
+		return result, err
+	}
+	if err := ensureDecoderEOF(decoder); err != nil {
+		return result, err
+	}
+	return result, batcher.flush()
+}
+
+func streamJSONObjectOrJSONLImport(reader io.Reader, batcher *importBatcher) (ImportStreamResult, error) {
+	decoder := json.NewDecoder(reader)
+	decoder.UseNumber()
+	var first json.RawMessage
+	if err := decoder.Decode(&first); err != nil {
+		return ImportStreamResult{Format: ImportFormatJSONL}, err
+	}
+
+	parsed, err := parseJSONObjectImport(first)
+	if parsed.Format == ImportFormatLegacyExport || parsed.Format == ImportFormatLegacyPayload {
+		result := ImportStreamResult{
+			Format:      parsed.Format,
+			Failed:      parsed.Failed,
+			Unsupported: parsed.Unsupported,
+			Warnings:    parsed.Warnings,
+		}
+		if err != nil {
+			return result, err
+		}
+		if err := ensureOnlyWhitespace(io.MultiReader(decoder.Buffered(), reader)); err != nil {
+			return result, err
+		}
+		for _, event := range parsed.Events {
+			if err := batcher.add(event); err != nil {
+				return result, err
+			}
+		}
+		return result, batcher.flush()
+	}
+	if err != nil {
+		return ImportStreamResult{Format: ImportFormatJSONL, Failed: parsed.Failed}, err
+	}
+
+	result := ImportStreamResult{Format: ImportFormatJSONL, Failed: parsed.Failed}
+	for _, event := range parsed.Events {
+		if err := batcher.add(event); err != nil {
+			return result, err
+		}
+	}
+	if err := streamJSONLImport(io.MultiReader(decoder.Buffered(), reader), batcher, &result); err != nil {
+		return result, err
+	}
+	return result, nil
+}
+
+func streamJSONLImport(reader io.Reader, batcher *importBatcher, result *ImportStreamResult) error {
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 64*1024), 10*1024*1024)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		event, err := eventFromJSONRecord([]byte(line))
+		if err != nil {
+			result.Failed++
+			continue
+		}
+		if err := batcher.add(event); err != nil {
+			return err
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+	return batcher.flush()
+}
+
+func (b *importBatcher) add(event Event) error {
+	b.batch = append(b.batch, event)
+	b.total++
+	if len(b.batch) < b.batchSize {
+		return nil
+	}
+	return b.flush()
+}
+
+func (b *importBatcher) flush() error {
+	if len(b.batch) == 0 {
+		return nil
+	}
+	// Import is intentionally batched rather than all-or-nothing: batches that
+	// completed before a later parse, size-limit, or database error stay committed.
+	if err := b.consume(b.batch); err != nil {
+		return err
+	}
+	b.batch = b.batch[:0]
+	return nil
+}
+
+func peekNonWhitespaceByte(reader *bufio.Reader) (byte, error) {
+	for {
+		value, err := reader.ReadByte()
+		if err != nil {
+			return 0, err
+		}
+		switch value {
+		case ' ', '\t', '\r', '\n':
+			continue
+		default:
+			if err := reader.UnreadByte(); err != nil {
+				return 0, err
+			}
+			return value, nil
+		}
+	}
+}
+
+func ensureDecoderEOF(decoder *json.Decoder) error {
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return errors.New("usage import payload contains multiple JSON values")
+		}
+		return err
+	}
+	return nil
+}
+
+func ensureOnlyWhitespace(reader io.Reader) error {
+	buffer := make([]byte, 4096)
+	for {
+		read, err := reader.Read(buffer)
+		for _, value := range buffer[:read] {
+			switch value {
+			case ' ', '\t', '\r', '\n':
+			default:
+				return errors.New("usage import payload contains multiple JSON values")
+			}
+		}
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+	}
+}
+
 func ParseImportPayload(data []byte) (ImportParseResult, error) {
 	trimmed := bytes.TrimSpace(data)
 	if len(trimmed) == 0 {

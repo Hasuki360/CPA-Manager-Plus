@@ -3,7 +3,10 @@ package dashboard
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log"
 	"sort"
+	"sync/atomic"
 	"time"
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/pricing"
@@ -12,22 +15,29 @@ import (
 )
 
 const (
-	defaultTopModels       = 5
-	defaultRecentFailures  = 5
-	defaultHealthRows      = 5
-	rollingWindowMinutes   = 30
-	rollingWindowMs        = rollingWindowMinutes * 60 * 1000
-	hourWindowMs           = 60 * 60 * 1000
-	healthTimelineBucketMs = 10 * 60 * 1000
-	healthTimelineBuckets  = 24 * 6
+	defaultTopModels            = 5
+	defaultRecentFailures       = 5
+	defaultHealthRows           = 5
+	rollingWindowMinutes        = 30
+	rollingWindowMs             = rollingWindowMinutes * 60 * 1000
+	hourWindowMs                = 60 * 60 * 1000
+	healthTimelineBucketMs      = 10 * 60 * 1000
+	healthTimelineBuckets       = 24 * 6
+	rollupFallbackLogIntervalMS = int64(5 * time.Minute / time.Millisecond)
 )
 
 type Service struct {
-	store *store.Store
+	store                   *store.Store
+	hourlyRollupEnabled     bool
+	lastRollupFallbackLogMS atomic.Int64
 }
 
-func New(store *store.Store) *Service {
-	return &Service{store: store}
+func New(store *store.Store, hourlyRollupEnabled ...bool) *Service {
+	enabled := true
+	if len(hourlyRollupEnabled) > 0 {
+		enabled = hourlyRollupEnabled[0]
+	}
+	return &Service{store: store, hourlyRollupEnabled: enabled}
 }
 
 type SummaryParams struct {
@@ -227,20 +237,12 @@ func (s *Service) Summary(ctx context.Context, p SummaryParams) (SummaryResponse
 		recentLimit = defaultRecentFailures
 	}
 
-	todayAgg, err := s.store.AggregateBetween(ctx, p.TodayStartMS, nowMS)
+	todayAgg, modelStats, topStats, timeline, err := s.loadTodayMetrics(ctx, p.TodayStartMS, nowMS, topLimit)
 	if err != nil {
 		return SummaryResponse{}, err
 	}
 	rollingStartMS := nowMS - rollingWindowMs
 	rollingAgg, err := s.store.AggregateBetween(ctx, rollingStartMS, nowMS)
-	if err != nil {
-		return SummaryResponse{}, err
-	}
-	modelStats, err := s.store.ModelStatsBetween(ctx, p.TodayStartMS, nowMS)
-	if err != nil {
-		return SummaryResponse{}, err
-	}
-	topStats, err := s.store.TopModelsBetween(ctx, p.TodayStartMS, nowMS, topLimit)
 	if err != nil {
 		return SummaryResponse{}, err
 	}
@@ -256,10 +258,6 @@ func (s *Service) Summary(ctx context.Context, p SummaryParams) (SummaryResponse
 		FromMS:        p.TodayStartMS,
 		ToMS:          nowMS,
 		IncludeFailed: true,
-	}
-	timeline, err := s.store.HourlyTimelineBetween(ctx, p.TodayStartMS, nowMS)
-	if err != nil {
-		return SummaryResponse{}, err
 	}
 	healthTimelineToMS := p.TodayStartMS + int64(healthTimelineBuckets)*healthTimelineBucketMs
 	healthTimelinePoints, err := s.store.BucketTimelineBetween(ctx, p.TodayStartMS, nowMS, healthTimelineBucketMs)
@@ -296,6 +294,320 @@ func (s *Service) Summary(ctx context.Context, p SummaryParams) (SummaryResponse
 		FailureSources:  buildFailureSources(failureSources, defaultHealthRows),
 		RecentFailures:  buildRecentFailures(recentFailures),
 	}, nil
+}
+
+func (s *Service) loadTodayMetrics(ctx context.Context, fromMS, toMS int64, topLimit int) (store.Aggregate, []store.ModelStat, []store.ModelStat, []store.TimelinePoint, error) {
+	if agg, modelStats, timeline, ok := s.loadTodayMetricsFromRollup(ctx, fromMS, toMS); ok {
+		return agg, modelStats, selectTopModelStats(modelStats, topLimit), timeline, nil
+	}
+
+	agg, err := s.store.AggregateBetween(ctx, fromMS, toMS)
+	if err != nil {
+		return store.Aggregate{}, nil, nil, nil, err
+	}
+	modelStats, err := s.store.ModelStatsBetween(ctx, fromMS, toMS)
+	if err != nil {
+		return store.Aggregate{}, nil, nil, nil, err
+	}
+	topStats, err := s.store.TopModelsBetween(ctx, fromMS, toMS, topLimit)
+	if err != nil {
+		return store.Aggregate{}, nil, nil, nil, err
+	}
+	timeline, err := s.store.HourlyTimelineBetween(ctx, fromMS, toMS)
+	if err != nil {
+		return store.Aggregate{}, nil, nil, nil, err
+	}
+	return agg, modelStats, topStats, timeline, nil
+}
+
+func (s *Service) loadTodayMetricsFromRollup(ctx context.Context, fromMS, toMS int64) (store.Aggregate, []store.ModelStat, []store.TimelinePoint, bool) {
+	if !s.hourlyRollupEnabled {
+		return store.Aggregate{}, nil, nil, false
+	}
+	if fromMS >= toMS {
+		return store.Aggregate{}, []store.ModelStat{}, []store.TimelinePoint{}, true
+	}
+	checkpoint, err := s.store.DashboardHourlyRollupCheckpoint(ctx)
+	if err != nil {
+		s.logRollupFallback(fmt.Sprintf("checkpoint query failed: %v", err))
+		return store.Aggregate{}, nil, nil, false
+	}
+	latestID, err := s.store.LatestUsageEventID(ctx)
+	if err != nil {
+		s.logRollupFallback(fmt.Sprintf("latest event query failed: %v", err))
+		return store.Aggregate{}, nil, nil, false
+	}
+	if checkpoint.LastEventID < latestID {
+		s.logRollupFallback(fmt.Sprintf("checkpoint pending: last_event_id=%d latest_event_id=%d", checkpoint.LastEventID, latestID))
+		return store.Aggregate{}, nil, nil, false
+	}
+
+	fullStartMS := ceilHourMS(fromMS)
+	fullEndMS := floorHourMS(toMS)
+	if fullStartMS >= fullEndMS {
+		return store.Aggregate{}, nil, nil, false
+	}
+	rows, err := s.store.DashboardHourlyRollupRows(ctx, fullStartMS, fullEndMS)
+	if err != nil {
+		s.logRollupFallback(fmt.Sprintf("hourly rows query failed: %v", err))
+		return store.Aggregate{}, nil, nil, false
+	}
+
+	agg, modelStats, timeline := dashboardMetricsFromHourlyRows(rows)
+	for _, edge := range dashboardRawEdges(fromMS, toMS, fullStartMS, fullEndMS) {
+		edgeAgg, err := s.store.AggregateBetween(ctx, edge.fromMS, edge.toMS)
+		if err != nil {
+			s.logRollupFallback(fmt.Sprintf("raw edge aggregate failed: %v", err))
+			return store.Aggregate{}, nil, nil, false
+		}
+		edgeModels, err := s.store.ModelStatsBetween(ctx, edge.fromMS, edge.toMS)
+		if err != nil {
+			s.logRollupFallback(fmt.Sprintf("raw edge model query failed: %v", err))
+			return store.Aggregate{}, nil, nil, false
+		}
+		agg = mergeDashboardAggregates(agg, edgeAgg)
+		modelStats = mergeDashboardModelStats(modelStats, edgeModels)
+	}
+
+	if fromMS%hourWindowMs != 0 {
+		timeline, err = s.store.HourlyTimelineBetween(ctx, fromMS, toMS)
+		if err != nil {
+			s.logRollupFallback(fmt.Sprintf("offset timeline query failed: %v", err))
+			return store.Aggregate{}, nil, nil, false
+		}
+	} else if fullEndMS < toMS {
+		edgeTimeline, err := s.store.HourlyTimelineBetween(ctx, fullEndMS, toMS)
+		if err != nil {
+			s.logRollupFallback(fmt.Sprintf("raw edge timeline query failed: %v", err))
+			return store.Aggregate{}, nil, nil, false
+		}
+		timeline = mergeDashboardTimeline(timeline, edgeTimeline)
+	}
+
+	return agg, modelStats, timeline, true
+}
+
+func (s *Service) logRollupFallback(reason string) {
+	nowMS := time.Now().UnixMilli()
+	for {
+		lastMS := s.lastRollupFallbackLogMS.Load()
+		if lastMS > 0 && nowMS-lastMS < rollupFallbackLogIntervalMS {
+			return
+		}
+		if s.lastRollupFallbackLogMS.CompareAndSwap(lastMS, nowMS) {
+			log.Printf("[dashboard-rollup] falling back to raw usage events: %s", reason)
+			return
+		}
+	}
+}
+
+type dashboardTimeRange struct {
+	fromMS int64
+	toMS   int64
+}
+
+func dashboardRawEdges(fromMS, toMS, fullStartMS, fullEndMS int64) []dashboardTimeRange {
+	ranges := make([]dashboardTimeRange, 0, 2)
+	if fromMS < fullStartMS {
+		ranges = append(ranges, dashboardTimeRange{fromMS: fromMS, toMS: min(fullStartMS, toMS)})
+	}
+	if fullEndMS < toMS {
+		ranges = append(ranges, dashboardTimeRange{fromMS: max(fullEndMS, fromMS), toMS: toMS})
+	}
+	return ranges
+}
+
+func ceilHourMS(value int64) int64 {
+	if value%hourWindowMs == 0 {
+		return value
+	}
+	return value - value%hourWindowMs + hourWindowMs
+}
+
+func floorHourMS(value int64) int64 {
+	return value - value%hourWindowMs
+}
+
+func dashboardMetricsFromHourlyRows(rows []store.DashboardHourlyRollupRow) (store.Aggregate, []store.ModelStat, []store.TimelinePoint) {
+	agg := store.Aggregate{}
+	modelStats := make([]store.ModelStat, 0, len(rows))
+	timelineByBucket := make(map[int64]*store.TimelinePoint)
+	var latencySum int64
+	for _, row := range rows {
+		agg.TotalCalls += row.Calls
+		agg.SuccessCalls += row.SuccessCalls
+		agg.FailureCalls += row.FailureCalls
+		agg.InputTokens += row.InputTokens
+		agg.OutputTokens += row.OutputTokens
+		agg.ReasoningTokens += row.ReasoningTokens
+		agg.CachedTokens += row.CachedTokens
+		agg.CacheReadTokens += row.CacheReadTokens
+		agg.CacheCreationTokens += row.CacheCreationTokens
+		agg.LongInputTokens += row.LongInputTokens
+		agg.LongOutputTokens += row.LongOutputTokens
+		agg.LongCachedTokens += row.LongCachedTokens
+		agg.LongCacheReadTokens += row.LongCacheReadTokens
+		agg.LongCacheCreationTokens += row.LongCacheCreationTokens
+		agg.TotalTokens += row.TotalTokens
+		agg.LatencySamples += row.LatencySamples
+		agg.ZeroTokenCalls += row.ZeroTokenCalls
+		latencySum += row.LatencySumMS
+		modelStats = append(modelStats, store.ModelStat{
+			Model:               row.Model,
+			BillingModel:        row.BillingModel,
+			ServiceTier:         row.ServiceTier,
+			Calls:               row.Calls,
+			SuccessCalls:        row.SuccessCalls,
+			InputTokens:         row.InputTokens,
+			OutputTokens:        row.OutputTokens,
+			ReasoningTokens:     row.ReasoningTokens,
+			CachedTokens:        row.CachedTokens,
+			CacheReadTokens:     row.CacheReadTokens,
+			CacheCreationTokens: row.CacheCreationTokens,
+			LongContextTokens:   row.LongContextTokens,
+			TotalTokens:         row.TotalTokens,
+		})
+		point := timelineByBucket[row.BucketMS]
+		if point == nil {
+			point = &store.TimelinePoint{BucketMS: row.BucketMS}
+			timelineByBucket[row.BucketMS] = point
+		}
+		point.Calls += row.Calls
+		point.Tokens += row.TotalTokens
+		point.Success += row.SuccessCalls
+		point.Failure += row.FailureCalls
+	}
+	if agg.LatencySamples > 0 {
+		agg.AvgLatencyMS.Valid = true
+		agg.AvgLatencyMS.Float64 = float64(latencySum) / float64(agg.LatencySamples)
+	}
+	timeline := make([]store.TimelinePoint, 0, len(timelineByBucket))
+	for _, point := range timelineByBucket {
+		timeline = append(timeline, *point)
+	}
+	sort.Slice(timeline, func(i, j int) bool { return timeline[i].BucketMS < timeline[j].BucketMS })
+	return agg, modelStats, timeline
+}
+
+func mergeDashboardAggregates(left, right store.Aggregate) store.Aggregate {
+	latencySum := left.AvgLatencyMS.Float64*float64(left.LatencySamples) + right.AvgLatencyMS.Float64*float64(right.LatencySamples)
+	left.TotalCalls += right.TotalCalls
+	left.SuccessCalls += right.SuccessCalls
+	left.FailureCalls += right.FailureCalls
+	left.InputTokens += right.InputTokens
+	left.OutputTokens += right.OutputTokens
+	left.ReasoningTokens += right.ReasoningTokens
+	left.CachedTokens += right.CachedTokens
+	left.CacheReadTokens += right.CacheReadTokens
+	left.CacheCreationTokens += right.CacheCreationTokens
+	left.LongInputTokens += right.LongInputTokens
+	left.LongOutputTokens += right.LongOutputTokens
+	left.LongCachedTokens += right.LongCachedTokens
+	left.LongCacheReadTokens += right.LongCacheReadTokens
+	left.LongCacheCreationTokens += right.LongCacheCreationTokens
+	left.TotalTokens += right.TotalTokens
+	left.LatencySamples += right.LatencySamples
+	left.ZeroTokenCalls += right.ZeroTokenCalls
+	left.AvgLatencyMS.Valid = left.LatencySamples > 0
+	if left.AvgLatencyMS.Valid {
+		left.AvgLatencyMS.Float64 = latencySum / float64(left.LatencySamples)
+	}
+	return left
+}
+
+func mergeDashboardModelStats(left, right []store.ModelStat) []store.ModelStat {
+	type key struct {
+		model        string
+		billingModel string
+		serviceTier  string
+	}
+	grouped := make(map[key]*store.ModelStat, len(left)+len(right))
+	order := make([]key, 0, len(left)+len(right))
+	for _, stat := range append(append([]store.ModelStat{}, left...), right...) {
+		mapKey := key{model: stat.Model, billingModel: stat.BillingModel, serviceTier: stat.ServiceTier}
+		entry := grouped[mapKey]
+		if entry == nil {
+			copy := stat
+			grouped[mapKey] = &copy
+			order = append(order, mapKey)
+			continue
+		}
+		entry.Calls += stat.Calls
+		entry.SuccessCalls += stat.SuccessCalls
+		entry.InputTokens += stat.InputTokens
+		entry.OutputTokens += stat.OutputTokens
+		entry.ReasoningTokens += stat.ReasoningTokens
+		entry.CachedTokens += stat.CachedTokens
+		entry.CacheReadTokens += stat.CacheReadTokens
+		entry.CacheCreationTokens += stat.CacheCreationTokens
+		entry.LongInputTokens += stat.LongInputTokens
+		entry.LongOutputTokens += stat.LongOutputTokens
+		entry.LongCachedTokens += stat.LongCachedTokens
+		entry.LongCacheReadTokens += stat.LongCacheReadTokens
+		entry.LongCacheCreationTokens += stat.LongCacheCreationTokens
+		entry.TotalTokens += stat.TotalTokens
+	}
+	result := make([]store.ModelStat, 0, len(order))
+	for _, mapKey := range order {
+		result = append(result, *grouped[mapKey])
+	}
+	return result
+}
+
+func mergeDashboardTimeline(left, right []store.TimelinePoint) []store.TimelinePoint {
+	grouped := make(map[int64]*store.TimelinePoint, len(left)+len(right))
+	for _, point := range append(append([]store.TimelinePoint{}, left...), right...) {
+		entry := grouped[point.BucketMS]
+		if entry == nil {
+			copy := point
+			grouped[point.BucketMS] = &copy
+			continue
+		}
+		entry.Calls += point.Calls
+		entry.Tokens += point.Tokens
+		entry.Success += point.Success
+		entry.Failure += point.Failure
+	}
+	result := make([]store.TimelinePoint, 0, len(grouped))
+	for _, point := range grouped {
+		result = append(result, *point)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].BucketMS < result[j].BucketMS })
+	return result
+}
+
+func selectTopModelStats(stats []store.ModelStat, limit int) []store.ModelStat {
+	if limit <= 0 {
+		limit = defaultTopModels
+	}
+	callsByModel := make(map[string]int64)
+	for _, stat := range stats {
+		callsByModel[stat.Model] += stat.Calls
+	}
+	models := make([]string, 0, len(callsByModel))
+	for model := range callsByModel {
+		models = append(models, model)
+	}
+	sort.SliceStable(models, func(i, j int) bool {
+		if callsByModel[models[i]] != callsByModel[models[j]] {
+			return callsByModel[models[i]] > callsByModel[models[j]]
+		}
+		return models[i] < models[j]
+	})
+	if len(models) > limit {
+		models = models[:limit]
+	}
+	selected := make(map[string]bool, len(models))
+	for _, model := range models {
+		selected[model] = true
+	}
+	result := make([]store.ModelStat, 0)
+	for _, stat := range stats {
+		if selected[stat.Model] {
+			result = append(result, stat)
+		}
+	}
+	return result
 }
 
 func buildTodaySummary(agg store.Aggregate, modelStats []store.ModelStat, prices map[string]store.ModelPrice) TodaySummary {
@@ -695,21 +1007,31 @@ func aggregateModelStats(stats []store.ModelStat, prices map[string]store.ModelP
 
 func costForStat(stat store.ModelStat, prices map[string]store.ModelPrice) float64 {
 	return pricing.CostForModelCandidatesWithServiceTier([]string{stat.BillingModel, stat.Model}, stat.ServiceTier, pricing.ModelTokens{
-		InputTokens:         stat.InputTokens,
-		OutputTokens:        stat.OutputTokens,
-		CachedTokens:        stat.CachedTokens,
-		CacheReadTokens:     stat.CacheReadTokens,
-		CacheCreationTokens: stat.CacheCreationTokens,
+		InputTokens:             stat.InputTokens,
+		OutputTokens:            stat.OutputTokens,
+		CachedTokens:            stat.CachedTokens,
+		CacheReadTokens:         stat.CacheReadTokens,
+		CacheCreationTokens:     stat.CacheCreationTokens,
+		LongInputTokens:         stat.LongInputTokens,
+		LongOutputTokens:        stat.LongOutputTokens,
+		LongCachedTokens:        stat.LongCachedTokens,
+		LongCacheReadTokens:     stat.LongCacheReadTokens,
+		LongCacheCreationTokens: stat.LongCacheCreationTokens,
 	}, prices)
 }
 
 func costForChannelStat(stat store.ChannelModelStat, prices map[string]store.ModelPrice) float64 {
 	return pricing.CostForModelCandidatesWithServiceTier([]string{stat.BillingModel, stat.Model}, stat.ServiceTier, pricing.ModelTokens{
-		InputTokens:         stat.InputTokens,
-		OutputTokens:        stat.OutputTokens,
-		CachedTokens:        stat.CachedTokens,
-		CacheReadTokens:     stat.CacheReadTokens,
-		CacheCreationTokens: stat.CacheCreationTokens,
+		InputTokens:             stat.InputTokens,
+		OutputTokens:            stat.OutputTokens,
+		CachedTokens:            stat.CachedTokens,
+		CacheReadTokens:         stat.CacheReadTokens,
+		CacheCreationTokens:     stat.CacheCreationTokens,
+		LongInputTokens:         stat.LongInputTokens,
+		LongOutputTokens:        stat.LongOutputTokens,
+		LongCachedTokens:        stat.LongCachedTokens,
+		LongCacheReadTokens:     stat.LongCacheReadTokens,
+		LongCacheCreationTokens: stat.LongCacheCreationTokens,
 	}, prices)
 }
 

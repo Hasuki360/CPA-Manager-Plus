@@ -4,6 +4,7 @@ import (
 	"context"
 	"math"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -358,6 +359,167 @@ func TestSummaryPricesPriorityAndDefaultServiceTiersSeparately(t *testing.T) {
 	if resp.ChannelHealth[0].AverageLatencyMS == nil ||
 		math.Abs(*resp.ChannelHealth[0].AverageLatencyMS-(1300.0/3.0)) > 0.000001 {
 		t.Fatalf("channel health latency = %#v, want weighted 433.333333", resp.ChannelHealth[0].AverageLatencyMS)
+	}
+}
+
+func TestSummaryDashboardHourlyRollupMatchesRawWithTrailingEdge(t *testing.T) {
+	db := newDashboardTestStore(t)
+	ctx := context.Background()
+	todayStart := int64(1_800_000_000_000)
+	nowMS := todayStart + 2*hourWindowMs + 30*60*1000
+	latency100 := int64(100)
+	latency300 := int64(300)
+
+	if err := db.SaveModelPrices(ctx, map[string]store.ModelPrice{
+		"resolved-a": {Prompt: 2, Completion: 4},
+	}); err != nil {
+		t.Fatalf("save prices: %v", err)
+	}
+	first := dashboardEvent("dashboard-rollup-first", todayStart+10*60*1000, "alias-a", false, 1_000_000, 0, 0, 0, 0, 1_000_000, &latency100)
+	first.ResolvedModel = "resolved-a"
+	second := dashboardEvent("dashboard-rollup-second", todayStart+hourWindowMs+20*60*1000, "alias-a", true, 0, 500_000, 0, 0, 0, 500_000, &latency300)
+	second.ResolvedModel = "resolved-a"
+	trailing := dashboardEvent("dashboard-rollup-trailing", todayStart+2*hourWindowMs+10*60*1000, "alias-b", false, 10, 20, 0, 0, 0, 30, nil)
+	if _, err := db.InsertEvents(ctx, []usage.Event{first, second, trailing}); err != nil {
+		t.Fatalf("insert events: %v", err)
+	}
+
+	raw, err := New(db).Summary(ctx, SummaryParams{TodayStartMS: todayStart, NowMS: nowMS, TopModels: 5, RecentFailures: 5})
+	if err != nil {
+		t.Fatalf("raw summary: %v", err)
+	}
+	catchUpDashboardHourlyForTest(t, ctx, db)
+	rolled, err := New(db).Summary(ctx, SummaryParams{TodayStartMS: todayStart, NowMS: nowMS, TopModels: 5, RecentFailures: 5})
+	if err != nil {
+		t.Fatalf("rollup summary: %v", err)
+	}
+
+	if !reflect.DeepEqual(rolled.Today, raw.Today) {
+		t.Fatalf("today mismatch\nrollup=%#v\nraw=%#v", rolled.Today, raw.Today)
+	}
+	if !reflect.DeepEqual(rolled.TopModelsToday, raw.TopModelsToday) || !reflect.DeepEqual(rolled.ModelCostRank, raw.ModelCostRank) {
+		t.Fatalf("model rows mismatch\nrollup=%#v / %#v\nraw=%#v / %#v", rolled.TopModelsToday, rolled.ModelCostRank, raw.TopModelsToday, raw.ModelCostRank)
+	}
+	if !reflect.DeepEqual(rolled.TrafficTimeline, raw.TrafficTimeline) || !reflect.DeepEqual(rolled.HourlyActivity, raw.HourlyActivity) {
+		t.Fatalf("timeline mismatch\nrollup=%#v\nraw=%#v", rolled.TrafficTimeline, raw.TrafficTimeline)
+	}
+	if err := db.SaveModelPrices(ctx, map[string]store.ModelPrice{
+		"resolved-a": {Prompt: 4, Completion: 8},
+	}); err != nil {
+		t.Fatalf("update prices: %v", err)
+	}
+	repriced, err := New(db).Summary(ctx, SummaryParams{TodayStartMS: todayStart, NowMS: nowMS, TopModels: 5, RecentFailures: 5})
+	if err != nil {
+		t.Fatalf("repriced summary: %v", err)
+	}
+	if repriced.Today.TotalCost != rolled.Today.TotalCost*2 {
+		t.Fatalf("repriced cost = %v, want %v", repriced.Today.TotalCost, rolled.Today.TotalCost*2)
+	}
+}
+
+func TestSummaryDashboardHourlyRollupKeepsOffsetTimelineCorrect(t *testing.T) {
+	db := newDashboardTestStore(t)
+	ctx := context.Background()
+	utcHour := int64(1_800_000_000_000)
+	todayStart := utcHour + 30*60*1000
+	nowMS := todayStart + 2*hourWindowMs + 15*60*1000
+
+	if _, err := db.InsertEvents(ctx, []usage.Event{
+		dashboardEvent("dashboard-offset-first", todayStart+10*60*1000, "gpt-a", false, 10, 0, 0, 0, 0, 10, nil),
+		dashboardEvent("dashboard-offset-second", todayStart+70*60*1000, "gpt-b", false, 20, 0, 0, 0, 0, 20, nil),
+		dashboardEvent("dashboard-offset-third", todayStart+130*60*1000, "gpt-c", true, 30, 0, 0, 0, 0, 30, nil),
+	}); err != nil {
+		t.Fatalf("insert events: %v", err)
+	}
+	raw, err := New(db).Summary(ctx, SummaryParams{TodayStartMS: todayStart, NowMS: nowMS})
+	if err != nil {
+		t.Fatalf("raw summary: %v", err)
+	}
+	catchUpDashboardHourlyForTest(t, ctx, db)
+	rolled, err := New(db).Summary(ctx, SummaryParams{TodayStartMS: todayStart, NowMS: nowMS})
+	if err != nil {
+		t.Fatalf("rollup summary: %v", err)
+	}
+	if !reflect.DeepEqual(rolled.Today, raw.Today) || !reflect.DeepEqual(rolled.TrafficTimeline, raw.TrafficTimeline) {
+		t.Fatalf("offset result mismatch\nrollup=%#v / %#v\nraw=%#v / %#v", rolled.Today, rolled.TrafficTimeline, raw.Today, raw.TrafficTimeline)
+	}
+}
+
+func TestSummaryDashboardHourlyRollupFallsBackWhilePending(t *testing.T) {
+	db := newDashboardTestStore(t)
+	ctx := context.Background()
+	todayStart := int64(1_800_000_000_000)
+	nowMS := todayStart + 2*hourWindowMs
+	if _, err := db.InsertEvents(ctx, []usage.Event{
+		dashboardEvent("dashboard-pending-first", todayStart+1_000, "gpt-a", false, 1, 0, 0, 0, 0, 1, nil),
+	}); err != nil {
+		t.Fatalf("insert first event: %v", err)
+	}
+	catchUpDashboardHourlyForTest(t, ctx, db)
+	if _, err := db.InsertEvents(ctx, []usage.Event{
+		dashboardEvent("dashboard-pending-second", todayStart+hourWindowMs+1_000, "gpt-b", false, 2, 0, 0, 0, 0, 2, nil),
+	}); err != nil {
+		t.Fatalf("insert pending event: %v", err)
+	}
+	if _, _, _, ok := New(db).loadTodayMetricsFromRollup(ctx, todayStart, nowMS); ok {
+		t.Fatalf("expected pending checkpoint to force raw fallback")
+	}
+	resp, err := New(db).Summary(ctx, SummaryParams{TodayStartMS: todayStart, NowMS: nowMS})
+	if err != nil {
+		t.Fatalf("summary: %v", err)
+	}
+	if resp.Today.TotalCalls != 2 || resp.Today.TotalTokens != 3 {
+		t.Fatalf("fallback summary = %#v", resp.Today)
+	}
+}
+
+func TestSummaryDashboardHourlyRollupCanBeDisabled(t *testing.T) {
+	db := newDashboardTestStore(t)
+	ctx := context.Background()
+	todayStart := int64(1_800_000_000_000)
+	nowMS := todayStart + 2*hourWindowMs
+	if _, err := db.InsertEvents(ctx, []usage.Event{
+		dashboardEvent("dashboard-disabled", todayStart+1_000, "gpt-a", false, 5, 0, 0, 0, 0, 5, nil),
+	}); err != nil {
+		t.Fatalf("insert event: %v", err)
+	}
+	catchUpDashboardHourlyForTest(t, ctx, db)
+	service := New(db, false)
+	if _, _, _, ok := service.loadTodayMetricsFromRollup(ctx, todayStart, nowMS); ok {
+		t.Fatal("disabled service used hourly rollup")
+	}
+	resp, err := service.Summary(ctx, SummaryParams{TodayStartMS: todayStart, NowMS: nowMS})
+	if err != nil {
+		t.Fatalf("summary: %v", err)
+	}
+	if resp.Today.TotalCalls != 1 || resp.Today.TotalTokens != 5 {
+		t.Fatalf("raw summary = %#v", resp.Today)
+	}
+}
+
+func TestDashboardRollupFallbackLogIsRateLimited(t *testing.T) {
+	service := New(newDashboardTestStore(t))
+	service.logRollupFallback("first")
+	first := service.lastRollupFallbackLogMS.Load()
+	if first <= 0 {
+		t.Fatalf("first log timestamp = %d", first)
+	}
+	service.logRollupFallback("second")
+	if got := service.lastRollupFallbackLogMS.Load(); got != first {
+		t.Fatalf("fallback log was not rate limited: first=%d got=%d", first, got)
+	}
+}
+
+func catchUpDashboardHourlyForTest(t *testing.T, ctx context.Context, db *store.Store) {
+	t.Helper()
+	for {
+		result, err := db.CatchUpDashboardHourlyRollups(ctx, 100, time.Now().UnixMilli())
+		if err != nil {
+			t.Fatalf("catch up dashboard hourly: %v", err)
+		}
+		if !result.Pending {
+			return
+		}
 	}
 }
 

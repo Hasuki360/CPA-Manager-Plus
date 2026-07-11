@@ -49,6 +49,36 @@ func BenchmarkCatchUpAccountHistoryInitial(b *testing.B) {
 	}
 }
 
+func BenchmarkCatchUpDashboardHourlyInitial(b *testing.B) {
+	for _, eventCount := range []int{1000, 10000} {
+		b.Run(fmt.Sprintf("events_%d", eventCount), func(b *testing.B) {
+			b.ReportAllocs()
+			ctx := context.Background()
+			for i := 0; i < b.N; i++ {
+				b.StopTimer()
+				db, closeDB := openRollupBenchmarkDB(b)
+				events := usageevent.New(db)
+				repo := New(db)
+				insertRollupBenchmarkEvents(b, ctx, events, benchmarkRollupEvents("dashboard-initial", i*eventCount, eventCount))
+				b.StartTimer()
+
+				result, err := repo.CatchUpDashboardHourly(ctx, eventCount, benchmarkNowMS)
+
+				b.StopTimer()
+				if err != nil {
+					closeDB()
+					b.Fatalf("catch-up: %v", err)
+				}
+				if result.Processed != eventCount {
+					closeDB()
+					b.Fatalf("processed = %d, want %d", result.Processed, eventCount)
+				}
+				closeDB()
+			}
+		})
+	}
+}
+
 func BenchmarkCatchUpAccountHistoryIncremental(b *testing.B) {
 	b.ReportAllocs()
 	ctx := context.Background()

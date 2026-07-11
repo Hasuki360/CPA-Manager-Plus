@@ -83,7 +83,7 @@ func FromExisting(
 		ManagerConfigService:           managerConfigService,
 		CollectorService:               collectorService,
 		UsageService:                   usagesvc.New(st),
-		DashboardService:               dashboardsvc.New(st),
+		DashboardService:               dashboardsvc.New(st, cfg.DashboardHourlyRollupEnabled),
 		CodexInspectionService:         codexinspectionsvc.New(st, managerConfigService),
 		MonitoringService:              monitoringsvc.New(st),
 		ModelPriceService:              modelpricesvc.NewMultiSource(st, modelPriceSyncURL, openRouterModelPriceSyncURL, managerConfigService),

@@ -17,7 +17,7 @@ import (
 func TestMigrationCreatesAccountHistoryRollupTables(t *testing.T) {
 	db := newRollupTestDB(t)
 
-	for _, table := range []string{"usage_rollup_checkpoints", "usage_account_model_rollups"} {
+	for _, table := range []string{"usage_rollup_checkpoints", "usage_account_model_rollups", "usage_dashboard_hourly_rollups"} {
 		var count int
 		if err := db.QueryRow(`select count(*) from sqlite_master where type = 'table' and name = ?`, table).Scan(&count); err != nil {
 			t.Fatalf("query sqlite_master for %s: %v", table, err)
@@ -104,6 +104,47 @@ func TestCatchUpAccountHistoryAggregatesByCheckpoint(t *testing.T) {
 	}
 	if checkpoint.LastEventID != 3 {
 		t.Fatalf("checkpoint = %#v", checkpoint)
+	}
+}
+
+func TestRollupsPreserveLongContextTokenBuckets(t *testing.T) {
+	db := newRollupTestDB(t)
+	ctx := context.Background()
+	events := usageevent.New(db)
+	repo := New(db)
+	baseMS := int64(1_700_000_000_000)
+	hourMS := baseMS - baseMS%dashboardHourMS
+
+	short := rollupTestEvent("long-boundary-short", hourMS+1_000, "gpt-5.6-sol", "", "alice@example.com", "", "auth-a", false, 272_000, 10, 0, 0, 20, 5, 272_010)
+	long := rollupTestEvent("long-boundary-over", hourMS+2_000, "gpt-5.6-sol", "", "alice@example.com", "", "auth-a", false, 272_001, 30, 0, 0, 40, 10, 272_031)
+	if _, err := events.InsertBatch(ctx, []usage.Event{short, long}); err != nil {
+		t.Fatalf("insert events: %v", err)
+	}
+	if _, err := repo.CatchUpAccountHistory(ctx, 10, baseMS+10_000); err != nil {
+		t.Fatalf("account catch-up: %v", err)
+	}
+	if _, err := repo.CatchUpDashboardHourly(ctx, 10, baseMS+11_000); err != nil {
+		t.Fatalf("dashboard catch-up: %v", err)
+	}
+
+	accountRows, err := repo.AccountHistoryRows(ctx, []string{"alice@example.com"})
+	if err != nil || len(accountRows) != 1 {
+		t.Fatalf("account rows = %#v, err = %v", accountRows, err)
+	}
+	account := accountRows[0]
+	if account.LongInputTokens != 272_001 || account.LongOutputTokens != 30 ||
+		account.LongCacheReadTokens != 40 || account.LongCacheCreationTokens != 10 {
+		t.Fatalf("account long-context tokens = %#v", account.LongContextTokens)
+	}
+
+	dashboardRows, err := repo.DashboardHourlyRows(ctx, hourMS, hourMS+dashboardHourMS)
+	if err != nil || len(dashboardRows) != 1 {
+		t.Fatalf("dashboard rows = %#v, err = %v", dashboardRows, err)
+	}
+	dashboard := dashboardRows[0]
+	if dashboard.LongInputTokens != 272_001 || dashboard.LongOutputTokens != 30 ||
+		dashboard.LongCacheReadTokens != 40 || dashboard.LongCacheCreationTokens != 10 {
+		t.Fatalf("dashboard long-context tokens = %#v", dashboard.LongContextTokens)
 	}
 }
 
