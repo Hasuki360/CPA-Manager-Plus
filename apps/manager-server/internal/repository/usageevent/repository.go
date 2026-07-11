@@ -330,28 +330,6 @@ func (r *repository) CountHTTP500ForSourceHashSince(ctx context.Context, sourceH
 	return count, nil
 }
 
-func (r *repository) ExportJSONL(ctx context.Context) ([]byte, error) {
-	events, err := r.ListRecent(ctx, 0)
-	if err != nil {
-		return nil, err
-	}
-	output := make([]byte, 0)
-	for i := len(events) - 1; i >= 0; i-- {
-		event := events[i]
-		// Export intentionally omits raw_json and raw fail_body. fail_summary is
-		// the redacted/truncated diagnostic field intended for portable JSONL.
-		event.FailBody = ""
-		event.RawJSON = ""
-		line, err := json.Marshal(event)
-		if err != nil {
-			return nil, err
-		}
-		output = append(output, line...)
-		output = append(output, '\n')
-	}
-	return output, nil
-}
-
 func nullString(value string) any {
 	if value == "" {
 		return nil
