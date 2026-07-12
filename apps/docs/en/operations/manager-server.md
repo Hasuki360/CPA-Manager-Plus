@@ -198,7 +198,7 @@ Saving CPAMP configuration does not rewrite the full CPA `config.yaml`.
 | `USAGE_DASHBOARD_HOURLY_ROLLUP_ENABLED` | `true` | Enable the Dashboard hourly rollup worker and query path. Temporarily set it to `false` when diagnosing SQLite write contention or rollup failures; Dashboard falls back to raw events. |
 | `USAGE_CORS_ORIGINS` | `*` | CORS origins for compatibility endpoints. |
 | `USAGE_RESP_TLS_SKIP_VERIFY` | `false` | Skip TLS verification for RESP connection. |
-| `USAGE_QUOTA_COOLDOWN_ENABLED` | `false` | Enable the Codex usage-limit cooldown worker. |
+| `USAGE_QUOTA_COOLDOWN_ENABLED` | `false` | Enable the provider quota cooldown worker for strict Codex usage-limit and xAI free-usage-exhausted signals. |
 | `USAGE_ACCOUNT_ACTIONS_ENABLED` | `false` | Enable the account action queue for auth issues that need review. |
 | `USAGE_ACCOUNT_ACTIONS_AUTO_DISABLE` | `false` | Enable automatic disabling for auth issues. This only takes effect when the account action queue is enabled. |
 | `PANEL_PATH` | empty | Optional custom `management.html`. |

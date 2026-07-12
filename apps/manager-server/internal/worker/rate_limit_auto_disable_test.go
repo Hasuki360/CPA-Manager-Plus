@@ -94,6 +94,90 @@ func TestQuotaAutoDisableCandidateRequiresStrictCodexUsageLimit(t *testing.T) {
 	}
 }
 
+func TestQuotaAutoDisableCandidateAcceptsXAIIncludedFreeUsageExhausted(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	event := usage.Event{
+		EventHash:        "evt-xai-free-exhausted",
+		Failed:           true,
+		FailStatusCode:   http.StatusTooManyRequests,
+		FailBody:         `{"code":"subscription:free-usage-exhausted","error":"You've used all the included free usage for model grok-4.5-build-free for now. Usage resets over a rolling 24-hour window — tokens (actual/limit): 2033137/2000000."}`,
+		AuthFileSnapshot: "xai-auth.json",
+		AuthIndex:        "auth-xai-1",
+		AccountSnapshot:  "[邮箱]",
+		Provider:         "xai",
+	}
+
+	candidate, ok := quotaAutoDisableCandidateFromEvent(event, "http://cpa", "key", now)
+	if !ok {
+		t.Fatal("xAI free-usage-exhausted candidate not detected")
+	}
+	if candidate.Provider != "xai" {
+		t.Fatalf("provider = %q, want xai", candidate.Provider)
+	}
+	if candidate.FileName != "xai-auth.json" || candidate.AuthIndex != "auth-xai-1" {
+		t.Fatalf("candidate identity = %#v", candidate)
+	}
+	if got, want := candidate.ResetAt, now.Add(24*time.Hour); !got.Equal(want) {
+		t.Fatalf("reset time = %s, want %s", got, want)
+	}
+}
+
+func TestQuotaAutoDisableCandidateAcceptsXAIIncludedFreeUsageExhaustedAliasesAndNestedCode(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	for _, provider := range []string{"xai", "x-ai", "grok"} {
+		t.Run(provider, func(t *testing.T) {
+			event := usage.Event{
+				EventHash:        "evt-xai-nested-" + provider,
+				Failed:           true,
+				FailStatusCode:   http.StatusTooManyRequests,
+				FailBody:         `{"error":{"code":"subscription:free-usage-exhausted","message":"rolling 24-hour window"}}`,
+				AuthFileSnapshot: "xai-auth.json",
+				AuthIndex:        "auth-xai-1",
+				Provider:         provider,
+			}
+			candidate, ok := quotaAutoDisableCandidateFromEvent(event, "http://cpa", "key", now)
+			if !ok {
+				t.Fatal("nested xAI free-usage-exhausted candidate not detected")
+			}
+			if candidate.Provider != "xai" {
+				t.Fatalf("provider = %q, want normalized xai", candidate.Provider)
+			}
+		})
+	}
+}
+
+func TestQuotaAutoDisableCandidateRejectsUnrelatedXAIErrors(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	base := usage.Event{
+		EventHash:        "evt-xai-error",
+		Failed:           true,
+		AuthFileSnapshot: "xai-auth.json",
+		AuthIndex:        "auth-xai-1",
+		Provider:         "xai",
+	}
+
+	cases := []struct {
+		name string
+		body string
+		code int
+	}{
+		{name: "regional permission denied", body: `{"code":"permission-denied","error":"The model grok-4.5 is not available in your region."}`, code: http.StatusForbidden},
+		{name: "bad credentials", body: `{"code":"unauthenticated:bad-credentials","error":"The OAuth2 access token could not be validated."}`, code: http.StatusForbidden},
+		{name: "generic rate limit", body: `{"code":"rate-limited","error":"try again later"}`, code: http.StatusTooManyRequests},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			event := base
+			event.FailStatusCode = tc.code
+			event.FailBody = tc.body
+			if _, ok := quotaAutoDisableCandidateFromEvent(event, "http://cpa", "key", now); ok {
+				t.Fatal("unrelated xAI error should not create quota cooldown")
+			}
+		})
+	}
+}
+
 func TestQuotaAutoDisableCandidateUsesResponseHeaderReset(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	event := usage.Event{
@@ -300,6 +384,143 @@ func TestRateLimitAutoDisableWorkerRecoversDueCooldownFromManagerRuntimeConfigAf
 	}
 	if len(active) != 0 {
 		t.Fatalf("active cooldowns = %#v, want recovered", active)
+	}
+}
+
+func TestRateLimitAutoDisableWorkerXAIEventDisablesAndRecoversEndToEnd(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	disabled := false
+	patches := []bool{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer test-management-key" {
+			http.Error(w, "missing auth", http.StatusUnauthorized)
+			return
+		}
+		switch {
+		case r.URL.Path == "/v0/management/auth-files" && r.Method == http.MethodGet:
+			_ = json.NewEncoder(w).Encode([]map[string]any{{"name": "xai-auth.json", "authIndex": "auth-xai-1", "disabled": disabled}})
+		case r.URL.Path == "/v0/management/auth-files/status" && r.Method == http.MethodPatch:
+			var item struct {
+				Disabled bool `json:"disabled"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&item); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			disabled = item.Disabled
+			patches = append(patches, item.Disabled)
+			w.WriteHeader(http.StatusOK)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	now := time.Now()
+	event := usage.Event{
+		EventHash:        "evt-xai-e2e",
+		Failed:           true,
+		FailStatusCode:   http.StatusTooManyRequests,
+		FailBody:         `{"code":"subscription:free-usage-exhausted","error":"rolling 24-hour window"}`,
+		AuthFileSnapshot: "xai-auth.json",
+		AuthIndex:        "auth-xai-1",
+		Provider:         "xai",
+	}
+	candidate, ok := quotaAutoDisableCandidateFromEvent(event, server.URL, "test-management-key", now)
+	if !ok {
+		t.Fatal("xAI candidate not detected")
+	}
+
+	ctx := context.Background()
+	worker := NewRateLimitAutoDisableWorker(st, collectorpkg.RuntimeConfig{CPAUpstreamURL: server.URL, ManagementKey: "test-management-key"})
+	worker.handleCandidate(ctx, candidate)
+	if !disabled || len(patches) != 1 || !patches[0] {
+		t.Fatalf("disable state=%v patches=%#v", disabled, patches)
+	}
+	active, err := st.QuotaCooldowns.ListActive(ctx)
+	if err != nil {
+		t.Fatalf("list active cooldowns: %v", err)
+	}
+	if len(active) != 1 || active[0].Owner != model.QuotaCooldownOwnerXAIFreeUsage || active[0].Provider != "xai" {
+		t.Fatalf("xAI cooldown = %#v", active)
+	}
+
+	worker.enableDue(ctx, now.Add(24*time.Hour+time.Second))
+	if disabled || len(patches) != 2 || patches[1] {
+		t.Fatalf("recovery state=%v patches=%#v", disabled, patches)
+	}
+}
+
+func TestRateLimitAutoDisableWorkerRecoversXAICooldownWithoutTouchingManualDisable(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	type authState struct {
+		disabled bool
+		patches  int
+	}
+	states := map[string]*authState{
+		"xai-owned.json":  {disabled: true},
+		"xai-manual.json": {disabled: true},
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer test-management-key" {
+			http.Error(w, "missing auth", http.StatusUnauthorized)
+			return
+		}
+		switch {
+		case r.URL.Path == "/v0/management/auth-files" && r.Method == http.MethodGet:
+			files := []map[string]any{}
+			for name, state := range states {
+				files = append(files, map[string]any{"name": name, "authIndex": name, "disabled": state.disabled})
+			}
+			_ = json.NewEncoder(w).Encode(files)
+		case r.URL.Path == "/v0/management/auth-files/status" && r.Method == http.MethodPatch:
+			var item struct {
+				Name     string `json:"name"`
+				Disabled bool   `json:"disabled"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&item); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			state := states[item.Name]
+			state.disabled = item.Disabled
+			state.patches++
+			w.WriteHeader(http.StatusOK)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	now := time.Now()
+	for _, cooldown := range []store.QuotaCooldownUpsert{
+		{AuthFileName: "xai-owned.json", AuthIndex: "xai-owned.json", Provider: "xai", RecoverAtMS: now.Add(-time.Minute).UnixMilli(), Owner: model.QuotaCooldownOwnerXAIFreeUsage, EventHash: "owned", PreDisabledState: false, DisabledAtMS: now.Add(-25 * time.Hour).UnixMilli()},
+		{AuthFileName: "xai-manual.json", AuthIndex: "xai-manual.json", Provider: "xai", RecoverAtMS: now.Add(-time.Minute).UnixMilli(), Owner: model.QuotaCooldownOwnerXAIFreeUsage, EventHash: "manual", PreDisabledState: true, DisabledAtMS: now.Add(-25 * time.Hour).UnixMilli()},
+	} {
+		if _, err := st.UpsertQuotaCooldown(ctx, cooldown); err != nil {
+			t.Fatalf("upsert cooldown: %v", err)
+		}
+	}
+
+	worker := NewRateLimitAutoDisableWorker(st, collectorpkg.RuntimeConfig{CPAUpstreamURL: server.URL, ManagementKey: "test-management-key"})
+	worker.enableDue(ctx, now)
+
+	if states["xai-owned.json"].disabled || states["xai-owned.json"].patches != 1 {
+		t.Fatalf("CPAMP-owned state = %#v, want enabled once", states["xai-owned.json"])
+	}
+	if !states["xai-manual.json"].disabled || states["xai-manual.json"].patches != 0 {
+		t.Fatalf("manual state = %#v, want untouched disabled", states["xai-manual.json"])
 	}
 }
 

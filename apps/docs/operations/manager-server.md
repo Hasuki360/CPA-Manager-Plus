@@ -196,7 +196,7 @@ Manager Server 管理：
 | `USAGE_DASHBOARD_HOURLY_ROLLUP_ENABLED` | `true` | 启用 Dashboard 小时汇总 worker 和 rollup 查询；排查 SQLite 写竞争或汇总异常时可临时设为 `false`，Dashboard 会回退 raw events。 |
 | `USAGE_CORS_ORIGINS` | `*` | 兼容接口 CORS origin。 |
 | `USAGE_RESP_TLS_SKIP_VERIFY` | `false` | RESP 跳过 TLS 校验。 |
-| `USAGE_QUOTA_COOLDOWN_ENABLED` | `false` | 启用 Codex usage-limit cooldown worker。 |
+| `USAGE_QUOTA_COOLDOWN_ENABLED` | `false` | 启用多供应商额度冷却 worker，严格处理 Codex usage-limit 和 xAI free-usage-exhausted 信号。 |
 | `USAGE_ACCOUNT_ACTIONS_ENABLED` | `false` | 启用账号处理队列，用于记录需要人工处理的认证问题。 |
 | `USAGE_ACCOUNT_ACTIONS_AUTO_DISABLE` | `false` | 启用认证问题自动禁用；只有账号处理队列启用时才会生效。 |
 | `PANEL_PATH` | 空 | 使用自定义 `management.html`。 |

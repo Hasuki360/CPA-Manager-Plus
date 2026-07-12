@@ -1,7 +1,8 @@
 package model
 
 const (
-	QuotaCooldownOwnerUsage429 = "cpamp_usage_429"
+	QuotaCooldownOwnerUsage429     = "cpamp_usage_429"
+	QuotaCooldownOwnerXAIFreeUsage = "cpamp_xai_free_usage"
 
 	QuotaCooldownStatusActive    = "active"
 	QuotaCooldownStatusRecovered = "recovered"
