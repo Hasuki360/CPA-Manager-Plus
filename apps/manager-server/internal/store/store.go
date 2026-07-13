@@ -307,6 +307,14 @@ func (s *Store) DashboardHourlyRollupRows(ctx context.Context, fromMS, toMS int6
 	return s.UsageRollups.DashboardHourlyRows(ctx, fromMS, toMS)
 }
 
+func (s *Store) DashboardHourlyRollupModelRows(ctx context.Context, fromMS, toMS int64) ([]DashboardHourlyRollupRow, error) {
+	return s.UsageRollups.DashboardHourlyModelRows(ctx, fromMS, toMS)
+}
+
+func (s *Store) DashboardDailyRollupRows(ctx context.Context, fromMS, toMS int64) ([]DashboardHourlyRollupRow, error) {
+	return s.UsageRollups.DashboardDailyRows(ctx, fromMS, toMS)
+}
+
 func AccountHistoryKey(accountSnapshot, authLabelSnapshot, source, authIndex string) string {
 	return usagerollup.AccountKey(accountSnapshot, authLabelSnapshot, source, authIndex)
 }

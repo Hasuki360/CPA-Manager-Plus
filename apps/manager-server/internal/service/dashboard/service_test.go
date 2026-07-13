@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"context"
+	"errors"
 	"math"
 	"path/filepath"
 	"reflect"
@@ -11,6 +12,20 @@ import (
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/store"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usage"
 )
+
+func TestSummaryReturnsContextCancellation(t *testing.T) {
+	db := newDashboardTestStore(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := New(db).Summary(ctx, SummaryParams{
+		TodayStartMS: 1_778_000_000_000,
+		NowMS:        1_778_000_060_000,
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("summary error = %v, want context canceled", err)
+	}
+}
 
 func TestSummaryEmptyStore(t *testing.T) {
 	db := newDashboardTestStore(t)
@@ -343,17 +358,17 @@ func TestSummaryPricesPriorityAndDefaultServiceTiersSeparately(t *testing.T) {
 		t.Fatalf("summary: %v", err)
 	}
 
-	if math.Abs(resp.Today.TotalCost-7.5) > 0.000001 {
-		t.Fatalf("today cost = %v, want 7.5", resp.Today.TotalCost)
+	if math.Abs(resp.Today.TotalCost-10) > 0.000001 {
+		t.Fatalf("today cost = %v, want 10", resp.Today.TotalCost)
 	}
 	if len(resp.TopModelsToday) != 1 || resp.TopModelsToday[0].Calls != 3 ||
-		math.Abs(resp.TopModelsToday[0].Cost-7.5) > 0.000001 {
+		math.Abs(resp.TopModelsToday[0].Cost-10) > 0.000001 {
 		t.Fatalf("top models = %#v", resp.TopModelsToday)
 	}
-	if len(resp.ModelCostRank) != 1 || math.Abs(resp.ModelCostRank[0].Cost-7.5) > 0.000001 {
+	if len(resp.ModelCostRank) != 1 || math.Abs(resp.ModelCostRank[0].Cost-10) > 0.000001 {
 		t.Fatalf("model cost rank = %#v", resp.ModelCostRank)
 	}
-	if len(resp.ChannelHealth) != 1 || math.Abs(resp.ChannelHealth[0].Cost-7.5) > 0.000001 {
+	if len(resp.ChannelHealth) != 1 || math.Abs(resp.ChannelHealth[0].Cost-10) > 0.000001 {
 		t.Fatalf("channel health = %#v", resp.ChannelHealth)
 	}
 	if resp.ChannelHealth[0].AverageLatencyMS == nil ||
@@ -494,19 +509,6 @@ func TestSummaryDashboardHourlyRollupCanBeDisabled(t *testing.T) {
 	}
 	if resp.Today.TotalCalls != 1 || resp.Today.TotalTokens != 5 {
 		t.Fatalf("raw summary = %#v", resp.Today)
-	}
-}
-
-func TestDashboardRollupFallbackLogIsRateLimited(t *testing.T) {
-	service := New(newDashboardTestStore(t))
-	service.logRollupFallback("first")
-	first := service.lastRollupFallbackLogMS.Load()
-	if first <= 0 {
-		t.Fatalf("first log timestamp = %d", first)
-	}
-	service.logRollupFallback("second")
-	if got := service.lastRollupFallbackLogMS.Load(); got != first {
-		t.Fatalf("fallback log was not rate limited: first=%d got=%d", first, got)
 	}
 }
 

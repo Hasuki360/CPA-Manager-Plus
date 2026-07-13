@@ -2,6 +2,7 @@ package model
 
 const (
 	QuotaCooldownOwnerUsage429        = "cpamp_usage_429"
+	QuotaCooldownOwnerXAIFreeUsage     = "cpamp_xai_free_usage"
 	QuotaCooldownOwnerHTTP500Provider = "cpamp_http500_provider"
 
 	QuotaCooldownStatusActive    = "active"

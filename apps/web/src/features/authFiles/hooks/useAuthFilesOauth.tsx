@@ -343,7 +343,10 @@ export function useAuthFilesOauth(options: UseAuthFilesOauthOptions): UseAuthFil
         const mAlias = (m.alias ?? '').trim().toLowerCase();
         if (mName === nameKey && mAlias === aliasKey) {
           changed = true;
-          return fork ? { ...m, fork: true } : { name: m.name, alias: m.alias };
+          if (fork) return { ...m, fork: true };
+          const next = { ...m };
+          delete next.fork;
+          return next;
         }
         return m;
       });
@@ -501,4 +504,3 @@ export function useAuthFilesOauth(options: UseAuthFilesOauthOptions): UseAuthFil
     handleDeleteAlias
   };
 }
-

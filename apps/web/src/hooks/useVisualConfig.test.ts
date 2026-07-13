@@ -324,6 +324,28 @@ describe('useVisualConfig', () => {
     harness.unmount();
   });
 
+  it('applies only dirty visual fields to the latest server YAML', () => {
+    const harness = mountUseVisualConfig();
+    const originalYaml = ['debug: false', 'proxy-url: http://old-proxy.example', ''].join('\n');
+
+    act(() => {
+      expect(harness.getCurrent().loadVisualValuesFromYaml(originalYaml).ok).toBe(true);
+      harness.getCurrent().setVisualValues({ proxyUrl: 'http://localhost:8080' });
+    });
+
+    const latestYaml = ['debug: true', 'proxy-url: http://old-proxy.example', ''].join('\n');
+    const parsed = parseYaml(harness.getCurrent().applyVisualChangesToYaml(latestYaml)) as Record<
+      string,
+      unknown
+    >;
+
+    expect(parsed).toEqual({
+      debug: true,
+      'proxy-url': 'http://localhost:8080',
+    });
+    harness.unmount();
+  });
+
   it('uses CPA defaults for absent quota and WebSocket auth fields', () => {
     const harness = mountUseVisualConfig();
     const yaml = ['host: 127.0.0.1', ''].join('\n');

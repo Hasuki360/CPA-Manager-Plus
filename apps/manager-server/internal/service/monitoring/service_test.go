@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"testing"
 	"time"
@@ -287,10 +288,116 @@ func TestAnalyticsSummaryComparisonReturnsPreviousPeriod(t *testing.T) {
 	}
 }
 
+func TestAnalyticsCompactSummaryPreservesCoreAndSkipsFullMetrics(t *testing.T) {
+	db := newMonitoringTestStore(t)
+	ctx := context.Background()
+	if err := db.SaveModelPrices(ctx, map[string]store.ModelPrice{
+		"gpt-a":    {Prompt: 1, Completion: 2, Cache: 0.5},
+		"gpt-zero": {Prompt: 1, Completion: 2, Cache: 0.5},
+	}); err != nil {
+		t.Fatalf("save model prices: %v", err)
+	}
+	fromMS := int64(1_778_000_000_000)
+	toMS := fromMS + 48*60*60*1000
+	prevFromMS := fromMS - (toMS - fromMS)
+	latency100 := int64(100)
+	latency300 := int64(300)
+	first := monitoringEvent("compact-first", fromMS+1_000, "gpt-a", "auth-1", "src-a", false, 100, 50, 0, 0, 150, &latency100)
+	first.TTFTMS = &latency100
+	first.CacheReadTokens = 20
+	first.CacheCreationTokens = 5
+	second := monitoringEvent("compact-second", toMS-60_000, "gpt-zero", "auth-2", "src-b", false, 0, 0, 0, 0, 0, &latency300)
+	second.TTFTMS = &latency300
+	previous := monitoringEvent("compact-previous", prevFromMS+1_000, "gpt-a", "auth-1", "src-a", false, 200, 100, 10, 0, 310, &latency300)
+	previous.TTFTMS = &latency300
+	if _, err := db.InsertEvents(ctx, []usage.Event{first, second, previous}); err != nil {
+		t.Fatalf("insert events: %v", err)
+	}
+
+	service := New(db, false)
+	request := func(profile string, percentiles bool, taskBuckets bool) Response {
+		t.Helper()
+		resp, err := service.Analytics(ctx, Request{
+			FromMS: fromMS,
+			ToMS:   toMS,
+			NowMS:  toMS,
+			Include: Include{
+				Summary:            true,
+				SummaryProfile:     profile,
+				SummaryPercentiles: percentiles,
+				SummaryComparison:  true,
+				TaskBuckets:        taskBuckets,
+			},
+		})
+		if err != nil {
+			t.Fatalf("analytics profile %q: %v", profile, err)
+		}
+		return resp
+	}
+
+	full := request("", false, false)
+	compact := request("compact", true, false)
+	compactWithoutPercentiles := request("compact", false, false)
+	unknown := request("future-profile", false, false)
+	if full.Summary == nil || compact.Summary == nil || unknown.Summary == nil {
+		t.Fatalf("missing summary: full=%#v compact=%#v unknown=%#v", full.Summary, compact.Summary, unknown.Summary)
+	}
+	coreSummary := func(summary *Summary) Summary {
+		core := *summary
+		core.RPM30M = 0
+		core.TPM30M = 0
+		core.AvgDailyRequests = 0
+		core.AvgDailyTokens = 0
+		core.ApproxTasks = 0
+		core.ApproxTaskFailures = 0
+		core.ApproxTaskSuccessRate = 0
+		core.ZeroTokenModels = nil
+		return core
+	}
+	if !reflect.DeepEqual(coreSummary(full.Summary), coreSummary(compact.Summary)) {
+		t.Fatalf("compact core mismatch: full=%#v compact=%#v", full.Summary, compact.Summary)
+	}
+	if full.Summary.TotalCost <= 0 || full.Summary.AverageCostPerCall <= 0 || full.Summary.AverageLatencyMS == nil || full.Summary.CacheHitRate <= 0 {
+		t.Fatalf("full core fixture is not meaningful: %#v", full.Summary)
+	}
+	if full.SummaryComparison == nil || compact.SummaryComparison == nil {
+		t.Fatalf("missing comparison: full=%#v compact=%#v", full.SummaryComparison, compact.SummaryComparison)
+	}
+	if !reflect.DeepEqual(full.SummaryComparison, compact.SummaryComparison) {
+		t.Fatalf("compact comparison mismatch: full=%#v compact=%#v", full.SummaryComparison, compact.SummaryComparison)
+	}
+	if full.SummaryComparison.TotalCost <= 0 {
+		t.Fatalf("comparison fixture has no cost: %#v", full.SummaryComparison)
+	}
+	if full.Summary.RPM30M <= 0 || full.Summary.AvgDailyRequests <= 0 || full.Summary.ApproxTasks <= 0 || len(full.Summary.ZeroTokenModels) != 1 {
+		t.Fatalf("full summary metrics = %#v", full.Summary)
+	}
+	if compact.Summary.RPM30M != 0 || compact.Summary.TPM30M != 0 || compact.Summary.AvgDailyRequests != 0 ||
+		compact.Summary.AvgDailyTokens != 0 || compact.Summary.ApproxTasks != 0 ||
+		compact.Summary.ApproxTaskFailures != 0 || compact.Summary.ApproxTaskSuccessRate != 0 ||
+		compact.Summary.ZeroTokenModels != nil {
+		t.Fatalf("compact full-only metrics = %#v", compact.Summary)
+	}
+	if !reflect.DeepEqual(unknown.Summary, full.Summary) {
+		t.Fatalf("unknown profile did not preserve full behavior: unknown=%#v full=%#v", unknown.Summary, full.Summary)
+	}
+	if compactWithoutPercentiles.Summary == nil || compactWithoutPercentiles.Summary.P95LatencyMS != nil || compactWithoutPercentiles.Summary.P95TTFTMS != nil {
+		t.Fatalf("compact summary unexpectedly computed percentiles: %#v", compactWithoutPercentiles.Summary)
+	}
+
+	compactWithTasks := request("compact", false, true)
+	if len(compactWithTasks.TaskBuckets) == 0 {
+		t.Fatal("compact summary dropped explicitly requested task buckets")
+	}
+	if compactWithTasks.Summary == nil || compactWithTasks.Summary.ApproxTasks != 0 {
+		t.Fatalf("compact summary leaked task diagnostics: %#v", compactWithTasks.Summary)
+	}
+}
+
 func TestCacheHitRateMatchesWebClient(t *testing.T) {
-	// Anthropic-style: InputTokens excludes cache, so denominator = input + cacheRead + cacheCreation.
+	// Repository aggregates expose normalized total input for Anthropic-style usage.
 	anthropic := cacheHitRate(TimelinePoint{
-		InputTokens:         100,
+		InputTokens:         450,
 		CacheReadTokens:     300,
 		CacheCreationTokens: 50,
 	})
@@ -311,6 +418,65 @@ func TestCacheHitRateMatchesWebClient(t *testing.T) {
 	}
 	if r := cacheHitRate(TimelinePoint{InputTokens: 10, CachedTokens: 1000}); r != 1 {
 		t.Fatalf("clamped cache hit rate = %v, want 1", r)
+	}
+
+	gpt56 := cacheHitRateForModelStats([]store.ModelStat{{
+		Model:               "alias-fast",
+		BillingModel:        "openai/gpt-5.6-sol",
+		InputTokens:         152_600,
+		CacheReadTokens:     151_000,
+		CacheCreationTokens: 1_000,
+	}})
+	if math.Abs(gpt56-151_000.0/152_600.0) > 1e-9 {
+		t.Fatalf("gpt-5.6 cache hit rate = %v, want %v", gpt56, 151_000.0/152_600.0)
+	}
+	timeline := buildTimeline([]store.TimelinePoint{{
+		BucketMS:            1_000,
+		Model:               "alias-fast",
+		BillingModel:        "openai/gpt-5.6-sol",
+		Calls:               1,
+		Success:             1,
+		InputTokens:         152_600,
+		CacheReadTokens:     151_000,
+		CacheCreationTokens: 1_000,
+	}}, nil, "hour", time.UTC, nil)
+	if len(timeline) != 1 || math.Abs(timeline[0].CacheHitRate-151_000.0/152_600.0) > 1e-9 {
+		t.Fatalf("gpt-5.6 timeline cache hit rate = %#v", timeline)
+	}
+}
+
+func TestModelCacheHitRateUsesBillingModelBeforeAliasAggregation(t *testing.T) {
+	stats := []store.ModelStat{
+		{
+			Model:           "internal-fast",
+			BillingModel:    "openai/gpt-5.6-sol",
+			Calls:           1,
+			SuccessCalls:    1,
+			InputTokens:     100,
+			CacheReadTokens: 90,
+		},
+		{
+			Model:               "internal-fast",
+			BillingModel:        "claude-sonnet-4",
+			Calls:               1,
+			SuccessCalls:        1,
+			InputTokens:         200,
+			CacheReadTokens:     50,
+			CacheCreationTokens: 50,
+		},
+	}
+
+	rows := buildModelStats(stats, nil)
+	if len(rows) != 1 || rows[0].CacheHitTokens != 140 || rows[0].CacheHitInputTokens != 300 ||
+		math.Abs(rows[0].CacheHitRate-140.0/300.0) > 1e-9 {
+		t.Fatalf("model cache hit metrics = %#v", rows)
+	}
+
+	models := map[string]*AccountModelStatRow{}
+	addAccountModelStat(models, "internal-fast", "openai/gpt-5.6-sol", 1, 1, 0, 100, 0, 0, 90, 0, 100, 0, 1)
+	if model := models["internal-fast"]; model == nil || model.CacheHitInputTokens != 100 ||
+		math.Abs(model.CacheHitRate-0.9) > 1e-9 {
+		t.Fatalf("account model cache hit metrics = %#v", model)
 	}
 }
 
@@ -629,8 +795,8 @@ func TestAnalyticsPricesPriorityAndDefaultServiceTiersSeparately(t *testing.T) {
 
 	assertCost := func(name string, got float64) {
 		t.Helper()
-		if math.Abs(got-7.5) > 0.000001 {
-			t.Fatalf("%s cost = %v, want 7.5", name, got)
+		if math.Abs(got-10) > 0.000001 {
+			t.Fatalf("%s cost = %v, want 10", name, got)
 		}
 	}
 	if resp.Summary == nil {
@@ -773,6 +939,19 @@ func TestAnalyticsAppliesFilters(t *testing.T) {
 	}
 	if resp.Events == nil || len(resp.Events.Items) != 1 || resp.Events.Items[0].EventHash != "filter-c" {
 		t.Fatalf("api key hash search events = %#v", resp.Events)
+	}
+}
+
+func TestBuildFilterIncludesCredentialIDs(t *testing.T) {
+	filter := buildFilter(Request{
+		FromMS: 100,
+		ToMS:   200,
+		Filters: Filters{
+			CredentialIDs: []string{"credential-a"},
+		},
+	})
+	if !reflect.DeepEqual(filter.CredentialIDs, []string{"credential-a"}) {
+		t.Fatalf("credential ids = %#v", filter.CredentialIDs)
 	}
 }
 
@@ -1541,7 +1720,7 @@ func TestAccountHistoryReturnsRollupTotalsAndCost(t *testing.T) {
 	if history.SuccessRate == nil || math.Abs(*history.SuccessRate-0.5) > 0.000001 {
 		t.Fatalf("success rate = %#v", history.SuccessRate)
 	}
-	if math.Abs(history.TotalCost-1.985) > 0.000001 {
+	if math.Abs(history.TotalCost-2.055) > 0.000001 {
 		t.Fatalf("total cost = %v", history.TotalCost)
 	}
 	if history.FirstSeenMS == nil || *history.FirstSeenMS != baseMS+1_000 || history.LastSeenMS == nil || *history.LastSeenMS != baseMS+2_000 {
@@ -1582,6 +1761,253 @@ func TestAccountHistoryEmptyTargetDoesNotMatchAnonymousBucket(t *testing.T) {
 	}
 	if resp.Items[0].Matched || resp.Items[0].AccountKey != "" || resp.Items[0].SyncStatus != "empty" {
 		t.Fatalf("empty target matched anonymous bucket: %#v", resp.Items[0])
+	}
+}
+
+func TestAnalyticsHourlyRollupMatchesRawCoreComparisonAndTimeline(t *testing.T) {
+	db := newMonitoringTestStore(t)
+	ctx := context.Background()
+	windowMS := int64(48 * time.Hour / time.Millisecond)
+	fromMS := int64(1_800_000_000_000)
+	toMS := fromMS + windowMS
+	latency100 := int64(100)
+	latency400 := int64(400)
+	ttft50 := int64(50)
+
+	if err := db.SaveModelPrices(ctx, map[string]store.ModelPrice{
+		"resolved-a": {Prompt: 2, Completion: 4},
+		"model-b":    {Prompt: 1, Completion: 3},
+	}); err != nil {
+		t.Fatalf("save prices: %v", err)
+	}
+	events := []usage.Event{
+		monitoringEvent("rollup-prev-a", fromMS-windowMS+10*time.Minute.Milliseconds(), "alias-a", "auth-a", "source-a", false, 1_000_000, 100, 0, 0, 1_000_100, &latency100),
+		monitoringEvent("rollup-prev-b", fromMS-time.Hour.Milliseconds(), "model-b", "auth-b", "source-b", true, 200, 300, 0, 0, 500, &latency400),
+		monitoringEvent("rollup-current-a", fromMS+10*time.Minute.Milliseconds(), "alias-a", "auth-a", "source-a", false, 500_000, 250_000, 20, 30, 750_020, &latency100),
+		monitoringEvent("rollup-current-b", fromMS+25*time.Hour.Milliseconds(), "model-b", "auth-b", "source-b", true, 400, 500, 0, 0, 900, &latency400),
+		monitoringEvent("rollup-current-zero", toMS-10*time.Minute.Milliseconds(), "model-b", "auth-b", "source-b", false, 0, 0, 0, 0, 0, nil),
+	}
+	for index := range events {
+		events[index].RequestID = fmt.Sprintf("rollup-request-%d", index)
+		events[index].TTFTMS = &ttft50
+	}
+	events[0].ResolvedModel = "resolved-a"
+	events[2].ResolvedModel = "resolved-a"
+	if _, err := db.InsertEvents(ctx, events); err != nil {
+		t.Fatalf("insert events: %v", err)
+	}
+
+	req := Request{
+		FromMS:   fromMS,
+		ToMS:     toMS,
+		NowMS:    toMS,
+		TimeZone: "UTC",
+		Include: Include{
+			Summary:           true,
+			SummaryComparison: true,
+			Timeline:          true,
+			ModelStats:        true,
+			AnomalyPoints:     true,
+			Granularity:       "day",
+		},
+	}
+	raw, err := New(db, false).Analytics(ctx, req)
+	if err != nil {
+		t.Fatalf("raw analytics: %v", err)
+	}
+	catchUpMonitoringHourlyRollup(t, ctx, db)
+	rolled, err := New(db, true).Analytics(ctx, req)
+	if err != nil {
+		t.Fatalf("rollup analytics: %v", err)
+	}
+	raw.GeneratedAtMS = rolled.GeneratedAtMS
+	if !reflect.DeepEqual(rolled, raw) {
+		t.Fatalf("analytics mismatch\nrollup=%#v\nraw=%#v", rolled, raw)
+	}
+	if err := db.SaveModelPrices(ctx, map[string]store.ModelPrice{
+		"resolved-a": {Prompt: 4, Completion: 8},
+		"model-b":    {Prompt: 2, Completion: 6},
+	}); err != nil {
+		t.Fatalf("update prices: %v", err)
+	}
+	repricedRaw, err := New(db, false).Analytics(ctx, req)
+	if err != nil {
+		t.Fatalf("repriced raw analytics: %v", err)
+	}
+	repricedRollup, err := New(db, true).Analytics(ctx, req)
+	if err != nil {
+		t.Fatalf("repriced rollup analytics: %v", err)
+	}
+	repricedRaw.GeneratedAtMS = repricedRollup.GeneratedAtMS
+	if !reflect.DeepEqual(repricedRollup, repricedRaw) {
+		t.Fatalf("repriced analytics mismatch\nrollup=%#v\nraw=%#v", repricedRollup, repricedRaw)
+	}
+	if repricedRollup.Summary == nil || rolled.Summary == nil || repricedRollup.Summary.TotalCost != rolled.Summary.TotalCost*2 {
+		t.Fatalf("repriced summary = %#v, original = %#v", repricedRollup.Summary, rolled.Summary)
+	}
+}
+
+func TestAnalyticsHourlyRollupTimelineMatchesRawAcrossDST(t *testing.T) {
+	db := newMonitoringTestStore(t)
+	ctx := context.Background()
+	fromMS := time.Date(2026, time.March, 7, 0, 0, 0, 0, time.UTC).UnixMilli()
+	toMS := time.Date(2026, time.March, 10, 0, 0, 0, 0, time.UTC).UnixMilli()
+	latency := int64(250)
+	events := make([]usage.Event, 0, 18)
+	for index := 0; index < 18; index++ {
+		timestampMS := fromMS + int64(index)*4*time.Hour.Milliseconds() + 10*time.Minute.Milliseconds()
+		events = append(events, monitoringEvent(
+			fmt.Sprintf("dst-%02d", index),
+			timestampMS,
+			fmt.Sprintf("model-%d", index%2),
+			"auth-a",
+			"source-a",
+			index%5 == 0,
+			int64(100+index),
+			int64(50+index),
+			0,
+			0,
+			int64(150+2*index),
+			&latency,
+		))
+	}
+	if _, err := db.InsertEvents(ctx, events); err != nil {
+		t.Fatalf("insert events: %v", err)
+	}
+	catchUpMonitoringHourlyRollup(t, ctx, db)
+
+	for _, timeZone := range []string{"America/New_York", "Asia/Shanghai", "Asia/Kolkata"} {
+		for _, granularity := range []string{"hour", "day"} {
+			t.Run(timeZone+"/"+granularity, func(t *testing.T) {
+				req := Request{
+					FromMS:   fromMS,
+					ToMS:     toMS,
+					NowMS:    toMS,
+					TimeZone: timeZone,
+					Include: Include{
+						Timeline:    true,
+						Granularity: granularity,
+					},
+				}
+				raw, err := New(db, false).Analytics(ctx, req)
+				if err != nil {
+					t.Fatalf("raw analytics: %v", err)
+				}
+				rolled, err := New(db, true).Analytics(ctx, req)
+				if err != nil {
+					t.Fatalf("rollup analytics: %v", err)
+				}
+				if !reflect.DeepEqual(rolled.Timeline, raw.Timeline) {
+					t.Fatalf("timeline mismatch\nrollup=%#v\nraw=%#v", rolled.Timeline, raw.Timeline)
+				}
+			})
+		}
+	}
+}
+
+func TestAnalyticsHourlyRollupTimelineMatchesRawAcrossDSTFallBack(t *testing.T) {
+	db := newMonitoringTestStore(t)
+	ctx := context.Background()
+	fromMS := time.Date(2026, time.October, 31, 0, 0, 0, 0, time.UTC).UnixMilli()
+	toMS := time.Date(2026, time.November, 3, 0, 0, 0, 0, time.UTC).UnixMilli()
+	latency := int64(180)
+	events := make([]usage.Event, 0, 24)
+	for index := 0; index < 24; index++ {
+		timestampMS := fromMS + int64(index)*3*time.Hour.Milliseconds() + 15*time.Minute.Milliseconds()
+		events = append(events, monitoringEvent(
+			fmt.Sprintf("dst-fall-%02d", index),
+			timestampMS,
+			fmt.Sprintf("model-%d", index%3),
+			"auth-a",
+			"source-a",
+			index%7 == 0,
+			int64(90+index),
+			int64(40+index),
+			0,
+			0,
+			int64(130+2*index),
+			&latency,
+		))
+	}
+	if _, err := db.InsertEvents(ctx, events); err != nil {
+		t.Fatalf("insert events: %v", err)
+	}
+	catchUpMonitoringHourlyRollup(t, ctx, db)
+	req := Request{
+		FromMS:   fromMS,
+		ToMS:     toMS,
+		NowMS:    toMS,
+		TimeZone: "America/New_York",
+		Include: Include{
+			Timeline:    true,
+			Granularity: "hour",
+		},
+	}
+	raw, err := New(db, false).Analytics(ctx, req)
+	if err != nil {
+		t.Fatalf("raw analytics: %v", err)
+	}
+	rolled, err := New(db, true).Analytics(ctx, req)
+	if err != nil {
+		t.Fatalf("rollup analytics: %v", err)
+	}
+	if !reflect.DeepEqual(rolled.Timeline, raw.Timeline) {
+		t.Fatalf("timeline mismatch\nrollup=%#v\nraw=%#v", rolled.Timeline, raw.Timeline)
+	}
+}
+
+func TestAnalyticsHourlyRollupEligibilityIsStrict(t *testing.T) {
+	base := store.AnalyticsFilter{IncludeFailed: true}
+	if !analyticsHourlyRollupEligible(base) {
+		t.Fatal("unfiltered analytics should be rollup eligible")
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*store.AnalyticsFilter)
+	}{
+		{name: "search", mutate: func(filter *store.AnalyticsFilter) { filter.SearchQuery = "model" }},
+		{name: "search api key", mutate: func(filter *store.AnalyticsFilter) { filter.SearchAPIKeyHash = "key" }},
+		{name: "models", mutate: func(filter *store.AnalyticsFilter) { filter.Models = []string{"model-a"} }},
+		{name: "providers", mutate: func(filter *store.AnalyticsFilter) { filter.Providers = []string{"codex"} }},
+		{name: "accounts", mutate: func(filter *store.AnalyticsFilter) { filter.Accounts = []string{"account"} }},
+		{name: "credential ids", mutate: func(filter *store.AnalyticsFilter) { filter.CredentialIDs = []string{"credential"} }},
+		{name: "auth files", mutate: func(filter *store.AnalyticsFilter) { filter.AuthFiles = []string{"account.json"} }},
+		{name: "auth indices", mutate: func(filter *store.AnalyticsFilter) { filter.AuthIndices = []string{"auth-a"} }},
+		{name: "api keys", mutate: func(filter *store.AnalyticsFilter) { filter.APIKeyHashes = []string{"key"} }},
+		{name: "source hashes", mutate: func(filter *store.AnalyticsFilter) { filter.SourceHashes = []string{"source"} }},
+		{name: "projects", mutate: func(filter *store.AnalyticsFilter) { filter.ProjectIDs = []string{"project"} }},
+		{name: "request types", mutate: func(filter *store.AnalyticsFilter) { filter.RequestTypes = []string{"chat"} }},
+		{name: "header error kinds", mutate: func(filter *store.AnalyticsFilter) { filter.HeaderErrorKinds = []string{"quota"} }},
+		{name: "header error codes", mutate: func(filter *store.AnalyticsFilter) { filter.HeaderErrorCodes = []string{"429"} }},
+		{name: "header quota plans", mutate: func(filter *store.AnalyticsFilter) { filter.HeaderQuotaPlans = []string{"pro"} }},
+		{name: "header trace ids", mutate: func(filter *store.AnalyticsFilter) { filter.HeaderTraceIDs = []string{"trace"} }},
+		{name: "exclude failed", mutate: func(filter *store.AnalyticsFilter) { filter.IncludeFailed = false }},
+		{name: "failed only", mutate: func(filter *store.AnalyticsFilter) { filter.FailedOnly = true }},
+		{name: "minimum latency", mutate: func(filter *store.AnalyticsFilter) { filter.MinLatencyMS = 100 }},
+		{name: "cache status", mutate: func(filter *store.AnalyticsFilter) { filter.CacheStatus = "hit" }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			filter := base
+			test.mutate(&filter)
+			if analyticsHourlyRollupEligible(filter) {
+				t.Fatalf("filter unexpectedly eligible: %#v", filter)
+			}
+		})
+	}
+}
+
+func catchUpMonitoringHourlyRollup(t *testing.T, ctx context.Context, db *store.Store) {
+	t.Helper()
+	for {
+		result, err := db.CatchUpDashboardHourlyRollups(ctx, 100, time.Now().UnixMilli())
+		if err != nil {
+			t.Fatalf("catch up hourly rollup: %v", err)
+		}
+		if !result.Pending {
+			return
+		}
 	}
 }
 

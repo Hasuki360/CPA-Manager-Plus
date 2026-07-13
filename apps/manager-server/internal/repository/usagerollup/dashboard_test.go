@@ -73,6 +73,23 @@ func TestCatchUpDashboardHourlyAggregatesByCheckpoint(t *testing.T) {
 		t.Fatalf("priority row = %#v", rows[1])
 	}
 
+	modelRows, err := repo.DashboardHourlyModelRows(ctx, firstHour, firstHour+2*dashboardHourMS)
+	if err != nil {
+		t.Fatalf("query model projection: %v", err)
+	}
+	if len(modelRows) != 2 || modelRows[0].BucketMS != firstHour || modelRows[0].Calls != 3 || modelRows[1].Calls != 1 {
+		t.Fatalf("model projection = %#v", modelRows)
+	}
+
+	dailyRows, err := repo.DashboardDailyRows(ctx, firstHour, firstHour+2*dashboardHourMS)
+	if err != nil {
+		t.Fatalf("query daily projection: %v", err)
+	}
+	dayMS := int64(24) * dashboardHourMS
+	if len(dailyRows) != 2 || dailyRows[0].BucketMS != firstHour-firstHour%dayMS || dailyRows[0].Calls != 3 || dailyRows[1].Calls != 1 {
+		t.Fatalf("daily projection = %#v", dailyRows)
+	}
+
 	checkpoint, err := repo.Checkpoint(ctx, DashboardHourlyCheckpointName)
 	if err != nil {
 		t.Fatalf("checkpoint: %v", err)

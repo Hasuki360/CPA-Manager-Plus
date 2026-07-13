@@ -166,7 +166,7 @@ func filterQuotaCooldownEvents(events []usage.Event, settings automationsvc.Runt
 			continue
 		}
 		switch normalizedQuotaProvider(event) {
-		case "codex":
+		case "codex", "xai", "x-ai", "grok":
 			if settings.QuotaCooldownEnabled {
 				filtered = append(filtered, event)
 			}

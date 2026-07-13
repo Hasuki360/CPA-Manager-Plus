@@ -687,25 +687,38 @@ function RealtimeFailureStatus({ details, tooltipId, t, onCopy }: RealtimeFailur
 }
 
 const buildRealtimeTokenSummary = (row: MonitoringEventRow, t: TFunction, locale: string) => {
-  const parts = [
+  const primary = [
     `I ${formatRealtimeUsageNumber(row.inputTokens, locale)}`,
     `O ${formatRealtimeUsageNumber(row.outputTokens, locale)}`,
   ];
   if (row.reasoningTokens > 0) {
-    parts.push(`R ${formatRealtimeUsageNumber(row.reasoningTokens, locale)}`);
+    primary.push(`R ${formatRealtimeUsageNumber(row.reasoningTokens, locale)}`);
   }
-  parts.push(`C ${formatRealtimeUsageNumber(row.cachedTokens, locale)}`);
-  if (row.cacheCreationTokens > 0) {
-    parts.push(
-      `${shortLabel(t, 'monitoring.cache_creation_tokens_short', 'monitoring.cache_creation_tokens', 'Create')} ${formatRealtimeUsageNumber(row.cacheCreationTokens, locale)}`
-    );
+  const cache: string[] = [];
+  const cacheTitle: string[] = [];
+  if (row.cachedTokens > 0) {
+    cache.push(`C ${formatRealtimeUsageNumber(row.cachedTokens, locale)}`);
+    cacheTitle.push(`${t('monitoring.cached_tokens')}: ${formatRealtimeUsageNumber(row.cachedTokens, locale)}`);
   }
   if (row.cacheReadTokens > 0) {
-    parts.push(
-      `${shortLabel(t, 'monitoring.cache_read_tokens_short', 'monitoring.cache_read_tokens', 'Read')} ${formatRealtimeUsageNumber(row.cacheReadTokens, locale)}`
+    cache.push(`CR ${formatRealtimeUsageNumber(row.cacheReadTokens, locale)}`);
+    cacheTitle.push(
+      `${t('monitoring.cache_read_tokens')}: ${formatRealtimeUsageNumber(row.cacheReadTokens, locale)}`
     );
   }
-  return parts.join(' · ');
+  if (row.cacheCreationTokens > 0) {
+    cache.push(`CW ${formatRealtimeUsageNumber(row.cacheCreationTokens, locale)}`);
+    cacheTitle.push(
+      `${t('monitoring.cache_creation_tokens')}: ${formatRealtimeUsageNumber(row.cacheCreationTokens, locale)}`
+    );
+  }
+  return {
+    primary: primary.join(' · '),
+    cache: cache.join(' · '),
+    cacheTitle: cacheTitle.join('
+'),
+    cacheAriaLabel: cacheTitle.join(', '),
+  };
 };
 
 export function RealtimeEventsPanelActions({
@@ -1001,6 +1014,7 @@ export function RealtimeEventsPanel({
               const hasTtftMs = row.ttftMs !== null && row.ttftMs !== undefined;
               const ttftToneClass = getRealtimeDurationToneClass(row.ttftMs);
               const latencyToneClass = getRealtimeDurationToneClass(row.latencyMs);
+              const tokenSummary = buildRealtimeTokenSummary(row, t, locale);
               return (
                 <tr key={row.id} className={row.failed ? styles.logRowFailed : undefined}>
                   <td>
@@ -1145,7 +1159,17 @@ export function RealtimeEventsPanel({
                     <td>
                       <div className={styles.primaryCell}>
                         <span>{formatRealtimeUsageNumber(row.totalTokens, locale)}</span>
-                        <small>{buildRealtimeTokenSummary(row, t, locale)}</small>
+                        <small>{tokenSummary.primary}</small>
+                        {tokenSummary.cache ? (
+                          <small
+                            className={styles.realtimeCacheTokenSummary}
+                            title={tokenSummary.cacheTitle}
+                            aria-label={tokenSummary.cacheAriaLabel}
+                            tabIndex={0}
+                          >
+                            {tokenSummary.cache}
+                          </small>
+                        ) : null}
                       </div>
                     </td>
                   ) : null}

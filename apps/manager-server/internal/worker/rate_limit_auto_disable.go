@@ -29,6 +29,7 @@ const (
 	quotaAutoDisableActionTimeout = 30 * time.Second
 	quotaCooldownDueLimit         = 100
 	antigravityDefaultProjectID   = "bamboo-precept-lgxtn"
+	xaiFreeUsageCooldown          = 24 * time.Hour
 )
 
 var antigravityQuotaCheckURLs = []string{
@@ -38,9 +39,11 @@ var antigravityQuotaCheckURLs = []string{
 }
 
 // RateLimitAutoDisableWorker reacts to request-monitoring events in near real time.
-// It handles quota 429 usage_limit_reached responses that include an explicit
-// reset time. Disables are persisted with CPAMP ownership, so recovery never relies
-// solely on in-memory timers and never re-enables pre-existing/manual disables.
+// It handles strict provider quota signals with a known recovery time: Codex 429
+// usage_limit_reached responses, Antigravity quota exhaustion, xAI free-usage-exhausted
+// responses, and Hasuki HTTP 500 AI-provider cooldowns. Disables are persisted with
+// CPAMP ownership, so recovery never relies solely on in-memory timers and never
+// re-enables pre-existing/manual disables.
 type RateLimitAutoDisableWorker struct {
 	store  *store.Store
 	client *http.Client
@@ -66,6 +69,7 @@ type quotaAutoDisableCandidate struct {
 	ResetAt         time.Time
 	EventHash       string
 	Reason          string
+	Owner           string
 	HTTPStatusCode  int
 	TriggerCount    int64
 }
@@ -216,20 +220,21 @@ func (w *RateLimitAutoDisableWorker) handleCandidate(ctx context.Context, candid
 	if candidate.HTTPStatusCode == http.StatusInternalServerError {
 		log.Printf("[quota-auto-disable] HTTP 500 threshold reached for auth file %q account=%q count=%d resetAt=%s, disabling", candidate.FileName, candidate.DisplayAccount, candidate.TriggerCount, candidate.ResetAt.Format(time.RFC3339))
 	} else {
-		log.Printf("[quota-auto-disable] %s usage limit reached for auth file %q account=%q resetAt=%s, disabling", candidate.Provider, candidate.FileName, candidate.DisplayAccount, candidate.ResetAt.Format(time.RFC3339))
+		log.Printf("[quota-auto-disable] quota limit reached for auth file %q account=%q provider=%q resetAt=%s, disabling", candidate.FileName, candidate.DisplayAccount, candidate.Provider, candidate.ResetAt.Format(time.RFC3339))
 	}
 	if err := w.patchAuthFile(ctx, candidate.BaseURL, candidate.ManagementKey, candidate.FileName, resolvedAuthIndex, true); err != nil {
 		log.Printf("[quota-auto-disable] failed to disable auth file %q: %v", candidate.FileName, err)
 		return
 	}
 
+	owner := firstNonEmpty(candidate.Owner, model.QuotaCooldownOwnerUsage429)
 	_, err = w.store.UpsertQuotaCooldown(ctx, store.QuotaCooldownUpsert{
 		AuthFileName:     candidate.FileName,
 		AuthIndex:        resolvedAuthIndex,
 		AccountSnapshot:  candidate.DisplayAccount,
 		Provider:         strings.ToLower(strings.TrimSpace(candidate.Provider)),
 		RecoverAtMS:      candidate.ResetAt.UnixMilli(),
-		Owner:            model.QuotaCooldownOwnerUsage429,
+		Owner:            owner,
 		EventHash:        candidate.EventHash,
 		PreDisabledState: preDisabled,
 		DisabledAtMS:     now.UnixMilli(),
@@ -287,9 +292,10 @@ func (w *RateLimitAutoDisableWorker) extendExistingCooldown(ctx context.Context,
 		log.Printf("[quota-auto-disable] failed to check active cooldowns for auth file %q: %v", candidate.FileName, err)
 		return false
 	}
+	owner := firstNonEmpty(candidate.Owner, model.QuotaCooldownOwnerUsage429)
 	var existing store.QuotaCooldown
 	for _, item := range active {
-		if item.AuthFileName == candidate.FileName && item.Owner == model.QuotaCooldownOwnerUsage429 {
+		if item.AuthFileName == candidate.FileName && item.Owner == owner {
 			existing = item
 			break
 		}
@@ -308,7 +314,7 @@ func (w *RateLimitAutoDisableWorker) extendExistingCooldown(ctx context.Context,
 		AccountSnapshot:  firstNonEmpty(candidate.DisplayAccount, existing.AccountSnapshot),
 		Provider:         strings.ToLower(strings.TrimSpace(firstNonEmpty(candidate.Provider, existing.Provider))),
 		RecoverAtMS:      candidate.ResetAt.UnixMilli(),
-		Owner:            model.QuotaCooldownOwnerUsage429,
+		Owner:            owner,
 		EventHash:        candidate.EventHash,
 		PreDisabledState: false,
 		DisabledAtMS:     existing.DisabledAtMS,
@@ -344,7 +350,7 @@ func (w *RateLimitAutoDisableWorker) recoverCooldown(ctx context.Context, baseUR
 		w.recoverAIProviderCooldown(ctx, baseURL, managementKey, item, now)
 		return
 	}
-	if item.Owner != model.QuotaCooldownOwnerUsage429 {
+	if item.Owner != model.QuotaCooldownOwnerUsage429 && item.Owner != model.QuotaCooldownOwnerXAIFreeUsage {
 		reason := "unknown owner"
 		_ = w.store.MarkQuotaCooldownSkipped(ctx, item.ID, reason)
 		log.Printf("[quota-auto-disable] skip cooldown recovery id=%d authFile=%q reason=%s owner=%q", item.ID, item.AuthFileName, reason, item.Owner)
@@ -383,7 +389,7 @@ func (w *RateLimitAutoDisableWorker) recoverCooldown(ctx context.Context, baseUR
 		log.Printf("[quota-auto-disable] enabled auth file %q but failed to mark cooldown recovered: %v", item.AuthFileName, err)
 		return
 	}
-	log.Printf("[quota-auto-disable] enabled auth file %q after %s usage-limit reset", item.AuthFileName, item.Provider)
+	log.Printf("[quota-auto-disable] enabled auth file %q after quota cooldown", item.AuthFileName)
 }
 
 type aiProviderChannel struct {
@@ -558,7 +564,7 @@ func (w *RateLimitAutoDisableWorker) managementConfigRequest(ctx context.Context
 }
 
 func (w *RateLimitAutoDisableWorker) quotaAutoDisableCandidateFromEvent(ctx context.Context, event usage.Event, cfg collectorpkg.RuntimeConfig, baseURL string, managementKey string, now time.Time) (quotaAutoDisableCandidate, bool) {
-	provider := strings.ToLower(strings.TrimSpace(firstNonEmpty(event.Provider, event.AuthProviderSnapshot)))
+	provider := normalizeQuotaProvider(firstNonEmpty(event.Provider, event.AuthProviderSnapshot))
 	fileName := strings.TrimSpace(event.AuthFileSnapshot)
 	if event.Failed && event.FailStatusCode == http.StatusInternalServerError {
 		channel, ok := w.findAIProviderChannel(ctx, baseURL, managementKey, event)
@@ -582,8 +588,28 @@ func (w *RateLimitAutoDisableWorker) quotaAutoDisableCandidateFromEvent(ctx cont
 			ResetAt:         resetAt,
 			EventHash:       event.EventHash,
 			Reason:          event.FailSummary,
+			Owner:           model.QuotaCooldownOwnerHTTP500Provider,
 			HTTPStatusCode:  event.FailStatusCode,
 			TriggerCount:    count,
+		}, true
+	}
+	if resetAt, ok := xaiFreeUsageResetTimeFromEvent(event, now); ok {
+		if fileName == "" {
+			log.Printf("[quota-auto-disable] xAI free-usage event %q has no auth file snapshot, skip auto disable", event.EventHash)
+			return quotaAutoDisableCandidate{}, false
+		}
+		return quotaAutoDisableCandidate{
+			BaseURL:        baseURL,
+			ManagementKey:  managementKey,
+			FileName:       fileName,
+			AuthIndex:      strings.TrimSpace(event.AuthIndex),
+			DisplayAccount: firstNonEmpty(event.AccountSnapshot, event.AuthLabelSnapshot, event.Source, fileName),
+			Provider:       "xai",
+			ResetAt:        resetAt,
+			EventHash:      event.EventHash,
+			Reason:         event.FailSummary,
+			Owner:          model.QuotaCooldownOwnerXAIFreeUsage,
+			HTTPStatusCode: event.FailStatusCode,
 		}, true
 	}
 	if fileName == "" {
@@ -613,30 +639,7 @@ func (w *RateLimitAutoDisableWorker) quotaAutoDisableCandidateFromEvent(ctx cont
 		ResetAt:        resetAt,
 		EventHash:      event.EventHash,
 		Reason:         event.FailSummary,
-		HTTPStatusCode: event.FailStatusCode,
-	}, true
-}
-
-func quotaAutoDisableCandidateFromEvent(event usage.Event, baseURL string, managementKey string, now time.Time) (quotaAutoDisableCandidate, bool) {
-	provider := strings.ToLower(strings.TrimSpace(firstNonEmpty(event.Provider, event.AuthProviderSnapshot)))
-	fileName := strings.TrimSpace(event.AuthFileSnapshot)
-	if fileName == "" {
-		return quotaAutoDisableCandidate{}, false
-	}
-	resetAt, ok := quotaUsageLimitResetTimeFromEvent(event, now, provider)
-	if !ok {
-		return quotaAutoDisableCandidate{}, false
-	}
-	return quotaAutoDisableCandidate{
-		BaseURL:        baseURL,
-		ManagementKey:  managementKey,
-		FileName:       fileName,
-		AuthIndex:      strings.TrimSpace(event.AuthIndex),
-		DisplayAccount: firstNonEmpty(event.AccountSnapshot, event.AuthLabelSnapshot, event.Source, fileName),
-		Provider:       provider,
-		ResetAt:        resetAt,
-		EventHash:      event.EventHash,
-		Reason:         event.FailSummary,
+		Owner:          model.QuotaCooldownOwnerUsage429,
 		HTTPStatusCode: event.FailStatusCode,
 	}, true
 }
@@ -871,6 +874,62 @@ func floatFromAny(value any) (float64, bool) {
 		return parsed, true
 	default:
 		return 0, false
+	}
+}
+
+func xaiFreeUsageResetTimeFromEvent(event usage.Event, now time.Time) (time.Time, bool) {
+	if !event.Failed || event.FailStatusCode != http.StatusTooManyRequests {
+		return time.Time{}, false
+	}
+	provider := normalizeQuotaProvider(firstNonEmpty(event.Provider, event.AuthProviderSnapshot))
+	if provider != "xai" {
+		return time.Time{}, false
+	}
+	for _, text := range []string{event.FailBody, event.RawJSON, event.FailSummary} {
+		matched := false
+		forEachJSONValue(text, func(decoded any) bool {
+			if xaiFreeUsageCode(decoded) {
+				matched = true
+				return true
+			}
+			return false
+		})
+		if matched {
+			return now.Add(xaiFreeUsageCooldown), true
+		}
+	}
+	return time.Time{}, false
+}
+
+func xaiFreeUsageCode(value any) bool {
+	switch typed := value.(type) {
+	case map[string]any:
+		if strings.EqualFold(strings.TrimSpace(fmt.Sprint(typed["code"])), "subscription:free-usage-exhausted") {
+			return true
+		}
+		for _, child := range typed {
+			if xaiFreeUsageCode(child) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range typed {
+			if xaiFreeUsageCode(child) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func normalizeQuotaProvider(value string) string {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	normalized = strings.ReplaceAll(normalized, "_", "-")
+	switch normalized {
+	case "x-ai", "grok":
+		return "xai"
+	default:
+		return normalized
 	}
 }
 

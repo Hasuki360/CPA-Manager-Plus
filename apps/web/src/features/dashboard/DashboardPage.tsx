@@ -30,6 +30,7 @@ import { CollectorStatusCard } from './components/CollectorStatusCard';
 import { HealthAlertsCard } from './components/HealthAlertsCard';
 import { TrafficOverviewCard } from './components/TrafficOverviewCard';
 import { useDashboardUsageSummary } from './hooks/useDashboardUsageSummary';
+import { getDashboardModelCountDisplay } from './modelCountDisplay';
 import styles from './DashboardPage.module.scss';
 
 interface QuickStat {
@@ -69,6 +70,7 @@ export function DashboardPage() {
 
   const models = useModelsStore((state) => state.models);
   const modelsLoading = useModelsStore((state) => state.loading);
+  const modelsError = useModelsStore((state) => state.error);
   const fetchModelsFromStore = useModelsStore((state) => state.fetchModels);
 
   const [stats, setStats] = useState<{
@@ -383,7 +385,7 @@ export function DashboardPage() {
     },
     {
       label: t('dashboard.available_models'),
-      value: modelsLoading ? '-' : models.length,
+      value: getDashboardModelCountDisplay(models.length, modelsLoading, modelsError),
       icon: <IconSatellite size={24} />,
       path: '/system',
       loading: modelsLoading,

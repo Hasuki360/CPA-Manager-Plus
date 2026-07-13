@@ -6,14 +6,20 @@ import { Button } from '@/components/ui/Button';
 import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
 import { SelectionCheckbox } from '@/components/ui/SelectionCheckbox';
 import { AutocompleteInput } from '@/components/ui/AutocompleteInput';
+import { Input } from '@/components/ui/Input';
 import { EmptyState } from '@/components/ui/EmptyState';
-import { IconInfo } from '@/components/ui/icons';
+import { IconInfo, IconX } from '@/components/ui/icons';
 import { SecondaryScreenShell } from '@/components/common/SecondaryScreenShell';
 import { useEdgeSwipeBack } from '@/hooks/useEdgeSwipeBack';
+import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard';
 import { useAuthStore, useNotificationStore } from '@/stores';
 import { authFilesApi } from '@/services/api';
 import type { AuthFileItem, OAuthModelAliasEntry } from '@/types';
 import styles from './AuthFilesOAuthExcludedEditPage.module.scss';
+import {
+  addOAuthExcludedRule,
+  serializeOAuthExcludedRules,
+} from './oauthExcludedRules';
 
 type AuthFileModelItem = { id: string; display_name?: string; type?: string; owned_by?: string };
 
@@ -57,6 +63,7 @@ export function AuthFilesOAuthExcludedEditPage() {
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsError, setModelsError] = useState<'unsupported' | null>(null);
   const [saving, setSaving] = useState(false);
+  const [customRule, setCustomRule] = useState('');
 
   useEffect(() => {
     setProvider(providerFromParams);
@@ -103,6 +110,27 @@ export function AuthFilesOAuthExcludedEditPage() {
     if (!resolvedProviderKey) return false;
     return Object.prototype.hasOwnProperty.call(excluded, resolvedProviderKey);
   }, [excluded, resolvedProviderKey]);
+  const initialRules = useMemo(
+    () => serializeOAuthExcludedRules(excluded[resolvedProviderKey] ?? []),
+    [excluded, resolvedProviderKey]
+  );
+  const currentRules = useMemo(
+    () => serializeOAuthExcludedRules(selectedModels),
+    [selectedModels]
+  );
+  const isDirty =
+    customRule.trim().length > 0 || JSON.stringify(currentRules) !== JSON.stringify(initialRules);
+  const { allowNextNavigation } = useUnsavedChangesGuard({
+    enabled: !initialLoading && !saving,
+    shouldBlock: isDirty,
+    dialog: {
+      title: t('common.unsaved_changes_title'),
+      message: t('common.unsaved_changes_message'),
+      confirmText: t('common.leave'),
+      cancelText: t('common.stay'),
+      variant: 'danger',
+    },
+  });
 
   const title = useMemo(() => {
     if (isEditing) {
@@ -275,7 +303,7 @@ export function AuthFilesOAuthExcludedEditPage() {
       return;
     }
 
-    const models = [...selectedModels];
+    const models = serializeOAuthExcludedRules(addOAuthExcludedRule(selectedModels, customRule));
     setSaving(true);
     try {
       if (models.length) {
@@ -284,6 +312,7 @@ export function AuthFilesOAuthExcludedEditPage() {
         await authFilesApi.deleteOauthExcludedEntry(normalizedProvider);
       }
       showNotification(t('oauth_excluded.save_success'), 'success');
+      allowNextNavigation();
       handleBack();
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : '';
@@ -291,7 +320,7 @@ export function AuthFilesOAuthExcludedEditPage() {
     } finally {
       setSaving(false);
     }
-  }, [handleBack, provider, selectedModels, showNotification, t]);
+  }, [allowNextNavigation, customRule, handleBack, provider, selectedModels, showNotification, t]);
 
   const canSave = !disableControls && !saving && !excludedUnsupported;
 
@@ -428,6 +457,42 @@ export function AuthFilesOAuthExcludedEditPage() {
             ) : (
               <div className={styles.emptyModels}>{t('oauth_excluded.provider_required')}</div>
             )}
+            <div className={styles.settingsSection}>
+              <div className={styles.settingsRow}>
+                <div className={styles.settingsInfo}>
+                  <div className={styles.settingsLabel}>{t('oauth_excluded.custom_rule_label')}</div>
+                  <div className={styles.settingsDesc}>{t('oauth_excluded.custom_rule_hint')}</div>
+                </div>
+                <div className={styles.settingsControl}>
+                  <Input
+                    value={customRule}
+                    placeholder={t('oauth_excluded.custom_rule_placeholder')}
+                    disabled={disableControls || saving}
+                    onChange={(event) => setCustomRule(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key !== 'Enter') return;
+                      event.preventDefault();
+                      setSelectedModels((current) => addOAuthExcludedRule(current, customRule));
+                      setCustomRule('');
+                    }}
+                  />
+                </div>
+              </div>
+              <div className={styles.tagList}>
+                {currentRules
+                  .filter((rule) => !modelsList.some((model) => model.id === rule))
+                  .map((rule) => (
+                    <button
+                      key={rule}
+                      type="button"
+                      className={styles.tag}
+                      onClick={() => toggleModel(rule, false)}
+                    >
+                      {rule} <IconX size={12} />
+                    </button>
+                  ))}
+              </div>
+            </div>
           </Card>
         </>
       )}

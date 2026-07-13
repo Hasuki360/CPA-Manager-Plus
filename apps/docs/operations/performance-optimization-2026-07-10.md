@@ -1,0 +1,276 @@
+# 2026-07-10 性能优化报告
+
+本文记录 2026-07-10 完成的 Manager Server、Dashboard、请求监控、Usage Analytics 和 Model Prices 性能优化，包括问题原因、实现方式、测试口径和实测结果。
+
+## 执行摘要
+
+本轮优化分为四个阶段：
+
+1. PR #319：限制无界内存、请求和 SQLite 连接资源。
+2. PR #320：Dashboard 核心统计改用增量小时汇总。
+3. PR #323：Usage Analytics 按当前 Tab 请求最小数据集。
+4. Usage Analytics Hourly Rollup Phase 2B：严格无筛选的长窗口核心统计复用小时汇总。
+
+在 100,000 条测试事件下，以打开 Usage Analytics Overview 的有效工作量为口径：
+
+| 指标 | 优化前 legacy 路径 | 当前路径 | 综合变化 |
+|---|---:|---:|---:|
+| 请求耗时 | 约 7.00s | 约 2.48s | 降低约 65% |
+| 单次内存分配 | 约 215MB | 约 20.24MB | 降低约 91% |
+
+legacy 路径会请求全部 Tab 和完整筛选数据；当前路径只执行 Overview 实际需要的查询。因此该结果代表用户打开 Overview 时的有效工作量变化，而不是两组完全相同 SQL 的对比。
+
+## 测试口径说明
+
+- `ns/op` 或耗时：一次 benchmark 操作的执行时间。
+- `B/op`：一次操作期间累计分配的字节数，不等于进程最终 RSS。
+- `allocs/op`：一次操作产生的分配次数。
+- pprof `inuse_space`：GC 后仍然存活的堆对象，更适合判断是否存在 retained heap 或事件切片泄漏。
+- 所有核心 benchmark 使用 100,000 条合成 usage events，覆盖 12 个模型、多个账号/API Key、成功/失败、Token 和延迟数据。
+
+## 阶段一：内存压力治理
+
+### 问题原因
+
+程序从较低初始 RSS 增长到数百 MB，未定位到单一经典内存泄漏点。主要问题是多个线性或无界资源路径叠加：
+
+- Usage 导入、导出一次性构建完整数据集。
+- Monitoring 长时间保留持续增长的事件数组。
+- 多份展示快照可能间接保留事件数据。
+- SQLite 最大连接数不受限，每个连接可能持有独立缓存。
+- Model Prices 下载完整 usage payload，只为统计模型调用次数。
+- 重复或已过期的 Analytics 请求继续执行。
+- 延迟百分位计算在 Go 堆中保留较大的样本窗口。
+
+### 优化内容
+
+| 优化项 | 优化前 | 优化后 |
+|---|---|---|
+| Usage 导出 | 完整结果构建后返回 | 从固定数据库快照逐行写入 |
+| Usage 导入 | 完整 payload 解析后写入 | 每 256 条提交一批 |
+| SQLite 连接 | 最大连接数不受限 | 最多 4 个 open、2 个 idle，5 分钟 idle lifetime |
+| Monitoring 事件 | 可持续增长 | 最多保留 2,000 条 |
+| Monitoring 分页 | 宽结果持续累积 | 每页 500 条 |
+| 展示快照 | 多份派生状态可能保留事件 | 最多 4 份，快照不保存事件行 |
+| 自动刷新 | 页面不可见时仍可能继续 | 默认 30 秒，页面隐藏时暂停 |
+| Analytics 请求 | 重复或旧请求可能继续 | Abort、节流和 in-flight 去重 |
+| Model Prices | 最多下载 50,000 条完整事件 | 返回按模型聚合的轻量统计 |
+| P95 Summary | Go 堆保留完整样本 | SQLite window query 计算 |
+
+### 为什么会降低内存
+
+导入工作集由 `O(总事件数)` 变为 `O(256)`；前端事件、展示快照和 SQLite 连接都有明确上限。大请求结束后，不再有完整 JSON、全部事件数组或多连接缓存持续放大 RSS。
+
+在当前 100,000 条测试数据包含 12 个模型的情况下，Model Prices 的结果规模从最多 50,000 条完整事件降为约 12 条模型统计行，返回行数约缩小 4,167 倍。该阶段没有保存统一的端到端前后耗时 benchmark，因此不对整体 RSS 给出不准确的固定下降数字。
+
+## 阶段二：Dashboard Hourly Rollup
+
+### 问题原因
+
+Dashboard 每次刷新会针对同一个时间窗口重复扫描 `usage_events`：
+
+```text
+aggregate
++ model stats
++ top models
++ hourly timeline
+```
+
+查询成本近似为 `查询数量 × 原始事件数量`，数据增长后 CPU、SQLite I/O 和页面延迟同步增长。
+
+### 优化内容
+
+新增 UTC 小时汇总，按以下维度保存稳定统计：
+
+```text
+hour + model + billing model + service tier
+```
+
+汇总字段包括调用数、成功/失败、各类 Token、延迟 sum/count 和 zero-token calls。读取策略为：
+
+```text
+raw leading edge
++ complete hourly rollups
++ raw trailing edge
+```
+
+价格不会写入 rollup，而是在读取时使用当前 Model Prices 重新计算。checkpoint 未追平、rollup 关闭或读取异常时，查询自动回退 raw events。
+
+### 100k 测试结果
+
+| 路径 | 耗时 | 变化 |
+|---|---:|---:|
+| Raw events | 约 774ms | 基线 |
+| Hourly rollup | 约 2.66ms | 约快 291 倍 |
+| 延迟降幅 |  | 约 99.7% |
+
+连续 20 次 rollup benchmark 稳定在约 2.66ms/op、556KB/op。heap profile 结束时 in-use 约 2.9MB，未发现 100,000 条事件切片被长期保留。
+
+## 阶段三：Usage Analytics 按 Tab 裁剪
+
+### 问题原因
+
+优化前，无论用户打开 Overview、Trends、Models、API Keys、Credentials 还是 Heatmap，前端都会请求几乎完整的 Analytics 数据集和筛选选项。隐藏 Tab 的 SQL 仍会执行。
+
+### 优化内容
+
+- 每个 Tab 只发送实际需要的 include 矩阵。
+- Filter selectors 从主 Analytics 请求中拆分。
+- Selector 只读取 model、API key、provider 和 auth file 的 distinct 值。
+- Tab 切换不重复加载稳定 selectors。
+- Selector 失败不阻塞主内容。
+- 同时发送兼容标志，旧 Manager Server 仍可返回完整 filter options。
+
+### 100k 测试结果
+
+| 请求类型 | 耗时 | 单次分配 |
+|---|---:|---:|
+| Legacy full | 约 7.00s | 约 215MB |
+| Overview initial | 约 3.63s | 约 34MB |
+| 专项 Tab | 约 2.34～3.10s | 未单独记录 |
+| Filter selectors | 约 402ms | 约 25KB |
+
+Overview 耗时降低约 48%，分配降低约 84%。专项 Tab 耗时降低约 56%～67%。
+
+## 阶段四：Usage Analytics Hourly Rollup Phase 2B
+
+### 问题原因
+
+按 Tab 裁剪后，Overview 等页面仍需要对 raw events 执行当前周期、上一周期、model stats 和 timeline 扫描。这些核心查询仍随历史事件总量增长。
+
+### 优化内容
+
+新增 Dashboard 和 Monitoring 共用的 hourly reader，统一处理：
+
+- checkpoint 和 latest event 完整性检查。
+- 完整 UTC 小时读取。
+- 首尾 raw edge 补偿。
+- Aggregate、model stats 和 timeline 合并。
+- 限频 fallback 诊断。
+
+只有严格无筛选请求使用 rollup：
+
+- 无 search query 或 API key search。
+- 无 model、provider、account、auth file、API key、project、source 或 header filters。
+- 包含成功与失败事件。
+- 无 latency/cache status 条件。
+
+以下统计使用 rollup：
+
+- 当前和上一周期 aggregate。
+- Model stats 和按当前价格计算的 cost。
+- 可无损表达的 hour/day timeline。
+- Average latency。
+
+以下统计继续读取 raw events：
+
+- P95 latency 和 P95 TTFT。
+- Rolling 30m RPM/TPM。
+- Task buckets、active days 和 zero-token models。
+- API Key、Credential、Channel、Account 和 Heatmap 等高维统计。
+- 所有搜索或筛选请求。
+
+### 时区正确性
+
+Raw analytics 与 rollup reader 共用同一个时区 bucket 规则。每个 UTC 小时会检查区间首尾是否映射到同一目标 bucket：
+
+- UTC、整小时时区和通常的 DST 边界可使用 rollup。
+- 半小时或 45 分钟时区无法无损表达时，timeline 自动回退 raw。
+- Timeline 回退不会阻止 Summary 和 Model Stats 使用安全的 rollup 数据。
+
+测试覆盖 UTC、Asia/Shanghai、Asia/Kolkata、America/New_York DST spring/fall、partial hour、price change、checkpoint pending、disabled 和空模型语义。
+
+### 100k Overview 三次测试
+
+| 路径 | 平均耗时 | B/op | allocs/op |
+|---|---:|---:|---:|
+| Raw | 约 3.21s | 34.43MB | 约 269 万 |
+| Rollup | 约 2.48s | 20.24MB | 约 97 万 |
+| 变化 | 降低约 23% | 降低约 41% | 降低约 64% |
+
+### 100k 核心路径三次测试
+
+该口径只包含 Phase 2B 实际负责的 aggregate、model stats 和 timeline：
+
+| 路径 | 平均耗时 | B/op | allocs/op |
+|---|---:|---:|---:|
+| Raw | 约 777ms | 23.70MB | 约 186 万 |
+| Rollup | 约 39ms | 9.51MB | 约 14.2 万 |
+| 变化 | 约快 20 倍 | 降低约 60% | 降低约 92% |
+
+核心路径约快 20 倍，但 Overview 整体只快约 23%，是因为 P95、TTFT、task、active days、API Key 和 Channel 等保留的 raw 查询已经成为主要耗时来源。
+
+## 内存与稳定性验证
+
+- 10 次和 200 次连续 100k rollup benchmark 保持稳定。
+- 200 次测试约 38～40ms/op。
+- 最终 heap profile in-use 约 5MB。
+- in-use top 中没有 CPAMP hourly reader 或完整事件切片。
+- 未观察到随请求次数持续增长的 retained heap。
+
+`B/op` 表示请求期间累计分配，不代表这些内存会持续保留。pprof in-use 结果更接近是否存在泄漏的判断依据。
+
+## 整体性能为什么提升
+
+优化前的主要成本近似为：
+
+```text
+全部 Tab 数据 × 多组查询 × 全部原始事件
+```
+
+优化后变为：
+
+```text
+当前 Tab 所需数据
+×
+完整小时汇总行
++
+首尾少量 raw events
++
+无法汇总的专项指标
+```
+
+复杂度变化可以概括为：
+
+- `O(全部事件)` 内存保留变为 `O(固定批次/固定上限)`。
+- 全 Tab 查询变为当前 Tab 查询。
+- 重复 raw scan 变为小时 rollup。
+- 完整事件响应变为聚合响应。
+- 无界连接和缓存变为明确资源预算。
+- stale 请求继续执行变为 cancel、throttle 和 dedupe。
+
+## 验证结果
+
+最终通过：
+
+- Manager Server 全量测试。
+- Go race 全量测试。
+- `go vet ./...`。
+- 86 个 Vitest 文件、719 个测试。
+- VitePress 文档构建。
+- 多时区、DST、fallback 和价格变更测试。
+- 多轮代码审查，最终无阻断发现。
+
+## 运行与回滚
+
+小时汇总默认开启。临时关闭时设置：
+
+```bash
+USAGE_DASHBOARD_HOURLY_ROLLUP_ENABLED=false
+```
+
+修改后重启 Manager Server。Dashboard 和 Usage Analytics 会回退 raw events，已有 rollup 表不会删除。该开关不接入 UI。
+
+更多配置见 [Manager Server 指南](./manager-server.md)。
+
+## 后续方向
+
+当前剩余耗时主要集中在 Summary 的 raw-only 指标：
+
+- P95 latency 和 P95 TTFT。
+- Task buckets。
+- Active days。
+- Zero-token models。
+- Overview 的 API Key 和 Channel 高维聚合。
+
+下一阶段应优先评估 Compact Summary Profile，让不需要完整诊断指标的 Tab 不再重复执行这些 raw 查询。只有新的 pprof 证据显示短窗口 SQLite 查询仍是瓶颈时，才应继续考虑 bounded recent event cache。

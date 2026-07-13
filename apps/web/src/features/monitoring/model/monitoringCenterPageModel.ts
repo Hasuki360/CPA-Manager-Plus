@@ -56,6 +56,7 @@ import {
   hasUsageHeaderQuotaSignal,
 } from '@/utils/usageHeaderSnapshots';
 import {
+  calculateCacheHitRateFromTotals,
   formatCompactNumber,
   formatDurationMs,
   formatUsd,
@@ -636,12 +637,17 @@ export const buildSecondarySummaryCards = (
 ): SummaryCardProps[] => {
   const totalCacheTokens =
     summary.cachedTokens + summary.cacheCreationTokens + summary.cacheReadTokens;
-  const cacheHitTokens = summary.cachedTokens + summary.cacheReadTokens;
-  const inputSideTokens =
+  const fallbackCacheInputTokens =
     Math.max(summary.inputTokens, summary.cachedTokens) +
     summary.cacheReadTokens +
     summary.cacheCreationTokens;
-  const cacheHitRate = inputSideTokens > 0 ? cacheHitTokens / inputSideTokens : 0;
+  const cacheHitRate =
+    summary.cacheHitRate === undefined
+      ? calculateCacheHitRateFromTotals(
+          summary.cachedTokens + summary.cacheReadTokens,
+          fallbackCacheInputTokens
+        )
+      : calculateCacheHitRateFromTotals(summary.cacheHitRate, 1);
 
   return [
     {

@@ -1,4 +1,5 @@
 import { formatApiKeyHashLabel } from './base';
+import { calculateCacheHitRateFromTotals, getCacheHitTotals } from '@/utils/usage';
 import { sanitizeApiKeyDisplayText, shouldPreferApiKeyAlias } from './apiKeys';
 import {
   buildMonitoringAccountFilterValue,
@@ -230,6 +231,21 @@ export const buildMonitoringSummary = (rows: MonitoringEventRow[]): MonitoringSu
   const cachedTokens = rows.reduce((sum, row) => sum + row.cachedTokens, 0);
   const cacheReadTokens = rows.reduce((sum, row) => sum + (row.cacheReadTokens ?? 0), 0);
   const cacheCreationTokens = rows.reduce((sum, row) => sum + (row.cacheCreationTokens ?? 0), 0);
+  const cacheHitTotals = rows.reduce(
+    (totals, row) => {
+      const rowTotals = getCacheHitTotals({
+        modelName: row.resolvedModel || row.model,
+        inputTokens: row.inputTokens,
+        cachedTokens: row.cachedTokens,
+        cacheReadTokens: row.cacheReadTokens,
+        cacheCreationTokens: row.cacheCreationTokens,
+      });
+      totals.hitTokens += rowTotals.hitTokens;
+      totals.inputTokens += rowTotals.inputTokens;
+      return totals;
+    },
+    { hitTokens: 0, inputTokens: 0 }
+  );
   const totalTokens = rows.reduce((sum, row) => sum + row.totalTokens, 0);
   const totalCost = rows.reduce((sum, row) => sum + row.totalCost, 0);
 
@@ -271,6 +287,10 @@ export const buildMonitoringSummary = (rows: MonitoringEventRow[]): MonitoringSu
     cachedTokens,
     cacheReadTokens,
     cacheCreationTokens,
+    cacheHitRate: calculateCacheHitRateFromTotals(
+      cacheHitTotals.hitTokens,
+      cacheHitTotals.inputTokens
+    ),
     totalTokens,
     totalCost,
     averageLatencyMs: latencyCount > 0 ? latencySum / latencyCount : null,

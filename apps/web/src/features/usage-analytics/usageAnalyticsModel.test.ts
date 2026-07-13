@@ -97,6 +97,8 @@ describe('usage analytics request model', () => {
   it('builds the minimum analytics include for each active tab', () => {
     expect(buildUsageAnalyticsInclude('overview', 'day')).toEqual({
       summary: true,
+      summary_profile: 'compact',
+      summary_percentiles: true,
       summary_comparison: true,
       timeline: true,
       model_stats: true,
@@ -113,6 +115,7 @@ describe('usage analytics request model', () => {
       })
     ).toEqual({
       summary: true,
+      summary_profile: 'compact',
       summary_comparison: true,
       timeline: true,
       model_stats: true,
@@ -123,6 +126,7 @@ describe('usage analytics request model', () => {
     });
     expect(buildUsageAnalyticsInclude('models', 'day')).toEqual({
       summary: true,
+      summary_profile: 'compact',
       timeline: true,
       model_stats: true,
       api_key_stats: true,
@@ -130,13 +134,14 @@ describe('usage analytics request model', () => {
     });
     expect(buildUsageAnalyticsInclude('apiKeys', 'day')).toEqual({
       summary: true,
+      summary_profile: 'compact',
       api_key_stats: true,
       granularity: 'day',
     });
     expect(buildUsageAnalyticsInclude('credentials', 'day')).toEqual({
       summary: true,
+      summary_profile: 'compact',
       credential_stats: true,
-      credential_timeline: true,
       granularity: 'day',
     });
     expect(
@@ -146,6 +151,7 @@ describe('usage analytics request model', () => {
       })
     ).toEqual({
       summary: true,
+      summary_profile: 'compact',
       heatmap: true,
       granularity: 'day',
     });
@@ -1004,6 +1010,81 @@ describe('usage analytics adapters', () => {
     });
   });
 
+  it('preserves normalized cache totals while merging provider model aliases', () => {
+    const usageRow = (overrides: Partial<UsageRankRow>): UsageRankRow => ({
+      id: 'row',
+      label: 'row',
+      requestCount: 0,
+      successCount: 0,
+      failureCount: 0,
+      successRate: 0,
+      totalTokens: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cachedTokens: 0,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+      estimatedCost: 0,
+      averageLatencyMs: null,
+      share: 0,
+      ...overrides,
+    });
+    const credentialRows = [
+      usageRow({
+        id: 'credential-a',
+        label: 'a',
+        provider: 'OpenAI',
+        models: [
+          usageRow({
+            id: 'internal-fast',
+            label: 'internal-fast',
+            model: 'internal-fast',
+            inputTokens: 100,
+            cacheReadTokens: 90,
+            cacheHitTokens: 90,
+            cacheHitInputTokens: 100,
+          }),
+        ],
+      }),
+      usageRow({
+        id: 'credential-b',
+        label: 'b',
+        provider: 'OpenAI',
+        models: [
+          usageRow({
+            id: 'internal-fast',
+            label: 'internal-fast',
+            model: 'internal-fast',
+            inputTokens: 100,
+            cacheReadTokens: 50,
+            cacheCreationTokens: 50,
+            cacheHitTokens: 50,
+            cacheHitInputTokens: 200,
+          }),
+        ],
+      }),
+    ];
+
+    const rows = buildProviderRows(
+      [
+        {
+          auth_index: 'auth-a',
+          auth_provider_snapshot: 'OpenAI',
+          calls: 2,
+          success: 2,
+          failure: 0,
+          tokens: 200,
+          cost: 0,
+          average_latency_ms: null,
+        },
+      ],
+      [],
+      credentialRows
+    );
+
+    expect(rows[0].cacheRate).toBeCloseTo(140 / 300, 6);
+  });
+
   it('estimates drilldown preview cost from model cost per token', () => {
     const rows = buildDrilldownPreview(
       [
@@ -1075,10 +1156,10 @@ describe('usage analytics adapters', () => {
 });
 
 describe('cache hit rate', () => {
-  it('uses total input (input + cacheRead + cacheCreation) as the denominator for Anthropic usage', () => {
+  it('uses normalized total input as the denominator for Anthropic usage', () => {
     expect(
       computeCacheHitRate({
-        inputTokens: 100,
+        inputTokens: 450,
         cacheReadTokens: 300,
         cacheCreationTokens: 50,
         cachedTokens: 0,
@@ -1095,6 +1176,18 @@ describe('cache hit rate', () => {
         cachedTokens: 400,
       })
     ).toBeCloseTo(0.4, 6);
+  });
+
+  it('does not double count GPT-5.6 fine-grained cache tokens', () => {
+    expect(
+      computeCacheHitRate({
+        modelName: 'openai/gpt-5.6-sol',
+        inputTokens: 152_600,
+        cacheReadTokens: 151_000,
+        cacheCreationTokens: 1_000,
+        cachedTokens: 0,
+      })
+    ).toBeCloseTo(151_000 / 152_600, 6);
   });
 
   it('returns 0 without input and clamps malformed ratios to 1', () => {
@@ -1140,7 +1233,7 @@ describe('model rank derivations', () => {
   it('derives per-row cache hit rate and average cost per call', () => {
     const row = rankRow({
       requestCount: 50,
-      inputTokens: 100,
+      inputTokens: 450,
       cacheReadTokens: 300,
       cacheCreationTokens: 50,
       estimatedCost: 10,
@@ -1148,6 +1241,35 @@ describe('model rank derivations', () => {
     expect(computeRowCacheHitRate(row)).toBeCloseTo(300 / 450, 6);
     expect(computeRowAverageCostPerCall(row)).toBeCloseTo(0.2, 6);
     expect(computeRowAverageCostPerCall(rankRow({ estimatedCost: 10 }))).toBe(0);
+  });
+
+  it('uses model-aware cache semantics for GPT-5.6 rank rows', () => {
+    const row = rankRow({
+      model: 'gpt-5.6-sol',
+      label: 'gpt-5.6-sol',
+      inputTokens: 152_600,
+      cacheReadTokens: 151_000,
+      cacheCreationTokens: 1_000,
+    });
+    expect(computeRowCacheHitRate(row)).toBeCloseTo(151_000 / 152_600, 6);
+  });
+
+  it('uses server-normalized cache totals when a display alias hides GPT-5.6', () => {
+    const row = rankRow({
+      model: 'internal-fast',
+      label: 'internal-fast',
+      inputTokens: 152_600,
+      cacheReadTokens: 151_000,
+      cacheCreationTokens: 1_000,
+      cacheHitTokens: 151_000,
+      cacheHitInputTokens: 152_600,
+      cacheHitRate: 151_000 / 152_600,
+    });
+    expect(computeRowCacheHitRate(row)).toBeCloseTo(151_000 / 152_600, 6);
+    expect(computeRowCacheHitRate(rankRow({ models: [row] }))).toBeCloseTo(
+      151_000 / 152_600,
+      6
+    );
   });
 
   it('builds the reverse key distribution for a model from API key breakdowns', () => {

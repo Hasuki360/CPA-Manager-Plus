@@ -651,7 +651,11 @@ export function OpenAIEditDrawer({
         editIndex !== null
           ? providers.map((item, idx) => (idx === editIndex ? payload : item))
           : [...providers, payload];
-      await providersApi.saveOpenAIProviders(nextList);
+      if (editIndex !== null) {
+        await providersApi.updateOpenAIProvider(providers[editIndex].name, editIndex, payload);
+      } else {
+        await providersApi.createOpenAIProvider(payload);
+      }
       let syncedProviders = nextList;
       try {
         syncedProviders = await providersApi.getOpenAIProviders();

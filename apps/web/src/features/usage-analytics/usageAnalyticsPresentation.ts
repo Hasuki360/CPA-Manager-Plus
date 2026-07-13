@@ -1,6 +1,7 @@
 import type { TFunction } from 'i18next';
 import {
   computeCacheHitRate,
+  computeRowCacheHitRate,
   formatMetricValue,
   USAGE_MODEL_LONG_TAIL_SHARE,
   USAGE_MODEL_TOP_SHARE_THRESHOLD,
@@ -570,7 +571,7 @@ export const buildCredentialDetailCards = ({
   const averageCost = row.requestCount > 0 ? row.estimatedCost / row.requestCount : 0;
   const averageTokens = row.requestCount > 0 ? row.totalTokens / row.requestCount : 0;
   const failureRate = row.requestCount > 0 ? row.failureCount / row.requestCount : 0;
-  const cacheRate = computeCacheHitRate(row);
+  const cacheRate = computeRowCacheHitRate(row);
   const lastSeenLabel = row.lastSeenMs
     ? new Intl.DateTimeFormat(locale, {
         day: '2-digit',

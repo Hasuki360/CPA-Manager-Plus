@@ -122,6 +122,11 @@ vi.mock('@/services/api/usageService', () => ({
 }));
 
 vi.mock('@/stores', () => ({
+  captureQuotaCacheGeneration: () => 0,
+  commitIfQuotaCacheCurrent: (_generation: number, commit: () => void) => {
+    commit();
+    return true;
+  },
   useNotificationStore: (
     selector?: (state: {
       showNotification: typeof mocks.showNotification;

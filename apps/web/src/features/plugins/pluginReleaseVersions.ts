@@ -14,6 +14,9 @@ const GITHUB_API_BASE = 'https://api.github.com';
 const GITHUB_HOSTS = new Set(['github.com', 'www.github.com']);
 const GITHUB_RELEASES_PAGE_SIZE = 50;
 
+export const supportsPluginVersionSelection = (installType: string): boolean =>
+  installType.trim().toLowerCase() === 'github-release';
+
 const stripGitSuffix = (value: string) => value.replace(/\.git$/i, '');
 
 export const getGitHubRepositorySlug = (repository: string): string => {

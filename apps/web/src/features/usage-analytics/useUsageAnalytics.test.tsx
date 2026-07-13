@@ -38,6 +38,8 @@ describe('useUsageAnalytics request orchestration', () => {
   let renderer: ReactTestRenderer | null = null;
   let latestResult: ReturnType<typeof useUsageAnalytics> | null = null;
   let selectorError = '';
+  let credentialTimelineError = '';
+  let credentialTimelineLoading = false;
   const mainRefresh = vi.fn();
   const selectorRefresh = vi.fn();
   const auxiliaryRefresh = vi.fn();
@@ -45,10 +47,35 @@ describe('useUsageAnalytics request orchestration', () => {
   const resultFor = (params: UseMonitoringAnalyticsParams): UseMonitoringAnalyticsReturn => {
     const selectors = Boolean(params.include?.filter_selectors);
     const main = Boolean(params.include?.summary);
+    const credentialTimeline = Boolean(params.include?.credential_timeline);
+    const mainData = params.include?.credential_stats
+      ? {
+          ...emptyAnalyticsResponse,
+          credential_stats: [
+            {
+              id: 'credential-a.json',
+              auth_file_snapshot: 'credential-a.json',
+              calls: 10,
+              success_calls: 9,
+              failure_calls: 1,
+              success_rate: 0.9,
+              input_tokens: 100,
+              output_tokens: 50,
+              cached_tokens: 0,
+              cache_read_tokens: 0,
+              cache_creation_tokens: 0,
+              total_tokens: 150,
+              cost: 1,
+              average_latency_ms: 100,
+              last_seen_ms: 1,
+            },
+          ],
+        }
+      : emptyAnalyticsResponse;
     return {
       enabled: Boolean(params.fromMs && params.toMs),
-      loading: false,
-      error: selectors ? selectorError : '',
+      loading: credentialTimeline ? credentialTimelineLoading : false,
+      error: selectors ? selectorError : credentialTimeline ? credentialTimelineError : '',
       data: selectors
         ? selectorError
           ? null
@@ -62,8 +89,23 @@ describe('useUsageAnalytics request orchestration', () => {
               },
             }
         : main
-          ? emptyAnalyticsResponse
-          : null,
+          ? mainData
+          : credentialTimeline && !credentialTimelineError && !credentialTimelineLoading
+            ? {
+                ...emptyAnalyticsResponse,
+                credential_timeline: [
+                  {
+                    id: 'credential-a.json',
+                    auth_file_snapshot: 'credential-a.json',
+                    bucket_ms: 1,
+                    calls: 10,
+                    tokens: 150,
+                    success: 9,
+                    failure: 1,
+                  },
+                ],
+              }
+            : null,
       dataStale: false,
       lastRefreshedAt: null,
       serviceBase: 'http://manager.local',
@@ -87,6 +129,8 @@ describe('useUsageAnalytics request orchestration', () => {
 
   beforeEach(() => {
     selectorError = '';
+    credentialTimelineError = '';
+    credentialTimelineLoading = false;
     latestResult = null;
     mainRefresh.mockReset();
     selectorRefresh.mockReset();
@@ -118,6 +162,8 @@ describe('useUsageAnalytics request orchestration', () => {
     const selectors = lastParams((params) => Boolean(params.include?.filter_selectors));
     expect(overview?.include).toEqual({
       summary: true,
+      summary_profile: 'compact',
+      summary_percentiles: true,
       summary_comparison: true,
       timeline: true,
       model_stats: true,
@@ -143,6 +189,7 @@ describe('useUsageAnalytics request orchestration', () => {
     const selectorsAfterTab = lastParams((params) => Boolean(params.include?.filter_selectors));
     expect(heatmap?.include).toEqual({
       summary: true,
+      summary_profile: 'compact',
       heatmap: true,
       granularity: 'hour',
     });
@@ -162,5 +209,57 @@ describe('useUsageAnalytics request orchestration', () => {
     });
     expect(mainRefresh).toHaveBeenCalledTimes(1);
     expect(selectorRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('loads only the selected credential timeline after the credential ranking', async () => {
+    await renderHook();
+
+    await act(async () => {
+      latestResult?.setActiveTab('credentials');
+      await Promise.resolve();
+    });
+
+    const credentials = lastParams((params) => Boolean(params.include?.credential_stats));
+    expect(credentials?.include).toEqual({
+      summary: true,
+      summary_profile: 'compact',
+      credential_stats: true,
+      granularity: 'hour',
+    });
+
+    const timeline = lastParams((params) => Boolean(params.include?.credential_timeline));
+    expect(timeline?.include).toEqual({ granularity: 'hour', credential_timeline: true });
+    expect(timeline?.filters).toMatchObject({ credential_ids: ['credential-a.json'] });
+    expect(JSON.parse(timeline?.dataScopeKey ?? '{}')).toMatchObject({
+      activeTab: 'credentials',
+      selectedCredentialID: 'credential-a.json',
+    });
+    expect(latestResult?.credentialTrendSeries).toHaveLength(1);
+  });
+
+  it('exposes selected credential timeline loading and error states', async () => {
+    credentialTimelineLoading = true;
+    await renderHook();
+
+    await act(async () => {
+      latestResult?.setActiveTab('credentials');
+      await Promise.resolve();
+    });
+    expect(latestResult?.credentialTrendLoading).toBe(true);
+    expect(latestResult?.credentialTrendError).toBe('');
+
+    credentialTimelineLoading = false;
+    credentialTimelineError = 'timeline failed';
+    await act(async () => {
+      renderer?.update(
+        <MemoryRouter initialEntries={['/usage-analytics']}>
+          <Harness />
+        </MemoryRouter>
+      );
+      await Promise.resolve();
+    });
+    expect(latestResult?.credentialTrendLoading).toBe(false);
+    expect(latestResult?.credentialTrendError).toBe('timeline failed');
+    expect(latestResult?.credentialRows).toHaveLength(1);
   });
 });

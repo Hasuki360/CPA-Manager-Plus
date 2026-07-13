@@ -473,12 +473,17 @@ export function CodexEditDrawer({
         disableCooling: form.disableCooling,
         experimentalCchSigning: form.experimentalCchSigning,
       };
-      const nextList =
+      if (editIndex !== null) {
+        await providersApi.updateCodexConfig(configs[editIndex], payload);
+      } else {
+        await providersApi.createCodexConfig(payload);
+      }
+      const syncedList = await providersApi.getCodexConfigs().catch(() =>
         editIndex !== null
-          ? configs.map((item, idx) => (idx === editIndex ? payload : item))
-          : [...configs, payload];
-      await providersApi.saveCodexConfigs(nextList);
-      updateConfigValue('codex-api-key', nextList);
+          ? configs.map((item, index) => (index === editIndex ? payload : item))
+          : [...configs, payload]
+      );
+      updateConfigValue('codex-api-key', syncedList);
       clearCache('codex-api-key');
       showNotification(
         editIndex !== null

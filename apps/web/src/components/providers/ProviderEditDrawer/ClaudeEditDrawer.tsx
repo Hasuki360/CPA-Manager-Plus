@@ -584,12 +584,17 @@ export function ClaudeEditDrawer({
         experimentalCchSigning: form.experimentalCchSigning,
         rebuildMidSystemMessage: form.rebuildMidSystemMessage,
       };
-      const nextList =
+      if (editIndex !== null) {
+        await providersApi.updateClaudeConfig(configs[editIndex], payload);
+      } else {
+        await providersApi.createClaudeConfig(payload);
+      }
+      const syncedList = await providersApi.getClaudeConfigs().catch(() =>
         editIndex !== null
-          ? configs.map((item, idx) => (idx === editIndex ? payload : item))
-          : [...configs, payload];
-      await providersApi.saveClaudeConfigs(nextList);
-      updateConfigValue('claude-api-key', nextList);
+          ? configs.map((item, index) => (index === editIndex ? payload : item))
+          : [...configs, payload]
+      );
+      updateConfigValue('claude-api-key', syncedList);
       clearCache('claude-api-key');
       showNotification(
         editIndex !== null

@@ -23,7 +23,13 @@ import { buildMonitoringSourceDisplay } from '@/features/monitoring/model/source
 import type { MonitoringAuthMeta, MonitoringChannelMeta } from '@/features/monitoring/model/types';
 import type { CredentialInfo } from '@/types/sourceInfo';
 import { buildSourceInfoMap } from '@/utils/sourceResolver';
-import { formatCompactNumber, formatUsd } from '@/utils/usage';
+import {
+  calculateCacheHitRate,
+  calculateCacheHitRateFromTotals,
+  formatCompactNumber,
+  formatUsd,
+  getCacheHitTotals,
+} from '@/utils/usage';
 
 export type UsageAnalyticsTab =
   | 'overview'
@@ -111,6 +117,7 @@ export type UsageSummaryMetrics = {
   cachedTokens: number;
   cacheReadTokens: number;
   cacheCreationTokens: number;
+  cacheHitRate?: number;
   estimatedCost: number;
   averageCostPerCall: number;
   successRate: number;
@@ -169,6 +176,9 @@ export type UsageRankRow = {
   cachedTokens: number;
   cacheReadTokens: number;
   cacheCreationTokens: number;
+  cacheHitTokens?: number;
+  cacheHitInputTokens?: number;
+  cacheHitRate?: number;
   estimatedCost: number;
   averageLatencyMs: number | null;
   lastSeenMs?: number;
@@ -709,12 +719,14 @@ export const buildUsageAnalyticsInclude = (
 ): MonitoringAnalyticsInclude => {
   const include: MonitoringAnalyticsInclude = {
     summary: true,
+    summary_profile: 'compact',
     granularity,
   };
 
   switch (activeTab) {
     case 'overview':
       Object.assign(include, {
+        summary_percentiles: true,
         summary_comparison: true,
         timeline: true,
         model_stats: true,
@@ -744,7 +756,6 @@ export const buildUsageAnalyticsInclude = (
       break;
     case 'credentials':
       include.credential_stats = true;
-      include.credential_timeline = true;
       break;
     case 'heatmap':
       include.heatmap = true;
@@ -776,6 +787,10 @@ export const buildUsageSummary = (
   cachedTokens: toNumber(summary?.cached_tokens),
   cacheReadTokens: toNumber(summary?.cache_read_tokens),
   cacheCreationTokens: toNumber(summary?.cache_creation_tokens),
+  cacheHitRate:
+    typeof summary?.cache_hit_rate === 'number' && Number.isFinite(summary.cache_hit_rate)
+      ? Math.min(1, Math.max(0, summary.cache_hit_rate))
+      : undefined,
   estimatedCost: toNumber(summary?.total_cost),
   averageCostPerCall: toNumber(summary?.average_cost_per_call),
   successRate: toNumber(summary?.success_rate),
@@ -790,20 +805,48 @@ export const buildUsageSummary = (
 const getBucketSizeMs = (granularity: UsageAnalyticsResolvedGranularity) =>
   granularity === 'day' ? DAY_MS : HOUR_MS;
 
-// Cache hit rate = cache-read tokens / total input tokens, unified across providers.
-// Anthropic reports input_tokens excluding cache, so total input = input + cacheRead + cacheCreation
-// (the three are mutually exclusive). OpenAI's input_tokens already includes cached tokens (reported
-// as cachedTokens, with cacheRead/cacheCreation = 0), so it falls back to cached / input.
 export const computeCacheHitRate = (tokens: {
+  modelName?: string;
   inputTokens: number;
   cacheReadTokens: number;
   cacheCreationTokens: number;
   cachedTokens: number;
+  cacheHitRate?: number;
 }): number => {
-  const cacheRead = tokens.cacheReadTokens > 0 ? tokens.cacheReadTokens : tokens.cachedTokens;
-  const totalInput = tokens.inputTokens + tokens.cacheReadTokens + tokens.cacheCreationTokens;
-  if (totalInput <= 0) return 0;
-  return Math.min(1, cacheRead / totalInput);
+  if (typeof tokens.cacheHitRate === 'number' && Number.isFinite(tokens.cacheHitRate)) {
+    return Math.min(1, Math.max(0, tokens.cacheHitRate));
+  }
+  return calculateCacheHitRate(tokens);
+};
+
+const getRowCacheHitTotals = (row: UsageRankRow) => {
+  const hasExplicitTotals =
+    typeof row.cacheHitTokens === 'number' &&
+    Number.isFinite(row.cacheHitTokens) &&
+    typeof row.cacheHitInputTokens === 'number' &&
+    Number.isFinite(row.cacheHitInputTokens);
+  return hasExplicitTotals
+    ? { hitTokens: row.cacheHitTokens ?? 0, inputTokens: row.cacheHitInputTokens ?? 0 }
+    : getCacheHitTotals({
+        modelName: row.model || row.label,
+        inputTokens: row.inputTokens,
+        cachedTokens: row.cachedTokens,
+        cacheReadTokens: row.cacheReadTokens,
+        cacheCreationTokens: row.cacheCreationTokens,
+      });
+};
+
+const computeRowsCacheHitRate = (rows: UsageRankRow[]): number => {
+  const totals = rows.reduce(
+    (current, row) => {
+      const rowTotals = getRowCacheHitTotals(row);
+      current.hitTokens += rowTotals.hitTokens;
+      current.inputTokens += rowTotals.inputTokens;
+      return current;
+    },
+    { hitTokens: 0, inputTokens: 0 }
+  );
+  return calculateCacheHitRateFromTotals(totals.hitTokens, totals.inputTokens);
 };
 
 export const buildUsageTimeline = (
@@ -845,6 +888,7 @@ export const buildUsageTimeline = (
         cacheReadTokens,
         cacheCreationTokens: toNumber(point.cache_creation_tokens),
         cachedTokens: toNumber(point.cached_tokens),
+        cacheHitRate: point.cache_hit_rate,
       }),
       averageTokensPerRequest: requestCount > 0 ? totalTokens / requestCount : 0,
     };
@@ -1146,6 +1190,9 @@ export const buildModelRows = (
       cachedTokens: toNumber(row.cached_tokens),
       cacheReadTokens: toNumber(row.cache_read_tokens),
       cacheCreationTokens: toNumber(row.cache_creation_tokens),
+      cacheHitTokens: row.cache_hit_tokens,
+      cacheHitInputTokens: row.cache_hit_input_tokens,
+      cacheHitRate: row.cache_hit_rate,
       estimatedCost: rowTotalCost(row),
       averageLatencyMs: null,
       share:
@@ -1296,6 +1343,9 @@ const buildModelSpendRows = (
     cachedTokens: toNumber(row.cached_tokens),
     cacheReadTokens: toNumber(row.cache_read_tokens),
     cacheCreationTokens: toNumber(row.cache_creation_tokens),
+    cacheHitTokens: row.cache_hit_tokens,
+    cacheHitInputTokens: row.cache_hit_input_tokens,
+    cacheHitRate: row.cache_hit_rate,
     estimatedCost: rowTotalCost(row),
     averageLatencyMs: null,
     lastSeenMs: row.last_seen_ms,
@@ -1460,6 +1510,8 @@ const buildProviderModelsFromEntities = (
         modelMap.set(key, { ...model, id: key, label: key, model: key });
         return;
       }
+      const existingCacheTotals = getRowCacheHitTotals(existing);
+      const modelCacheTotals = getRowCacheHitTotals(model);
       existing.requestCount += model.requestCount;
       existing.successCount += model.successCount;
       existing.failureCount += model.failureCount;
@@ -1470,6 +1522,13 @@ const buildProviderModelsFromEntities = (
       existing.cachedTokens += model.cachedTokens;
       existing.cacheReadTokens += model.cacheReadTokens;
       existing.cacheCreationTokens += model.cacheCreationTokens;
+      existing.cacheHitTokens = existingCacheTotals.hitTokens + modelCacheTotals.hitTokens;
+      existing.cacheHitInputTokens =
+        existingCacheTotals.inputTokens + modelCacheTotals.inputTokens;
+      existing.cacheHitRate = calculateCacheHitRateFromTotals(
+        existing.cacheHitTokens,
+        existing.cacheHitInputTokens
+      );
       existing.estimatedCost += model.estimatedCost;
       existing.lastSeenMs = Math.max(existing.lastSeenMs ?? 0, model.lastSeenMs ?? 0);
     });
@@ -1487,6 +1546,7 @@ export const buildProviderRows = (
     apiKeyRows.some((row) => row.models?.length) ? apiKeyRows : credentialRows
   );
   const grouped = new Map<string, UsageProviderRow>();
+  const fallbackRows = new Map<string, UsageRankRow[]>();
   rows.forEach((row) => {
     const label = normalizeProviderLabel(row.auth_provider_snapshot);
     const current =
@@ -1550,7 +1610,7 @@ export const buildProviderRows = (
       current.failureCount += row.failureCount;
       current.totalTokens += row.totalTokens;
       current.estimatedCost += row.estimatedCost;
-      current.cacheRate += computeCacheHitRate(row);
+      fallbackRows.set(label, [...(fallbackRows.get(label) ?? []), row]);
       grouped.set(label, current);
     });
   }
@@ -1577,16 +1637,8 @@ export const buildProviderRows = (
         successRate: safeShare(row.successCount, row.requestCount),
         cacheRate:
           models.length > 0
-            ? computeCacheHitRate({
-                inputTokens: models.reduce((sum, model) => sum + model.inputTokens, 0),
-                cacheReadTokens: models.reduce((sum, model) => sum + model.cacheReadTokens, 0),
-                cacheCreationTokens: models.reduce(
-                  (sum, model) => sum + model.cacheCreationTokens,
-                  0
-                ),
-                cachedTokens: models.reduce((sum, model) => sum + model.cachedTokens, 0),
-              })
-            : row.cacheRate,
+            ? computeRowsCacheHitRate(models)
+            : computeRowsCacheHitRate(fallbackRows.get(row.label) ?? []),
         requestShare,
         costShare: safeShare(row.estimatedCost, totalCost),
         tokenShare: safeShare(row.totalTokens, totalTokens),
@@ -1803,12 +1855,16 @@ export const buildSelectedCredentialTrendSeries = (
 };
 
 export const computeRowCacheHitRate = (row: UsageRankRow): number =>
-  computeCacheHitRate({
-    inputTokens: row.inputTokens,
-    cacheReadTokens: row.cacheReadTokens,
-    cacheCreationTokens: row.cacheCreationTokens,
-    cachedTokens: row.cachedTokens,
-  });
+  row.models?.length
+    ? computeRowsCacheHitRate(row.models)
+    : computeCacheHitRate({
+        modelName: row.model || row.label,
+        inputTokens: row.inputTokens,
+        cacheReadTokens: row.cacheReadTokens,
+        cacheCreationTokens: row.cacheCreationTokens,
+        cachedTokens: row.cachedTokens,
+        cacheHitRate: row.cacheHitRate,
+      });
 
 export const computeRowAverageCostPerCall = (row: UsageRankRow): number =>
   row.requestCount > 0 ? row.estimatedCost / row.requestCount : 0;

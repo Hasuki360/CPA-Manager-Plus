@@ -473,6 +473,27 @@ describe('buildScopeFilteredRows', () => {
       )
     ).toEqual(['slow-cache-miss']);
   });
+
+  it('clamps local summary cache rates and respects resolved GPT-5.6 aliases', () => {
+    expect(
+      buildMonitoringSummary([
+        createMonitoringEventRow({ inputTokens: 10, cachedTokens: 100 }),
+      ]).cacheHitRate
+    ).toBe(1);
+
+    expect(
+      buildMonitoringSummary([
+        createMonitoringEventRow({
+          model: 'internal-fast',
+          resolvedModel: 'openai/gpt-5.6-sol',
+          inputTokens: 152_600,
+          cachedTokens: 0,
+          cacheReadTokens: 151_000,
+          cacheCreationTokens: 1_000,
+        }),
+      ]).cacheHitRate
+    ).toBeCloseTo(151_000 / 152_600, 6);
+  });
 });
 
 describe('buildMonitoringEventsScopeKey', () => {

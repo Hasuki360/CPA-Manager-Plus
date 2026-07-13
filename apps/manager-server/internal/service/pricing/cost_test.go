@@ -44,7 +44,7 @@ func TestCostForModelPricesFineGrainedCacheOutsideInput(t *testing.T) {
 	}
 
 	cost := CostForModel("claude-cached", ModelTokens{
-		InputTokens:         500_000,
+		InputTokens:         2_600_000,
 		OutputTokens:        250_000,
 		CachedTokens:        0,
 		CacheReadTokens:     2_000_000,
@@ -62,7 +62,7 @@ func TestCostForModelPricesResidualCompatCachedWithFineGrainedCache(t *testing.T
 	}
 
 	cost := CostForModel("mixed-cache", ModelTokens{
-		InputTokens:         1_000_000,
+		InputTokens:         1_300_000,
 		CachedTokens:        100_000,
 		CacheReadTokens:     200_000,
 		CacheCreationTokens: 100_000,
@@ -70,6 +70,19 @@ func TestCostForModelPricesResidualCompatCachedWithFineGrainedCache(t *testing.T
 
 	if math.Abs(cost-2.3) > 0.000001 {
 		t.Fatalf("cost = %v, want 2.3", cost)
+	}
+}
+
+func TestCostForModelDoesNotDoubleBillOpenAICacheMirror(t *testing.T) {
+	prices := map[string]model.ModelPrice{
+		"gpt-5.4-mini": {Prompt: 2, Cache: 1, CacheRead: 1},
+	}
+	cost := CostForModel("gpt-5.4-mini", ModelTokens{
+		InputTokens:     1_000_000,
+		CacheReadTokens: 400_000,
+	}, prices)
+	if math.Abs(cost-1.6) > 0.000001 {
+		t.Fatalf("cost = %v, want 1.6", cost)
 	}
 }
 
@@ -174,13 +187,13 @@ func TestCostForGPT56UsesPromptRatiosWhenCachePricesAreMissing(t *testing.T) {
 func TestCostForGPT56RespectsExplicitZeroPrices(t *testing.T) {
 	prices := map[string]model.ModelPrice{
 		"gpt-5.6-sol": {
+			Prompt: 5, Completion: 30, Cache: 0.5,
 			PromptConfigured: true, CompletionConfigured: true, CacheReadConfigured: true, CacheCreationConfigured: true,
 		},
 	}
 	cost := CostForModel("gpt-5.6-sol", ModelTokens{
-		InputTokens:         1_000_000,
-		OutputTokens:        100_000,
-		CacheReadTokens:     200_000,
+		InputTokens:         250_000,
+		CacheReadTokens:     150_000,
 		CacheCreationTokens: 100_000,
 	}, prices)
 
@@ -283,7 +296,7 @@ func TestCostForModelWithServiceTierPreservesCacheBuckets(t *testing.T) {
 	}
 
 	cost := CostForModelWithServiceTier("gpt-5.4", "priority", ModelTokens{
-		InputTokens:         1_000_000,
+		InputTokens:         1_300_000,
 		CachedTokens:        100_000,
 		CacheReadTokens:     200_000,
 		CacheCreationTokens: 100_000,
@@ -291,5 +304,41 @@ func TestCostForModelWithServiceTierPreservesCacheBuckets(t *testing.T) {
 
 	if math.Abs(cost-4.6) > 0.000001 {
 		t.Fatalf("priority cache cost = %v, want 4.6", cost)
+	}
+}
+
+func TestLongContextPremiumCoversGPT54AndGPT55(t *testing.T) {
+	prices := map[string]model.ModelPrice{
+		"gpt-5.4": {Prompt: 2.5, Completion: 15, Cache: 0.25},
+		"gpt-5.5": {Prompt: 5, Completion: 30, Cache: 0.5},
+	}
+	tokens := ModelTokens{
+		InputTokens:      300_000,
+		OutputTokens:     100_000,
+		LongInputTokens:  300_000,
+		LongOutputTokens: 100_000,
+	}
+	if got := CostForModel("gpt-5.4", tokens, prices); math.Abs(got-3.75) > 0.000001 {
+		t.Fatalf("gpt-5.4 long cost = %v, want 3.75", got)
+	}
+	if got := CostForModel("gpt-5.5", tokens, prices); math.Abs(got-7.5) > 0.000001 {
+		t.Fatalf("gpt-5.5 long cost = %v, want 7.5", got)
+	}
+}
+
+func TestLongContextDoesNotStackPriorityMultiplier(t *testing.T) {
+	tokens := ModelTokens{InputTokens: 300_000, OutputTokens: 100_000, LongInputTokens: 300_000, LongOutputTokens: 100_000}
+	standard := CostForModelWithServiceTier("gpt-5.6-luna", "default", tokens, nil)
+	priority := CostForModelWithServiceTier("gpt-5.6-luna", "priority", tokens, nil)
+	if math.Abs(priority-standard) > 0.000001 {
+		t.Fatalf("priority long cost = %v, want standard long cost %v", priority, standard)
+	}
+}
+
+func TestFlexUsesHalfPrice(t *testing.T) {
+	prices := map[string]model.ModelPrice{"gpt-5.5": {Prompt: 5, Completion: 30, Cache: 0.5}}
+	got := CostForModelWithServiceTier("gpt-5.5", "flex", ModelTokens{InputTokens: 1_000_000}, prices)
+	if math.Abs(got-2.5) > 0.000001 {
+		t.Fatalf("flex cost = %v, want 2.5", got)
 	}
 }

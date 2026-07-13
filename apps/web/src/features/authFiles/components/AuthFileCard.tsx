@@ -36,6 +36,7 @@ import {
 import type { AuthFileStatusBarData } from '@/features/authFiles/hooks/useAuthFilesStatusBarCache';
 import type { AntigravitySubscriptionState } from '@/features/authFiles/hooks/useAntigravitySubscriptions';
 import type { AuthFileCodexStatusBadge } from '@/features/authFiles/model/authFilesPageModel';
+import { getQuotaCooldownPresentation } from '@/features/authFiles/model/quotaCooldownPresentation';
 import type { QuotaCooldownInfo } from '@/services/api/usageService';
 import { AuthFileQuotaSection } from '@/features/authFiles/components/AuthFileQuotaSection';
 import styles from '@/features/authFiles/AuthFilesPage.module.scss';
@@ -117,6 +118,9 @@ export function AuthFileCard(props: AuthFileCardProps) {
   const showModelsButton = !isRuntimeOnly || isAistudio;
   const typeColor = getTypeColor(providerKey, resolvedTheme);
   const typeLabel = getTypeLabel(t, providerKey);
+  const quotaCooldownPresentation = quotaCooldown
+    ? getQuotaCooldownPresentation(quotaCooldown)
+    : null;
 
   const quotaType = resolveQuotaType(file);
   const showQuotaLayout = Boolean(quotaType) && !isRuntimeOnly && !compact;
@@ -294,19 +298,26 @@ export function AuthFileCard(props: AuthFileCardProps) {
                     </span>
                   );
                 })}
-                {quotaCooldown && (
+                {quotaCooldown && quotaCooldownPresentation && (
                   <span
                     className={`${styles.codexStatusBadge} ${styles.codexStatusBadgeInfo} ${styles.quotaCooldownBadge}`}
-                    title={t('auth_files.quota_cooldown_badge_title', {
+                    title={t(quotaCooldownPresentation.titleKey, {
                       recoverAt: formatUnixTimestamp(quotaCooldown.recoverAtMs),
+                      disabledAt: quotaCooldown.disabledAtMs
+                        ? formatUnixTimestamp(quotaCooldown.disabledAtMs)
+                        : t('common.not_set', { defaultValue: 'Not set' }),
                       owner: quotaCooldown.owner || 'cpamp_usage_429',
-                      defaultValue:
-                        'This auth file is in a CPAMP-managed quota cooldown and will be recovered automatically. It is not the native CPA disabled state. Owner: {{owner}}. Expected recovery: {{recoverAt}}.',
+                      provider: quotaCooldownPresentation.providerLabel,
+                      source: t(quotaCooldownPresentation.sourceLabelKey, {
+                        defaultValue: quotaCooldownPresentation.sourceLabelDefault,
+                      }),
+                      defaultValue: quotaCooldownPresentation.titleDefault,
                     })}
                   >
-                    {t('auth_files.quota_cooldown_badge', {
+                    {t(quotaCooldownPresentation.badgeKey, {
                       recoverAt: formatUnixTimestamp(quotaCooldown.recoverAtMs),
-                      defaultValue: 'Cooldown until {{recoverAt}}',
+                      provider: quotaCooldownPresentation.providerLabel,
+                      defaultValue: quotaCooldownPresentation.badgeDefault,
                     })}
                   </span>
                 )}

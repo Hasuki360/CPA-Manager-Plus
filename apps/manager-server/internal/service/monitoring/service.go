@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/pricing"
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/usagehourly"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/store"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usage"
 )
@@ -28,11 +29,19 @@ const (
 )
 
 type Service struct {
-	store *store.Store
+	store        *store.Store
+	hourlyReader *usagehourly.Reader
 }
 
-func New(store *store.Store) *Service {
-	return &Service{store: store}
+func New(store *store.Store, hourlyRollupEnabled ...bool) *Service {
+	enabled := false
+	if len(hourlyRollupEnabled) > 0 {
+		enabled = hourlyRollupEnabled[0]
+	}
+	return &Service{
+		store:        store,
+		hourlyReader: usagehourly.New(store, enabled, "monitoring-rollup"),
+	}
 }
 
 type Request struct {
@@ -50,6 +59,7 @@ type Filters struct {
 	Models           []string `json:"models"`
 	Providers        []string `json:"providers"`
 	Accounts         []string `json:"accounts"`
+	CredentialIDs    []string `json:"credential_ids"`
 	AuthFiles        []string `json:"auth_files"`
 	AuthIndices      []string `json:"auth_indices"`
 	APIKeyHashes     []string `json:"api_key_hashes"`
@@ -68,6 +78,8 @@ type Filters struct {
 
 type Include struct {
 	Summary            bool              `json:"summary"`
+	SummaryProfile     string            `json:"summary_profile"`
+	SummaryPercentiles bool              `json:"summary_percentiles"`
 	SummaryComparison  bool              `json:"summary_comparison"`
 	Timeline           bool              `json:"timeline"`
 	HourlyDistribution bool              `json:"hourly_distribution"`
@@ -188,6 +200,7 @@ type Summary struct {
 	CachedTokens          int64    `json:"cached_tokens"`
 	CacheReadTokens       int64    `json:"cache_read_tokens"`
 	CacheCreationTokens   int64    `json:"cache_creation_tokens"`
+	CacheHitRate          float64  `json:"cache_hit_rate"`
 	ReasoningTokens       int64    `json:"reasoning_tokens"`
 	TotalTokens           int64    `json:"total_tokens"`
 	TotalCost             float64  `json:"total_cost"`
@@ -233,6 +246,7 @@ type TimelinePoint struct {
 	CachedTokens        int64    `json:"cached_tokens"`
 	CacheReadTokens     int64    `json:"cache_read_tokens"`
 	CacheCreationTokens int64    `json:"cache_creation_tokens"`
+	CacheHitRate        float64  `json:"cache_hit_rate"`
 	ReasoningTokens     int64    `json:"reasoning_tokens"`
 	TotalTokens         int64    `json:"total_tokens"`
 	Cost                float64  `json:"cost"`
@@ -311,6 +325,9 @@ type ModelStat struct {
 	CachedTokens        int64   `json:"cached_tokens"`
 	CacheReadTokens     int64   `json:"cache_read_tokens"`
 	CacheCreationTokens int64   `json:"cache_creation_tokens"`
+	CacheHitTokens      int64   `json:"cache_hit_tokens"`
+	CacheHitInputTokens int64   `json:"cache_hit_input_tokens"`
+	CacheHitRate        float64 `json:"cache_hit_rate"`
 	TotalTokens         int64   `json:"total_tokens"`
 	Cost                float64 `json:"cost"`
 }
@@ -433,6 +450,9 @@ type AccountModelStatRow struct {
 	CachedTokens        int64   `json:"cached_tokens"`
 	CacheReadTokens     int64   `json:"cache_read_tokens"`
 	CacheCreationTokens int64   `json:"cache_creation_tokens"`
+	CacheHitTokens      int64   `json:"cache_hit_tokens"`
+	CacheHitInputTokens int64   `json:"cache_hit_input_tokens"`
+	CacheHitRate        float64 `json:"cache_hit_rate"`
 	TotalTokens         int64   `json:"total_tokens"`
 	Cost                float64 `json:"cost"`
 	LastSeenMS          int64   `json:"last_seen_ms"`
@@ -645,18 +665,40 @@ func (s *Service) Analytics(ctx context.Context, req Request) (Response, error) 
 	// (summary and events use the exact same filter).
 	var summaryTotalCalls int64
 	summaryComputed := false
+	compactSummary := req.Include.Summary && req.Include.SummaryProfile == "compact"
+	rollupEligible := analyticsHourlyRollupEligible(filter)
+	needsHourlyAggregates := req.Include.Summary || req.Include.ModelShare || req.Include.ModelStats
+	needsHourlyTimeline := req.Include.Timeline || req.Include.AnomalyPoints
+	hourlyTimelineRepresentable := rollupEligible && needsHourlyTimeline && s.hourlyReader.CanRepresentAnalyticsTimeline(req.FromMS, req.ToMS, granularity, location)
+	needsHourlyCore := needsHourlyAggregates || hourlyTimelineRepresentable
+	var hourlySnapshot usagehourly.Snapshot
+	hourlySnapshotAvailable := false
+	if rollupEligible && needsHourlyCore {
+		hourlySnapshot, hourlySnapshotAvailable = s.hourlyReader.LoadAnalytics(
+			ctx,
+			req.FromMS,
+			req.ToMS,
+			granularity,
+			location,
+			hourlyTimelineRepresentable,
+		)
+	}
 
 	var modelStats []store.ModelStat
 	needsModelStats := req.Include.Summary || req.Include.ModelShare || req.Include.ModelStats
 	if needsModelStats {
-		modelStats, err = s.store.ModelStatsWithFilter(ctx, filter, 0)
-		if err != nil {
-			return Response{}, err
+		if hourlySnapshotAvailable {
+			modelStats = hourlySnapshot.ModelStats
+		} else {
+			modelStats, err = s.store.ModelStatsWithFilter(ctx, filter, 0)
+			if err != nil {
+				return Response{}, err
+			}
 		}
 	}
 
 	var taskBuckets []store.TaskBucket
-	if req.Include.Summary || req.Include.TaskBuckets {
+	if req.Include.TaskBuckets || (req.Include.Summary && !compactSummary) {
 		taskBuckets, err = s.store.TaskBucketsWithFilter(ctx, filter)
 		if err != nil {
 			return Response{}, err
@@ -664,30 +706,50 @@ func (s *Service) Analytics(ctx context.Context, req Request) (Response, error) 
 	}
 
 	if req.Include.Summary {
-		agg, err := s.store.AggregateWithFilter(ctx, filter)
-		if err != nil {
-			return Response{}, err
+		var agg store.Aggregate
+		if hourlySnapshotAvailable {
+			agg = hourlySnapshot.Aggregate
+		} else {
+			agg, err = s.store.AggregateWithFilter(ctx, filter)
+			if err != nil {
+				return Response{}, err
+			}
 		}
-		latencySummary, err := s.store.LatencySummaryWithFilter(ctx, filter)
-		if err != nil {
-			return Response{}, err
+		var latencySummary store.LatencySummary
+		if !compactSummary || req.Include.SummaryPercentiles {
+			latencySummary, err = s.store.LatencySummaryWithFilter(ctx, filter)
+			if err != nil {
+				return Response{}, err
+			}
 		}
-		rollingFilter := filter
-		rollingFilter.FromMS = nowMS - recentWindowMS
-		rollingFilter.ToMS = nowMS
-		rollingAgg, err := s.store.AggregateWithFilter(ctx, rollingFilter)
-		if err != nil {
-			return Response{}, err
+		var rollingAgg store.Aggregate
+		var activeDays int64
+		var zeroTokenModels []string
+		if !compactSummary {
+			rollingFilter := filter
+			rollingFilter.FromMS = nowMS - recentWindowMS
+			rollingFilter.ToMS = nowMS
+			rollingAgg, err = s.store.AggregateWithFilter(ctx, rollingFilter)
+			if err != nil {
+				return Response{}, err
+			}
+			activeDays, err = s.store.ActiveDaysWithFilter(ctx, filter, location)
+			if err != nil {
+				return Response{}, err
+			}
+			zeroTokenModels, err = s.store.ZeroTokenModelsWithFilter(ctx, filter)
+			if err != nil {
+				return Response{}, err
+			}
 		}
-		activeDays, err := s.store.ActiveDaysWithFilter(ctx, filter, location)
-		if err != nil {
-			return Response{}, err
+		summaryTaskBuckets := taskBuckets
+		if compactSummary {
+			summaryTaskBuckets = nil
 		}
-		zeroTokenModels, err := s.store.ZeroTokenModelsWithFilter(ctx, filter)
-		if err != nil {
-			return Response{}, err
+		response.Summary = buildSummary(agg, latencySummary, rollingAgg, activeDays, modelStats, summaryTaskBuckets, prices, zeroTokenModels)
+		if compactSummary {
+			clearFullSummaryMetrics(response.Summary)
 		}
-		response.Summary = buildSummary(agg, latencySummary, rollingAgg, activeDays, modelStats, taskBuckets, prices, zeroTokenModels)
 		summaryTotalCalls = agg.TotalCalls
 		summaryComputed = true
 
@@ -700,13 +762,32 @@ func (s *Service) Analytics(ctx context.Context, req Request) (Response, error) 
 				prevFilter := filter
 				prevFilter.FromMS = prevFrom
 				prevFilter.ToMS = req.FromMS
-				prevAgg, err := s.store.AggregateWithFilter(ctx, prevFilter)
-				if err != nil {
-					return Response{}, err
+				var prevAgg store.Aggregate
+				var prevModelStats []store.ModelStat
+				var prevSnapshot usagehourly.Snapshot
+				prevSnapshotAvailable := false
+				if rollupEligible {
+					prevSnapshot, prevSnapshotAvailable = s.hourlyReader.LoadAnalytics(
+						ctx,
+						prevFrom,
+						req.FromMS,
+						granularity,
+						location,
+						false,
+					)
 				}
-				prevModelStats, err := s.store.ModelStatsWithFilter(ctx, prevFilter, 0)
-				if err != nil {
-					return Response{}, err
+				if prevSnapshotAvailable {
+					prevAgg = prevSnapshot.Aggregate
+					prevModelStats = prevSnapshot.ModelStats
+				} else {
+					prevAgg, err = s.store.AggregateWithFilter(ctx, prevFilter)
+					if err != nil {
+						return Response{}, err
+					}
+					prevModelStats, err = s.store.ModelStatsWithFilter(ctx, prevFilter, 0)
+					if err != nil {
+						return Response{}, err
+					}
 				}
 				response.SummaryComparison = &SummaryComparison{
 					FromMS:       prevFrom,
@@ -723,9 +804,16 @@ func (s *Service) Analytics(ctx context.Context, req Request) (Response, error) 
 	}
 	var timeline []TimelinePoint
 	if req.Include.Timeline || req.Include.AnomalyPoints {
-		points, err := s.store.TimelineWithFilter(ctx, filter, granularity, location)
-		if err != nil {
-			return Response{}, err
+		var points []store.TimelinePoint
+		pointsAvailable := false
+		if hourlySnapshotAvailable && hourlyTimelineRepresentable {
+			points, pointsAvailable = s.hourlyReader.AnalyticsTimeline(ctx, hourlySnapshot, granularity, location)
+		}
+		if !pointsAvailable {
+			points, err = s.store.TimelineWithFilter(ctx, filter, granularity, location)
+			if err != nil {
+				return Response{}, err
+			}
 		}
 		percentiles, err := s.store.LatencyPercentilesWithFilter(ctx, filter, granularity, location)
 		if err != nil {
@@ -1022,6 +1110,7 @@ func buildFilter(req Request) store.AnalyticsFilter {
 		Models:           req.Filters.Models,
 		Providers:        req.Filters.Providers,
 		Accounts:         req.Filters.Accounts,
+		CredentialIDs:    req.Filters.CredentialIDs,
 		AuthFiles:        req.Filters.AuthFiles,
 		AuthIndices:      req.Filters.AuthIndices,
 		APIKeyHashes:     req.Filters.APIKeyHashes,
@@ -1037,6 +1126,29 @@ func buildFilter(req Request) store.AnalyticsFilter {
 		MinLatencyMS:     req.Filters.MinLatencyMS,
 		CacheStatus:      req.Filters.CacheStatus,
 	}
+}
+
+func analyticsHourlyRollupEligible(filter store.AnalyticsFilter) bool {
+	return strings.TrimSpace(filter.SearchQuery) == "" &&
+		strings.TrimSpace(filter.SearchAPIKeyHash) == "" &&
+		len(filter.Models) == 0 &&
+		len(filter.Providers) == 0 &&
+		len(filter.Accounts) == 0 &&
+		len(filter.CredentialIDs) == 0 &&
+		len(filter.AuthFiles) == 0 &&
+		len(filter.AuthIndices) == 0 &&
+		len(filter.APIKeyHashes) == 0 &&
+		len(filter.SourceHashes) == 0 &&
+		len(filter.ProjectIDs) == 0 &&
+		len(filter.RequestTypes) == 0 &&
+		len(filter.HeaderErrorKinds) == 0 &&
+		len(filter.HeaderErrorCodes) == 0 &&
+		len(filter.HeaderQuotaPlans) == 0 &&
+		len(filter.HeaderTraceIDs) == 0 &&
+		filter.IncludeFailed &&
+		!filter.FailedOnly &&
+		filter.MinLatencyMS == 0 &&
+		strings.TrimSpace(filter.CacheStatus) == ""
 }
 
 func (s *Service) filterOptions(ctx context.Context, filter store.AnalyticsFilter, prices map[string]store.ModelPrice) (*FilterOptions, error) {
@@ -1097,6 +1209,7 @@ func filterOptionsBaseFilter(filter store.AnalyticsFilter) store.AnalyticsFilter
 	optionFilter.Models = nil
 	optionFilter.Providers = nil
 	optionFilter.Accounts = nil
+	optionFilter.CredentialIDs = nil
 	optionFilter.AuthFiles = nil
 	optionFilter.AuthIndices = nil
 	optionFilter.APIKeyHashes = nil
@@ -1159,6 +1272,7 @@ func buildSummary(agg store.Aggregate, latencySummary store.LatencySummary, roll
 		CachedTokens:          agg.CachedTokens,
 		CacheReadTokens:       agg.CacheReadTokens,
 		CacheCreationTokens:   agg.CacheCreationTokens,
+		CacheHitRate:          cacheHitRateForModelStats(modelStats),
 		ReasoningTokens:       agg.ReasoningTokens,
 		TotalTokens:           agg.TotalTokens,
 		TotalCost:             totalCost,
@@ -1178,11 +1292,27 @@ func buildSummary(agg store.Aggregate, latencySummary store.LatencySummary, roll
 	}
 }
 
+func clearFullSummaryMetrics(summary *Summary) {
+	if summary == nil {
+		return
+	}
+	summary.RPM30M = 0
+	summary.TPM30M = 0
+	summary.AvgDailyRequests = 0
+	summary.AvgDailyTokens = 0
+	summary.ApproxTasks = 0
+	summary.ApproxTaskFailures = 0
+	summary.ApproxTaskSuccessRate = 0
+	summary.ZeroTokenModels = nil
+}
+
 func buildTimeline(points []store.TimelinePoint, percentiles []store.LatencyPercentiles, granularity string, location *time.Location, prices map[string]store.ModelPrice) []TimelinePoint {
 	type bucketAccumulator struct {
-		point         TimelinePoint
-		latencyTotal  float64
-		latencySample int64
+		point               TimelinePoint
+		cacheHitTokens      int64
+		cacheHitInputTokens int64
+		latencyTotal        float64
+		latencySample       int64
 	}
 	buckets := make(map[int64]*bucketAccumulator, len(points))
 	order := make([]int64, 0, len(points))
@@ -1210,6 +1340,19 @@ func buildTimeline(points []store.TimelinePoint, percentiles []store.LatencyPerc
 		bucket.point.CacheCreationTokens += point.CacheCreationTokens
 		bucket.point.ReasoningTokens += point.ReasoningTokens
 		bucket.point.Cost += costForTimelinePoint(point, prices)
+		behaviorModel := point.BillingModel
+		if strings.TrimSpace(behaviorModel) == "" {
+			behaviorModel = point.Model
+		}
+		cacheHitTokens, cacheHitInputTokens := usage.CacheHitTotals(
+			behaviorModel,
+			point.InputTokens,
+			point.CachedTokens,
+			point.CacheReadTokens,
+			point.CacheCreationTokens,
+		)
+		bucket.cacheHitTokens += cacheHitTokens
+		bucket.cacheHitInputTokens += cacheHitInputTokens
 		if point.AvgLatencyMS.Valid && point.LatencySamples > 0 {
 			bucket.latencyTotal += point.AvgLatencyMS.Float64 * float64(point.LatencySamples)
 			bucket.latencySample += point.LatencySamples
@@ -1224,6 +1367,7 @@ func buildTimeline(points []store.TimelinePoint, percentiles []store.LatencyPerc
 		}
 		bucket.point.SuccessRate = ratio(bucket.point.Success, bucket.point.Calls)
 		bucket.point.FailureRate = ratio(bucket.point.Failure, bucket.point.Calls)
+		bucket.point.CacheHitRate = usage.CacheHitRateFromTotals(bucket.cacheHitTokens, bucket.cacheHitInputTokens)
 		result = append(result, bucket.point)
 	}
 	percentilesByBucket := make(map[int64]store.LatencyPercentiles, len(percentiles))
@@ -1458,6 +1602,9 @@ func buildModelStats(stats []store.ModelStat, prices map[string]store.ModelPrice
 			CachedTokens:        stat.CachedTokens,
 			CacheReadTokens:     stat.CacheReadTokens,
 			CacheCreationTokens: stat.CacheCreationTokens,
+			CacheHitTokens:      stat.CacheHitTokens,
+			CacheHitInputTokens: stat.CacheHitInputTokens,
+			CacheHitRate:        usage.CacheHitRateFromTotals(stat.CacheHitTokens, stat.CacheHitInputTokens),
 			TotalTokens:         stat.TotalTokens,
 			Cost:                stat.Cost,
 		})
@@ -1474,6 +1621,8 @@ type aggregatedModelStat struct {
 	CachedTokens        int64
 	CacheReadTokens     int64
 	CacheCreationTokens int64
+	CacheHitTokens      int64
+	CacheHitInputTokens int64
 	TotalTokens         int64
 	Cost                float64
 }
@@ -1495,6 +1644,19 @@ func aggregateModelStats(stats []store.ModelStat, prices map[string]store.ModelP
 		entry.CachedTokens += stat.CachedTokens
 		entry.CacheReadTokens += stat.CacheReadTokens
 		entry.CacheCreationTokens += stat.CacheCreationTokens
+		behaviorModel := stat.BillingModel
+		if strings.TrimSpace(behaviorModel) == "" {
+			behaviorModel = stat.Model
+		}
+		cacheHitTokens, cacheHitInputTokens := usage.CacheHitTotals(
+			behaviorModel,
+			stat.InputTokens,
+			stat.CachedTokens,
+			stat.CacheReadTokens,
+			stat.CacheCreationTokens,
+		)
+		entry.CacheHitTokens += cacheHitTokens
+		entry.CacheHitInputTokens += cacheHitInputTokens
 		entry.TotalTokens += stat.TotalTokens
 		entry.Cost += costForStat(stat, prices)
 	}
@@ -1660,7 +1822,7 @@ func buildAccountStats(stats []store.AccountModelStat, prices map[string]store.M
 			entry.latencySum += stat.AvgLatencyMS.Float64 * float64(stat.LatencySamples)
 			entry.latencySamples += stat.LatencySamples
 		}
-		addAccountModelStat(entry.models, stat.Model, stat.Calls, stat.SuccessCalls, stat.FailureCalls, stat.InputTokens, stat.OutputTokens, stat.CachedTokens, stat.CacheReadTokens, stat.CacheCreationTokens, stat.TotalTokens, cost, stat.LastSeenMS)
+		addAccountModelStat(entry.models, stat.Model, stat.BillingModel, stat.Calls, stat.SuccessCalls, stat.FailureCalls, stat.InputTokens, stat.OutputTokens, stat.CachedTokens, stat.CacheReadTokens, stat.CacheCreationTokens, stat.TotalTokens, cost, stat.LastSeenMS)
 	}
 
 	result := make([]AccountStatRow, 0, len(grouped))
@@ -1737,7 +1899,7 @@ func buildCredentialStats(stats []store.CredentialModelStat, prices map[string]s
 			entry.latencySum += stat.AvgLatencyMS.Float64 * float64(stat.LatencySamples)
 			entry.latencySamples += stat.LatencySamples
 		}
-		addAccountModelStat(entry.models, stat.Model, stat.Calls, stat.SuccessCalls, stat.FailureCalls, stat.InputTokens, stat.OutputTokens, stat.CachedTokens, stat.CacheReadTokens, stat.CacheCreationTokens, stat.TotalTokens, cost, stat.LastSeenMS)
+		addAccountModelStat(entry.models, stat.Model, stat.BillingModel, stat.Calls, stat.SuccessCalls, stat.FailureCalls, stat.InputTokens, stat.OutputTokens, stat.CachedTokens, stat.CacheReadTokens, stat.CacheCreationTokens, stat.TotalTokens, cost, stat.LastSeenMS)
 	}
 
 	result := make([]CredentialStatRow, 0, len(grouped))
@@ -1885,7 +2047,7 @@ func buildAPIKeyStats(stats []store.APIKeyModelStat, prices map[string]store.Mod
 			entry.latencySamples += stat.LatencySamples
 		}
 		addAPIKeyContextStat(entry.contexts, stat, cost)
-		addAccountModelStat(entry.models, stat.Model, stat.Calls, stat.SuccessCalls, stat.FailureCalls, stat.InputTokens, stat.OutputTokens, stat.CachedTokens, stat.CacheReadTokens, stat.CacheCreationTokens, stat.TotalTokens, cost, stat.LastSeenMS)
+		addAccountModelStat(entry.models, stat.Model, stat.BillingModel, stat.Calls, stat.SuccessCalls, stat.FailureCalls, stat.InputTokens, stat.OutputTokens, stat.CachedTokens, stat.CacheReadTokens, stat.CacheCreationTokens, stat.TotalTokens, cost, stat.LastSeenMS)
 	}
 
 	result := make([]APIKeyStatRow, 0, len(grouped))
@@ -2131,6 +2293,7 @@ func addAccountTotals(
 func addAccountModelStat(
 	models map[string]*AccountModelStatRow,
 	model string,
+	billingModel string,
 	calls int64,
 	successCalls int64,
 	failureCalls int64,
@@ -2160,6 +2323,20 @@ func addAccountModelStat(
 	entry.CachedTokens += cachedTokens
 	entry.CacheReadTokens += cacheReadTokens
 	entry.CacheCreationTokens += cacheCreationTokens
+	behaviorModel := billingModel
+	if strings.TrimSpace(behaviorModel) == "" {
+		behaviorModel = modelKey
+	}
+	cacheHitTokens, cacheHitInputTokens := usage.CacheHitTotals(
+		behaviorModel,
+		inputTokens,
+		cachedTokens,
+		cacheReadTokens,
+		cacheCreationTokens,
+	)
+	entry.CacheHitTokens += cacheHitTokens
+	entry.CacheHitInputTokens += cacheHitInputTokens
+	entry.CacheHitRate = usage.CacheHitRateFromTotals(entry.CacheHitTokens, entry.CacheHitInputTokens)
 	entry.TotalTokens += totalTokens
 	entry.Cost += cost
 	if lastSeenMS > entry.LastSeenMS {
@@ -2628,23 +2805,35 @@ func averageTokensPerRequest(point TimelinePoint) float64 {
 }
 
 func cacheHitRate(point TimelinePoint) float64 {
-	// Mirror computeCacheHitRate on the web client: cache-read tokens over total
-	// input. cacheRead falls back to cachedTokens for OpenAI-style usage (input
-	// already includes cache); totalInput adds cacheRead/cacheCreation back for
-	// Anthropic-style usage where InputTokens excludes them.
-	cacheRead := point.CacheReadTokens
-	if cacheRead == 0 {
-		cacheRead = point.CachedTokens
+	rate := point.CacheHitRate
+	if rate <= 0 {
+		rate = usage.CacheHitRate("", point.InputTokens, point.CachedTokens, point.CacheReadTokens, point.CacheCreationTokens)
 	}
-	totalInput := point.InputTokens + point.CacheReadTokens + point.CacheCreationTokens
-	if totalInput <= 0 {
-		return 0
-	}
-	rate := float64(cacheRead) / float64(totalInput)
 	if rate > 1 {
 		return 1
 	}
 	return rate
+}
+
+func cacheHitRateForModelStats(stats []store.ModelStat) float64 {
+	var hitTokens int64
+	var inputTokens int64
+	for _, stat := range stats {
+		behaviorModel := stat.BillingModel
+		if strings.TrimSpace(behaviorModel) == "" {
+			behaviorModel = stat.Model
+		}
+		statHitTokens, statInputTokens := usage.CacheHitTotals(
+			behaviorModel,
+			stat.InputTokens,
+			stat.CachedTokens,
+			stat.CacheReadTokens,
+			stat.CacheCreationTokens,
+		)
+		hitTokens += statHitTokens
+		inputTokens += statInputTokens
+	}
+	return usage.CacheHitRateFromTotals(hitTokens, inputTokens)
 }
 
 func floatValueOrZero(value *float64) float64 {

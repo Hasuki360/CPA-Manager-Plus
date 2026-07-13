@@ -1938,10 +1938,14 @@ function EntityTrendChart({
   metric,
   series,
   highlightId,
+  loading = false,
+  error = '',
 }: {
   metric: UsageTrendMetricKey;
   series: UsageEntityTrendSeries[];
   highlightId?: string;
+  loading?: boolean;
+  error?: string;
 }) {
   const { t } = useTranslation();
   const chartTheme = useUsageChartTheme();
@@ -2024,6 +2028,25 @@ function EntityTrendChart({
     }),
     [chartTheme, hasHighlight, highlightId, metric, series]
   );
+
+  if (loading) {
+    return (
+      <div className={styles.chartEmptyInline}>
+        <IconRefreshCw size={24} />
+        <span>{t('common.loading')}</span>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className={styles.chartEmptyInline}>
+        <IconX size={24} />
+        <span>{t('usage_analytics.error_title')}</span>
+        <span>{error}</span>
+      </div>
+    );
+  }
 
   if (series.length === 0) {
     return (
@@ -3288,7 +3311,12 @@ function UsageAnalyticsPageInner() {
                   ))}
                 </div>
               </div>
-              <EntityTrendChart series={usage.credentialTrendSeries} metric={usage.trendMetric} />
+              <EntityTrendChart
+                series={usage.credentialTrendSeries}
+                metric={usage.trendMetric}
+                loading={usage.credentialTrendLoading}
+                error={usage.credentialTrendError}
+              />
             </div>
             {usage.selectedCredential ? (
               <DetailPanel

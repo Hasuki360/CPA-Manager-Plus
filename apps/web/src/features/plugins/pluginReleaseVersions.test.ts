@@ -20,6 +20,7 @@ import {
   getGitHubRepositorySlug,
   isValidManualReleaseTag,
   normalizePluginReleaseVersions,
+  supportsPluginVersionSelection,
 } from './pluginReleaseVersions';
 
 beforeEach(() => {
@@ -27,6 +28,13 @@ beforeEach(() => {
 });
 
 describe('plugin release version helpers', () => {
+  it('allows custom versions only for GitHub release installs', () => {
+    expect(supportsPluginVersionSelection('github-release')).toBe(true);
+    expect(supportsPluginVersionSelection(' GitHub-Release ')).toBe(true);
+    expect(supportsPluginVersionSelection('direct')).toBe(false);
+    expect(supportsPluginVersionSelection('')).toBe(false);
+  });
+
   it('normalizes GitHub repository slugs from supported repository formats', () => {
     expect(getGitHubRepositorySlug('router-for-me/demo.git')).toBe('router-for-me/demo');
     expect(getGitHubRepositorySlug('github.com/router-for-me/demo')).toBe('router-for-me/demo');

@@ -380,6 +380,8 @@ const createUsageState = (overrides: Record<string, unknown> = {}) => {
         points: [{ bucketMs: point.bucketMs, label: point.label, value: 8 }],
       },
     ],
+    credentialTrendLoading: false,
+    credentialTrendError: '',
     keyAnomalies: [
       {
         id: 'abcdef1234567890',
@@ -828,6 +830,24 @@ describe('UsageAnalyticsPage', () => {
     expect(mocks.navigate).toHaveBeenCalledWith(
       '/monitoring?from_ms=1780000000000&to_ms=1780003600000&auth_file=auth.json&project_id=project-1&search=req-42&min_latency_ms=10000&cache_status=miss'
     );
+  });
+
+  it('renders selected credential timeline loading and error states', () => {
+    mocks.usageState = createUsageState({
+      activeTab: 'credentials',
+      credentialTrendLoading: true,
+    });
+    let renderer = renderPage();
+    expect(getText(renderer.root)).toContain('common.loading');
+
+    mocks.usageState = createUsageState({
+      activeTab: 'credentials',
+      credentialTrendError: 'timeline failed',
+    });
+    renderer = renderPage();
+    const text = getText(renderer.root);
+    expect(text).toContain('usage_analytics.error_title');
+    expect(text).toContain('timeline failed');
   });
 
   it('renders the heatmap tab as a focused time-window workspace', () => {
