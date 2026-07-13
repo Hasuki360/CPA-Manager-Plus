@@ -16,16 +16,18 @@ var (
 	longContextThresholdSQL = strconv.FormatInt(usage.LongContextInputTokenThreshold, 10)
 	compatCachedExpr        = "max(max(cached_tokens, cache_tokens) - max(cache_read_tokens, 0) - max(cache_creation_tokens, 0), 0)"
 	compatCachedFExpr       = "max(max(f.cached_tokens, f.cache_tokens) - max(f.cache_read_tokens, 0) - max(f.cache_creation_tokens, 0), 0)"
-	longInputExpr           = "case when input_tokens > " + longContextThresholdSQL + " then input_tokens else 0 end"
-	longOutputExpr          = "case when input_tokens > " + longContextThresholdSQL + " then output_tokens else 0 end"
-	longCachedExpr          = "case when input_tokens > " + longContextThresholdSQL + " then " + compatCachedExpr + " else 0 end"
-	longCacheReadExpr       = "case when input_tokens > " + longContextThresholdSQL + " then cache_read_tokens else 0 end"
-	longCacheCreationExpr   = "case when input_tokens > " + longContextThresholdSQL + " then cache_creation_tokens else 0 end"
-	longInputFExpr          = "case when f.input_tokens > " + longContextThresholdSQL + " then f.input_tokens else 0 end"
-	longOutputFExpr         = "case when f.input_tokens > " + longContextThresholdSQL + " then f.output_tokens else 0 end"
-	longCachedFExpr         = "case when f.input_tokens > " + longContextThresholdSQL + " then " + compatCachedFExpr + " else 0 end"
-	longCacheReadFExpr      = "case when f.input_tokens > " + longContextThresholdSQL + " then f.cache_read_tokens else 0 end"
-	longCacheCreationFExpr  = "case when f.input_tokens > " + longContextThresholdSQL + " then f.cache_creation_tokens else 0 end"
+	normalizedInputExpr     = "coalesce(normalized_total_input_tokens, input_tokens)"
+	normalizedInputFExpr    = "coalesce(f.normalized_total_input_tokens, f.input_tokens)"
+	longInputExpr           = "case when " + normalizedInputExpr + " > " + longContextThresholdSQL + " then " + normalizedInputExpr + " else 0 end"
+	longOutputExpr          = "case when " + normalizedInputExpr + " > " + longContextThresholdSQL + " then output_tokens else 0 end"
+	longCachedExpr          = "case when " + normalizedInputExpr + " > " + longContextThresholdSQL + " then " + compatCachedExpr + " else 0 end"
+	longCacheReadExpr       = "case when " + normalizedInputExpr + " > " + longContextThresholdSQL + " then cache_read_tokens else 0 end"
+	longCacheCreationExpr   = "case when " + normalizedInputExpr + " > " + longContextThresholdSQL + " then cache_creation_tokens else 0 end"
+	longInputFExpr          = "case when " + normalizedInputFExpr + " > " + longContextThresholdSQL + " then " + normalizedInputFExpr + " else 0 end"
+	longOutputFExpr         = "case when " + normalizedInputFExpr + " > " + longContextThresholdSQL + " then f.output_tokens else 0 end"
+	longCachedFExpr         = "case when " + normalizedInputFExpr + " > " + longContextThresholdSQL + " then " + compatCachedFExpr + " else 0 end"
+	longCacheReadFExpr      = "case when " + normalizedInputFExpr + " > " + longContextThresholdSQL + " then f.cache_read_tokens else 0 end"
+	longCacheCreationFExpr  = "case when " + normalizedInputFExpr + " > " + longContextThresholdSQL + " then f.cache_creation_tokens else 0 end"
 )
 
 type AnalyticsFilter struct {
@@ -398,7 +400,7 @@ func (r *repository) AggregateWithFilter(ctx context.Context, filter AnalyticsFi
 	count(*) as calls,
 	sum(case when failed = 0 then 1 else 0 end),
 	sum(case when failed = 1 then 1 else 0 end),
-	coalesce(sum(input_tokens), 0),
+	coalesce(sum(`+normalizedInputExpr+`), 0),
 	coalesce(sum(output_tokens), 0),
 	coalesce(sum(reasoning_tokens), 0),
 	coalesce(sum(`+compatCachedExpr+`), 0),
@@ -440,7 +442,7 @@ func (r *repository) ModelStatsWithFilter(ctx context.Context, filter AnalyticsF
 	coalesce(service_tier, '') as service_tier,
 	count(*) as calls,
 	sum(case when failed = 0 then 1 else 0 end) as success,
-	coalesce(sum(input_tokens), 0),
+	coalesce(sum(` + normalizedInputExpr + `), 0),
 	coalesce(sum(output_tokens), 0),
 	coalesce(sum(reasoning_tokens), 0),
 	coalesce(sum(` + compatCachedExpr + `), 0),
@@ -531,9 +533,9 @@ func (r *repository) TimelineWithFilter(ctx context.Context, filter AnalyticsFil
 	timestamp_ms,
 	model,
 	coalesce(nullif(resolved_model, ''), model) as billing_model,
-	coalesce(service_tier, '') as service_tier,
-	failed,
-	input_tokens,
+		coalesce(service_tier, '') as service_tier,
+		failed,
+		`+normalizedInputExpr+`,
 	output_tokens,
 	reasoning_tokens,
 	`+compatCachedExpr+`,
@@ -908,9 +910,9 @@ func (r *repository) HeatmapWithFilter(ctx context.Context, filter AnalyticsFilt
 	coalesce(nullif(resolved_model, ''), model) as billing_model,
 	coalesce(service_tier, '') as service_tier,
 	coalesce(api_key_hash, ''),
-	coalesce(nullif(auth_provider_snapshot, ''), provider, ''),
-	failed,
-	input_tokens,
+		coalesce(nullif(auth_provider_snapshot, ''), provider, ''),
+		failed,
+		`+normalizedInputExpr+`,
 	output_tokens,
 	`+compatCachedExpr+`,
 	cache_read_tokens,
@@ -1030,7 +1032,7 @@ func (r *repository) ChannelModelStatsWithFilter(ctx context.Context, filter Ana
 	count(*),
 	sum(case when failed = 0 then 1 else 0 end),
 	sum(case when failed = 1 then 1 else 0 end),
-	coalesce(sum(input_tokens), 0),
+		coalesce(sum(`+normalizedInputExpr+`), 0),
 	coalesce(sum(output_tokens), 0),
 	coalesce(sum(`+compatCachedExpr+`), 0),
 	coalesce(sum(cache_read_tokens), 0),
@@ -1146,7 +1148,7 @@ func (r *repository) AccountModelStatsWithFilter(ctx context.Context, filter Ana
 	count(*),
 	sum(case when failed = 0 then 1 else 0 end),
 	sum(case when failed = 1 then 1 else 0 end),
-	coalesce(sum(input_tokens), 0),
+		coalesce(sum(`+normalizedInputExpr+`), 0),
 	coalesce(sum(output_tokens), 0),
 	coalesce(sum(`+compatCachedExpr+`), 0),
 	coalesce(sum(cache_read_tokens), 0),
@@ -1224,7 +1226,7 @@ func (r *repository) CredentialModelStatsWithFilter(ctx context.Context, filter 
 	count(*),
 	sum(case when failed = 0 then 1 else 0 end),
 	sum(case when failed = 1 then 1 else 0 end),
-	coalesce(sum(input_tokens), 0),
+		coalesce(sum(`+normalizedInputExpr+`), 0),
 	coalesce(sum(output_tokens), 0),
 	coalesce(sum(`+compatCachedExpr+`), 0),
 	coalesce(sum(cache_read_tokens), 0),
@@ -1302,9 +1304,9 @@ func (r *repository) CredentialTimelineWithFilter(ctx context.Context, filter An
 	coalesce(auth_project_id_snapshot, ''),
 	model,
 	coalesce(nullif(resolved_model, ''), model) as billing_model,
-	coalesce(service_tier, '') as service_tier,
-	failed,
-	input_tokens,
+		coalesce(service_tier, '') as service_tier,
+		failed,
+		`+normalizedInputExpr+`,
 	output_tokens,
 	reasoning_tokens,
 	`+compatCachedExpr+`,
@@ -1445,7 +1447,7 @@ func (r *repository) APIKeyModelStatsWithFilter(ctx context.Context, filter Anal
 	count(*),
 	sum(case when failed = 0 then 1 else 0 end),
 	sum(case when failed = 1 then 1 else 0 end),
-	coalesce(sum(input_tokens), 0),
+		coalesce(sum(`+normalizedInputExpr+`), 0),
 	coalesce(sum(output_tokens), 0),
 	coalesce(sum(`+compatCachedExpr+`), 0),
 	coalesce(sum(cache_read_tokens), 0),
@@ -1520,7 +1522,7 @@ func (r *repository) TaskBucketsWithFilter(ctx context.Context, filter Analytics
 	coalesce(auth_index, ''),
 	coalesce(group_concat(distinct model), ''),
 	coalesce(group_concat(distinct endpoint), ''),
-	coalesce(sum(input_tokens), 0),
+		coalesce(sum(`+normalizedInputExpr+`), 0),
 	coalesce(sum(output_tokens), 0),
 	coalesce(sum(`+compatCachedExpr+`), 0),
 	coalesce(sum(cache_read_tokens), 0),

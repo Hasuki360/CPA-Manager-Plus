@@ -352,7 +352,7 @@ func eventsAfterCheckpoint(ctx context.Context, tx *sql.Tx, lastEventID int64, l
 	coalesce(nullif(resolved_model, ''), model) as billing_model,
 	coalesce(service_tier, '') as service_tier,
 	failed,
-	coalesce(input_tokens, 0),
+	coalesce(normalized_total_input_tokens, input_tokens, 0),
 	coalesce(output_tokens, 0),
 	coalesce(reasoning_tokens, 0),
 	coalesce(cached_tokens, 0),

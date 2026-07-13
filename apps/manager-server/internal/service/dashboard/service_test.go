@@ -343,17 +343,17 @@ func TestSummaryPricesPriorityAndDefaultServiceTiersSeparately(t *testing.T) {
 		t.Fatalf("summary: %v", err)
 	}
 
-	if math.Abs(resp.Today.TotalCost-7.5) > 0.000001 {
-		t.Fatalf("today cost = %v, want 7.5", resp.Today.TotalCost)
+	if math.Abs(resp.Today.TotalCost-10) > 0.000001 {
+		t.Fatalf("today cost = %v, want 10", resp.Today.TotalCost)
 	}
 	if len(resp.TopModelsToday) != 1 || resp.TopModelsToday[0].Calls != 3 ||
-		math.Abs(resp.TopModelsToday[0].Cost-7.5) > 0.000001 {
+		math.Abs(resp.TopModelsToday[0].Cost-10) > 0.000001 {
 		t.Fatalf("top models = %#v", resp.TopModelsToday)
 	}
-	if len(resp.ModelCostRank) != 1 || math.Abs(resp.ModelCostRank[0].Cost-7.5) > 0.000001 {
+	if len(resp.ModelCostRank) != 1 || math.Abs(resp.ModelCostRank[0].Cost-10) > 0.000001 {
 		t.Fatalf("model cost rank = %#v", resp.ModelCostRank)
 	}
-	if len(resp.ChannelHealth) != 1 || math.Abs(resp.ChannelHealth[0].Cost-7.5) > 0.000001 {
+	if len(resp.ChannelHealth) != 1 || math.Abs(resp.ChannelHealth[0].Cost-10) > 0.000001 {
 		t.Fatalf("channel health = %#v", resp.ChannelHealth)
 	}
 	if resp.ChannelHealth[0].AverageLatencyMS == nil ||

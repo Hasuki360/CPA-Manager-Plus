@@ -289,9 +289,9 @@ func TestAnalyticsSummaryComparisonReturnsPreviousPeriod(t *testing.T) {
 }
 
 func TestCacheHitRateMatchesWebClient(t *testing.T) {
-	// Anthropic-style: InputTokens excludes cache, so denominator = input + cacheRead + cacheCreation.
+	// Repository aggregates expose normalized total input for Anthropic-style usage.
 	anthropic := cacheHitRate(TimelinePoint{
-		InputTokens:         100,
+		InputTokens:         450,
 		CacheReadTokens:     300,
 		CacheCreationTokens: 50,
 	})
@@ -354,7 +354,7 @@ func TestModelCacheHitRateUsesBillingModelBeforeAliasAggregation(t *testing.T) {
 			BillingModel:        "claude-sonnet-4",
 			Calls:               1,
 			SuccessCalls:        1,
-			InputTokens:         100,
+			InputTokens:         200,
 			CacheReadTokens:     50,
 			CacheCreationTokens: 50,
 		},
@@ -689,8 +689,8 @@ func TestAnalyticsPricesPriorityAndDefaultServiceTiersSeparately(t *testing.T) {
 
 	assertCost := func(name string, got float64) {
 		t.Helper()
-		if math.Abs(got-7.5) > 0.000001 {
-			t.Fatalf("%s cost = %v, want 7.5", name, got)
+		if math.Abs(got-10) > 0.000001 {
+			t.Fatalf("%s cost = %v, want 10", name, got)
 		}
 	}
 	if resp.Summary == nil {
@@ -1601,7 +1601,7 @@ func TestAccountHistoryReturnsRollupTotalsAndCost(t *testing.T) {
 	if history.SuccessRate == nil || math.Abs(*history.SuccessRate-0.5) > 0.000001 {
 		t.Fatalf("success rate = %#v", history.SuccessRate)
 	}
-	if math.Abs(history.TotalCost-1.985) > 0.000001 {
+	if math.Abs(history.TotalCost-2.055) > 0.000001 {
 		t.Fatalf("total cost = %v", history.TotalCost)
 	}
 	if history.FirstSeenMS == nil || *history.FirstSeenMS != baseMS+1_000 || history.LastSeenMS == nil || *history.LastSeenMS != baseMS+2_000 {

@@ -379,7 +379,9 @@ func TestNormalizeRawReadsAnthropicCacheUsageFields(t *testing.T) {
 	}
 	if event.InputTokens != 100 || event.OutputTokens != 20 ||
 		event.CachedTokens != 34 || event.CacheReadTokens != 23 ||
-		event.CacheCreationTokens != 11 || event.TotalTokens != 154 {
+		event.CacheCreationTokens != 11 || event.TotalTokens != 154 ||
+		event.CacheInputMode != CacheInputModeSeparate ||
+		event.NormalizedUncachedInputTokens != 100 || event.NormalizedTotalInputTokens != 134 {
 		t.Fatalf("event tokens = %#v", event)
 	}
 
@@ -430,6 +432,58 @@ func TestNormalizeRawReadsCacheWriteTokenAliases(t *testing.T) {
 	}
 }
 
+func TestNormalizeRawHandlesCurrentCPAGPT56QueuePayloadWithoutCacheMode(t *testing.T) {
+	payload := `{
+	  "timestamp": "2026-07-10T00:00:00Z",
+	  "provider": "openai",
+	  "executor_type": "codex",
+	  "model": "gpt-5.6-sol",
+	  "service_tier": "priority",
+	  "request_service_tier": "priority",
+	  "response_service_tier": "default",
+	  "tokens": {
+	    "input_tokens": 100,
+	    "output_tokens": 20,
+	    "cached_tokens": 30,
+	    "cache_read_tokens": 30,
+	    "cache_creation_tokens": 17,
+	    "total_tokens": 120
+	  }
+	}`
+
+	event, err := NormalizeRaw([]byte(payload))
+	if err != nil {
+		t.Fatalf("normalize current CPA payload: %v", err)
+	}
+	if event.CacheInputMode != CacheInputModeIncluded ||
+		event.NormalizedUncachedInputTokens != 53 || event.NormalizedTotalInputTokens != 100 ||
+		event.NormalizedCacheReadTokens != 30 || event.NormalizedCacheCreationTokens != 17 {
+		t.Fatalf("normalized cache accounting = %#v", event)
+	}
+	if event.RequestServiceTier != "priority" || event.ResponseServiceTier != "default" || event.ServiceTier != "default" {
+		t.Fatalf("service tiers = %q/%q/%q", event.RequestServiceTier, event.ResponseServiceTier, event.ServiceTier)
+	}
+}
+
+func TestNormalizeRawPrefersResponseServiceTier(t *testing.T) {
+	payload := `{
+	  "timestamp": "2026-07-10T00:00:00Z",
+	  "model": "gpt-5.6-sol",
+	  "service_tier": "priority",
+	  "request_service_tier": "priority",
+	  "response_service_tier": "default",
+	  "tokens": {"input_tokens": 1, "total_tokens": 1}
+	}`
+
+	event, err := NormalizeRaw([]byte(payload))
+	if err != nil {
+		t.Fatalf("normalize raw: %v", err)
+	}
+	if event.RequestServiceTier != "priority" || event.ResponseServiceTier != "default" || event.ServiceTier != "default" {
+		t.Fatalf("service tiers = %q/%q/%q", event.RequestServiceTier, event.ResponseServiceTier, event.ServiceTier)
+	}
+}
+
 func TestCompatibleCachedTokensDoesNotDoubleCountFineGrainedCache(t *testing.T) {
 	if got := CompatibleCachedTokens(5, 0, 4, 1); got != 0 {
 		t.Fatalf("fully mirrored cached tokens = %d, want 0", got)
@@ -442,7 +496,7 @@ func TestCompatibleCachedTokensDoesNotDoubleCountFineGrainedCache(t *testing.T) 
 	}
 }
 
-func TestNormalizeRawFallbackTotalIncludesFineGrainedCache(t *testing.T) {
+func TestNormalizeRawFallbackTotalAvoidsIncludedCacheDuplication(t *testing.T) {
 	payload := `{
 	  "timestamp": "2026-04-25T00:00:00Z",
 	  "source": "user@example.com",
@@ -461,8 +515,8 @@ func TestNormalizeRawFallbackTotalIncludesFineGrainedCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("normalize fallback total: %v", err)
 	}
-	if event.TotalTokens != 43 {
-		t.Fatalf("total tokens = %d, want 43", event.TotalTokens)
+	if event.TotalTokens != 33 {
+		t.Fatalf("total tokens = %d, want 33", event.TotalTokens)
 	}
 }
 
