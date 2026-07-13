@@ -456,27 +456,61 @@ export function AiProvidersPage() {
     );
 
     try {
-      await Promise.all([
-        changed.gemini ? providersApi.saveGeminiKeys(nextGemini) : Promise.resolve(),
-        changed.interactions
-          ? providersApi.saveInteractionsKeys(nextInteractions)
-          : Promise.resolve(),
-        changed.codex ? providersApi.saveCodexConfigs(nextCodex) : Promise.resolve(),
-        changed.claude ? providersApi.saveClaudeConfigs(nextClaude) : Promise.resolve(),
-        changed.vertex ? providersApi.saveVertexConfigs(nextVertex) : Promise.resolve(),
-        changed.openai ? providersApi.saveOpenAIProviders(nextOpenai) : Promise.resolve(),
-      ]);
+      const mutations: Array<() => Promise<unknown>> = [];
+      if (changed.gemini) {
+        nextGemini.forEach((item, index) => {
+          if (item !== previous.gemini[index]) {
+            mutations.push(() => providersApi.updateGeminiKey(previous.gemini[index], item));
+          }
+        });
+      }
+      if (changed.interactions) {
+        nextInteractions.forEach((item, index) => {
+          if (item !== previous.interactions[index]) {
+            mutations.push(() =>
+              providersApi.updateInteractionsKey(previous.interactions[index], item)
+            );
+          }
+        });
+      }
+      if (changed.codex) {
+        nextCodex.forEach((item, index) => {
+          if (item !== previous.codex[index]) {
+            mutations.push(() => providersApi.updateCodexConfig(previous.codex[index], item));
+          }
+        });
+      }
+      if (changed.claude) {
+        nextClaude.forEach((item, index) => {
+          if (item !== previous.claude[index]) {
+            mutations.push(() => providersApi.updateClaudeConfig(previous.claude[index], item));
+          }
+        });
+      }
+      if (changed.vertex) {
+        nextVertex.forEach((item, index) => {
+          if (item !== previous.vertex[index]) {
+            mutations.push(() => providersApi.updateVertexConfig(previous.vertex[index], item));
+          }
+        });
+      }
+      if (changed.openai) {
+        nextOpenai.forEach((item, index) => {
+          if (item !== previous.openai[index]) {
+            mutations.push(() =>
+              providersApi.updateOpenAIProvider(previous.openai[index].name, index, item)
+            );
+          }
+        });
+      }
+      for (const mutate of mutations) {
+        await mutate();
+      }
+      await loadConfigs();
       showNotification(t('ai_providers.health_check_apply_success'), 'success');
     } catch (err: unknown) {
       const message = getErrorMessage(err);
-      applyLocalState(
-        previous.gemini,
-        previous.interactions,
-        previous.codex,
-        previous.claude,
-        previous.vertex,
-        previous.openai
-      );
+      await loadConfigs();
       showNotification(`${t('notification.update_failed')}: ${message}`, 'error');
       throw err;
     } finally {
@@ -523,10 +557,11 @@ export function AiProvidersPage() {
 
       try {
         if (provider === 'gemini') {
-          await providersApi.saveGeminiKeys(nextList);
+          await providersApi.updateGeminiKey(current, nextItem);
         } else {
-          await providersApi.saveInteractionsKeys(nextList);
+          await providersApi.updateInteractionsKey(current, nextItem);
         }
+        await loadConfigs();
         showNotification(
           enabled ? t('notification.config_enabled') : t('notification.config_disabled'),
           'success'
@@ -584,12 +619,13 @@ export function AiProvidersPage() {
 
     try {
       if (provider === 'codex') {
-        await providersApi.saveCodexConfigs(nextList);
+        await providersApi.updateCodexConfig(current, nextItem);
       } else if (provider === 'claude') {
-        await providersApi.saveClaudeConfigs(nextList);
+        await providersApi.updateClaudeConfig(current, nextItem);
       } else {
-        await providersApi.saveVertexConfigs(nextList);
+        await providersApi.updateVertexConfig(current, nextItem);
       }
+      await loadConfigs();
       showNotification(
         enabled ? t('notification.config_enabled') : t('notification.config_disabled'),
         'success'
@@ -631,7 +667,8 @@ export function AiProvidersPage() {
     clearCache('openai-compatibility');
 
     try {
-      await providersApi.updateOpenAIProviderDisabled(index, !enabled);
+      await providersApi.updateOpenAIProvider(current.name, index, nextItem);
+      await loadConfigs();
       showNotification(
         enabled ? t('notification.config_enabled') : t('notification.config_disabled'),
         'success'
@@ -675,10 +712,12 @@ export function AiProvidersPage() {
 
     try {
       if (provider === 'codex') {
-        await providersApi.saveCodexConfigs(nextList);
+        await providersApi.updateCodexConfig(current, nextItem);
+        await loadConfigs();
         showNotification(t('notification.codex_config_updated'), 'success');
       } else {
-        await providersApi.saveClaudeConfigs(nextList);
+        await providersApi.updateClaudeConfig(current, nextItem);
+        await loadConfigs();
         showNotification(t('notification.claude_config_updated'), 'success');
       }
     } catch (err: unknown) {
@@ -731,10 +770,12 @@ export function AiProvidersPage() {
 
     try {
       if (provider === 'codex') {
-        await providersApi.saveCodexConfigs(nextList);
+        await providersApi.updateCodexConfig(current, nextItem);
+        await loadConfigs();
         showNotification(t('notification.codex_config_updated'), 'success');
       } else {
-        await providersApi.saveClaudeConfigs(nextList);
+        await providersApi.updateClaudeConfig(current, nextItem);
+        await loadConfigs();
         showNotification(t('notification.claude_config_updated'), 'success');
       }
     } catch (err: unknown) {
@@ -783,10 +824,11 @@ export function AiProvidersPage() {
 
       try {
         if (provider === 'gemini') {
-          await providersApi.saveGeminiKeys(nextList);
+          await providersApi.updateGeminiKey(current, nextItem);
         } else {
-          await providersApi.saveInteractionsKeys(nextList);
+          await providersApi.updateInteractionsKey(current, nextItem);
         }
+        await loadConfigs();
         showNotification(
           t(
             provider === 'gemini'
@@ -829,7 +871,8 @@ export function AiProvidersPage() {
       clearCache('openai-compatibility');
 
       try {
-        await providersApi.saveOpenAIProviders(nextList);
+        await providersApi.updateOpenAIProvider(current.name, index, nextItem);
+        await loadConfigs();
         showNotification(t('notification.openai_provider_updated'), 'success');
       } catch (err: unknown) {
         const message = getErrorMessage(err);
@@ -866,10 +909,12 @@ export function AiProvidersPage() {
 
     try {
       if (provider === 'codex') {
-        await providersApi.saveCodexConfigs(nextList);
+        await providersApi.updateCodexConfig(current, nextItem);
+        await loadConfigs();
         showNotification(t('notification.codex_config_updated'), 'success');
       } else {
-        await providersApi.saveClaudeConfigs(nextList);
+        await providersApi.updateClaudeConfig(current, nextItem);
+        await loadConfigs();
         showNotification(t('notification.claude_config_updated'), 'success');
       }
     } catch (err: unknown) {
@@ -917,10 +962,11 @@ export function AiProvidersPage() {
 
       try {
         if (row.kind === 'gemini') {
-          await providersApi.saveGeminiKeys(nextList);
+          await providersApi.updateGeminiKey(current, { ...current, priority: nextPriority });
         } else {
-          await providersApi.saveInteractionsKeys(nextList);
+          await providersApi.updateInteractionsKey(current, { ...current, priority: nextPriority });
         }
+        await loadConfigs();
         showNotification(
           t(
             row.kind === 'gemini'
@@ -962,7 +1008,11 @@ export function AiProvidersPage() {
       clearCache('openai-compatibility');
 
       try {
-        await providersApi.saveOpenAIProviders(nextList);
+        await providersApi.updateOpenAIProvider(current.name, row.originalIndex, {
+          ...current,
+          priority: nextPriority,
+        });
+        await loadConfigs();
         showNotification(t('notification.openai_provider_updated'), 'success');
       } catch (err: unknown) {
         const message = getErrorMessage(err);
@@ -1007,13 +1057,16 @@ export function AiProvidersPage() {
 
     try {
       if (row.kind === 'codex') {
-        await providersApi.saveCodexConfigs(nextList);
+        await providersApi.updateCodexConfig(current, { ...current, priority: nextPriority });
+        await loadConfigs();
         showNotification(t('notification.codex_config_updated'), 'success');
       } else if (row.kind === 'claude') {
-        await providersApi.saveClaudeConfigs(nextList);
+        await providersApi.updateClaudeConfig(current, { ...current, priority: nextPriority });
+        await loadConfigs();
         showNotification(t('notification.claude_config_updated'), 'success');
       } else {
-        await providersApi.saveVertexConfigs(nextList);
+        await providersApi.updateVertexConfig(current, { ...current, priority: nextPriority });
+        await loadConfigs();
         showNotification(t('notification.vertex_config_updated'), 'success');
       }
     } catch (err: unknown) {

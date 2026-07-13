@@ -620,3 +620,74 @@ describe('providersApi v1.16 provider fields', () => {
     ]);
   });
 });
+
+describe('providersApi optimistic provider mutations', () => {
+  it('appends to the latest Gemini list without dropping concurrent records', async () => {
+    mocks.get.mockResolvedValueOnce({
+      'gemini-api-key': [{ 'api-key': 'concurrent-key', 'raw-field': 'keep' }],
+    });
+    mocks.put.mockResolvedValue({});
+
+    await providersApi.createGeminiKey({ apiKey: 'new-key' });
+
+    expect(mocks.put).toHaveBeenCalledWith('/gemini-api-key', [
+      { 'api-key': 'concurrent-key', 'raw-field': 'keep' },
+      { 'api-key': 'new-key' },
+    ]);
+  });
+
+  it('updates only the matching auth-index record and preserves unrelated records', async () => {
+    mocks.get.mockResolvedValueOnce({
+      'codex-api-key': [
+        { 'auth-index': 'auth-1', 'api-key': 'old', 'raw-field': 'keep' },
+        { 'api-key': 'concurrent-key', priority: 9 },
+      ],
+    });
+    mocks.put.mockResolvedValue({});
+
+    await providersApi.updateCodexConfig(
+      { apiKey: '', authIndex: 'auth-1' },
+      { apiKey: '', authIndex: 'auth-1', prefix: 'updated' }
+    );
+
+    expect(mocks.put).toHaveBeenCalledWith('/codex-api-key', [
+      { 'raw-field': 'keep', 'auth-index': 'auth-1', prefix: 'updated' },
+      { 'api-key': 'concurrent-key', priority: 9 },
+    ]);
+  });
+
+  it('rejects an update when the original provider no longer exists', async () => {
+    mocks.get.mockResolvedValueOnce({ 'interactions-api-key': [] });
+
+    await expect(
+      providersApi.updateInteractionsKey({ apiKey: 'removed' }, { apiKey: 'updated' })
+    ).rejects.toThrow('Provider configuration changed; refresh and try again.');
+    expect(mocks.put).not.toHaveBeenCalled();
+  });
+
+  it('updates OpenAI by original name and index while preserving concurrent records', async () => {
+    mocks.get.mockResolvedValueOnce({
+      'openai-compatibility': [
+        { name: 'target', 'base-url': 'https://old.example/v1', 'raw-field': 'keep' },
+        { name: 'concurrent', 'base-url': 'https://other.example/v1' },
+      ],
+    });
+    mocks.put.mockResolvedValue({});
+
+    await providersApi.updateOpenAIProvider('target', 0, {
+      name: 'renamed',
+      baseUrl: 'https://new.example/v1',
+      apiKeyEntries: [],
+    });
+
+    expect(mocks.put).toHaveBeenCalledWith('/openai-compatibility', [
+      {
+        'raw-field': 'keep',
+        name: 'renamed',
+        'base-url': 'https://new.example/v1',
+        'api-key-entries': [],
+      },
+      { name: 'concurrent', 'base-url': 'https://other.example/v1' },
+    ]);
+  });
+});

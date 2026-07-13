@@ -330,16 +330,31 @@ export function GeminiEditDrawer({
         authIndex: normalizeAuthIndex(form.authIndex) ?? undefined,
         disableCooling: form.disableCooling,
       };
-      const nextList =
-        editIndex !== null
-          ? configs.map((item, idx) => (idx === editIndex ? payload : item))
-          : [...configs, payload];
       if (isInteractions) {
-        await providersApi.saveInteractionsKeys(nextList);
+        if (editIndex !== null) {
+          await providersApi.updateInteractionsKey(configs[editIndex], payload);
+        } else {
+          await providersApi.createInteractionsKey(payload);
+        }
       } else {
-        await providersApi.saveGeminiKeys(nextList);
+        if (editIndex !== null) {
+          await providersApi.updateGeminiKey(configs[editIndex], payload);
+        } else {
+          await providersApi.createGeminiKey(payload);
+        }
       }
-      updateConfigValue(configSection, nextList);
+      const syncedList = isInteractions
+        ? await providersApi.getInteractionsKeys().catch(() =>
+            editIndex !== null
+              ? configs.map((item, index) => (index === editIndex ? payload : item))
+              : [...configs, payload]
+          )
+        : await providersApi.getGeminiKeys().catch(() =>
+            editIndex !== null
+              ? configs.map((item, index) => (index === editIndex ? payload : item))
+              : [...configs, payload]
+          );
+      updateConfigValue(configSection, syncedList);
       clearCache(configSection);
       showNotification(
         editIndex !== null
