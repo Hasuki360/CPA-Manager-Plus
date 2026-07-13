@@ -38,6 +38,9 @@ func Migrate(db *sql.DB) error {
 			resolved_model text,
 			reasoning_effort text,
 			service_tier text,
+			request_service_tier text,
+			response_service_tier text,
+			cache_input_mode text,
 			input_tokens integer not null default 0,
 			output_tokens integer not null default 0,
 			reasoning_tokens integer not null default 0,
@@ -45,6 +48,10 @@ func Migrate(db *sql.DB) error {
 			cache_tokens integer not null default 0,
 			cache_read_tokens integer not null default 0,
 			cache_creation_tokens integer not null default 0,
+			normalized_uncached_input_tokens integer,
+			normalized_total_input_tokens integer,
+			normalized_cache_read_tokens integer,
+			normalized_cache_creation_tokens integer,
 			total_tokens integer not null default 0,
 			latency_ms integer,
 			ttft_ms integer,
@@ -510,7 +517,13 @@ func ensureCodexInspectionResultColumns(db *sql.DB) error {
 }
 
 func ensureUsageEventSnapshotColumns(db *sql.DB) error {
-	rows, err := db.Query(`pragma table_info(usage_events)`)
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	rows, err := tx.Query(`pragma table_info(usage_events)`)
 	if err != nil {
 		return err
 	}
@@ -532,6 +545,9 @@ func ensureUsageEventSnapshotColumns(db *sql.DB) error {
 	if err := rows.Err(); err != nil {
 		return err
 	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
 
 	columns := []struct {
 		name       string
@@ -548,8 +564,15 @@ func ensureUsageEventSnapshotColumns(db *sql.DB) error {
 		{name: "resolved_model", definition: "text"},
 		{name: "reasoning_effort", definition: "text"},
 		{name: "service_tier", definition: "text"},
+		{name: "request_service_tier", definition: "text"},
+		{name: "response_service_tier", definition: "text"},
+		{name: "cache_input_mode", definition: "text"},
 		{name: "cache_read_tokens", definition: "integer not null default 0"},
 		{name: "cache_creation_tokens", definition: "integer not null default 0"},
+		{name: "normalized_uncached_input_tokens", definition: "integer"},
+		{name: "normalized_total_input_tokens", definition: "integer"},
+		{name: "normalized_cache_read_tokens", definition: "integer"},
+		{name: "normalized_cache_creation_tokens", definition: "integer"},
 		{name: "ttft_ms", definition: "integer"},
 		{name: "fail_status_code", definition: "integer"},
 		{name: "fail_summary", definition: "text"},
@@ -566,7 +589,7 @@ func ensureUsageEventSnapshotColumns(db *sql.DB) error {
 		if _, ok := existing[column.name]; ok {
 			continue
 		}
-		if _, err := db.Exec(fmt.Sprintf(
+		if _, err := tx.Exec(fmt.Sprintf(
 			`alter table usage_events add column %s %s`,
 			column.name,
 			column.definition,
@@ -579,11 +602,59 @@ func ensureUsageEventSnapshotColumns(db *sql.DB) error {
 		`create index if not exists idx_usage_events_header_error_kind on usage_events(header_error_kind)`,
 		`create index if not exists idx_usage_events_header_trace_id on usage_events(header_trace_id)`,
 	} {
-		if _, err := db.Exec(statement); err != nil {
+		if _, err := tx.Exec(statement); err != nil {
 			return err
 		}
 	}
-	return nil
+	if _, err := tx.Exec(`update usage_events set
+		cache_input_mode = case
+			when lower(coalesce(provider, '') || ' ' || coalesce(executor_type, '') || ' ' || coalesce(resolved_model, '') || ' ' || coalesce(model, '')) like '%anthropic%'
+				or lower(coalesce(provider, '') || ' ' || coalesce(executor_type, '') || ' ' || coalesce(resolved_model, '') || ' ' || coalesce(model, '')) like '%claude%'
+				then 'separate_from_input'
+			when lower(coalesce(provider, '') || ' ' || coalesce(executor_type, '') || ' ' || coalesce(resolved_model, '') || ' ' || coalesce(model, '')) like '%openai%'
+				or lower(coalesce(provider, '') || ' ' || coalesce(executor_type, '') || ' ' || coalesce(resolved_model, '') || ' ' || coalesce(model, '')) like '%codex%'
+				or lower(coalesce(provider, '') || ' ' || coalesce(executor_type, '') || ' ' || coalesce(resolved_model, '') || ' ' || coalesce(model, '')) like '%gemini%'
+				or lower(coalesce(provider, '') || ' ' || coalesce(executor_type, '') || ' ' || coalesce(resolved_model, '') || ' ' || coalesce(model, '')) like '%antigravity%'
+				or lower(coalesce(provider, '') || ' ' || coalesce(executor_type, '') || ' ' || coalesce(resolved_model, '') || ' ' || coalesce(model, '')) like '%gpt-%'
+				then 'included_in_input'
+			when coalesce(cache_read_tokens, 0) > 0 or coalesce(cache_creation_tokens, 0) > 0 then 'separate_from_input'
+			else 'included_in_input'
+		end
+	where cache_input_mode is null or trim(cache_input_mode) = ''`); err != nil {
+		return err
+	}
+	compatCache := `max(max(cached_tokens, cache_tokens) - max(cache_read_tokens, 0) - max(cache_creation_tokens, 0), 0)`
+	normalizedRead := compatCache + ` + max(cache_read_tokens, 0)`
+	result, err := tx.Exec(`update usage_events set
+		normalized_cache_read_tokens = ` + normalizedRead + `,
+		normalized_cache_creation_tokens = max(cache_creation_tokens, 0),
+		normalized_uncached_input_tokens = case
+			when cache_input_mode = 'separate_from_input' then max(input_tokens, 0)
+			else max(input_tokens - (` + normalizedRead + `) - max(cache_creation_tokens, 0), 0)
+		end,
+		normalized_total_input_tokens = case
+			when cache_input_mode = 'separate_from_input' then max(input_tokens, 0) + (` + normalizedRead + `) + max(cache_creation_tokens, 0)
+			else max(input_tokens, 0)
+		end
+	where normalized_uncached_input_tokens is null
+		or normalized_total_input_tokens is null
+		or normalized_cache_read_tokens is null
+		or normalized_cache_creation_tokens is null`)
+	if err != nil {
+		return err
+	}
+	if affected, _ := result.RowsAffected(); affected > 0 {
+		for _, statement := range []string{
+			`delete from usage_account_model_rollups`,
+			`delete from usage_dashboard_hourly_rollups`,
+			`update usage_rollup_checkpoints set last_event_id = 0, updated_at_ms = 0, last_error = null`,
+		} {
+			if _, err := tx.Exec(statement); err != nil {
+				return err
+			}
+		}
+	}
+	return tx.Commit()
 }
 
 func ensureModelPriceColumns(db *sql.DB) error {

@@ -66,6 +66,97 @@ func TestEnsureUsageRollupLongContextColumnsRollsBackAndRetries(t *testing.T) {
 	assertTableCount(t, db, "usage_rollup_checkpoints", 0)
 }
 
+func TestEnsureUsageEventSnapshotColumnsRollsBackAndRetries(t *testing.T) {
+	db, err := sql.Open("sqlite", dataSourceName(filepath.Join(t.TempDir(), "usage-event-migration.sqlite")))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	for _, statement := range []string{
+		`create table usage_events (
+			id integer primary key,
+			provider text,
+			model text not null,
+			input_tokens integer not null default 0,
+			cached_tokens integer not null default 0,
+			cache_tokens integer not null default 0
+		)`,
+		`insert into usage_events (id, provider, model, input_tokens, cached_tokens, cache_tokens)
+		values (1, 'anthropic', 'claude-sonnet-4', 100, 300, 0)`,
+		`create table usage_account_model_rollups (id integer primary key)`,
+		`create table usage_dashboard_hourly_rollups (id integer primary key)`,
+		`create table usage_rollup_checkpoints (
+			name text primary key,
+			last_event_id integer not null,
+			updated_at_ms integer not null,
+			last_error text
+		)`,
+		`insert into usage_account_model_rollups (id) values (1)`,
+		`insert into usage_dashboard_hourly_rollups (id) values (1)`,
+		`insert into usage_rollup_checkpoints (name, last_event_id, updated_at_ms, last_error)
+		values ('account_history', 1, 1, 'old')`,
+		`create trigger reject_dashboard_rollup_delete before delete on usage_dashboard_hourly_rollups
+		begin select raise(abort, 'blocked'); end`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatalf("setup migration fixture: %v", err)
+		}
+	}
+
+	if err := ensureUsageEventSnapshotColumns(db); err == nil {
+		t.Fatal("migration error = nil, want trigger failure")
+	}
+	columns := migrationTableColumns(t, db, "usage_events")
+	if columns["cache_input_mode"] || columns["normalized_total_input_tokens"] {
+		t.Fatalf("usage event columns committed after failed migration: %#v", columns)
+	}
+	assertTableCount(t, db, "usage_account_model_rollups", 1)
+	assertTableCount(t, db, "usage_dashboard_hourly_rollups", 1)
+
+	if _, err := db.Exec(`drop trigger reject_dashboard_rollup_delete`); err != nil {
+		t.Fatalf("drop failure trigger: %v", err)
+	}
+	if err := ensureUsageEventSnapshotColumns(db); err != nil {
+		t.Fatalf("retry migration: %v", err)
+	}
+	columns = migrationTableColumns(t, db, "usage_events")
+	for _, column := range []string{
+		"request_service_tier",
+		"response_service_tier",
+		"cache_input_mode",
+		"normalized_uncached_input_tokens",
+		"normalized_total_input_tokens",
+		"normalized_cache_read_tokens",
+		"normalized_cache_creation_tokens",
+	} {
+		if !columns[column] {
+			t.Fatalf("usage_events missing column %s after retry: %#v", column, columns)
+		}
+	}
+	var mode string
+	var uncachedInput, totalInput, cacheRead, cacheCreation int64
+	if err := db.QueryRow(`select cache_input_mode, normalized_uncached_input_tokens,
+		normalized_total_input_tokens, normalized_cache_read_tokens, normalized_cache_creation_tokens
+		from usage_events where id = 1`).Scan(&mode, &uncachedInput, &totalInput, &cacheRead, &cacheCreation); err != nil {
+		t.Fatalf("read migrated usage event: %v", err)
+	}
+	if mode != "separate_from_input" || uncachedInput != 100 || totalInput != 400 || cacheRead != 300 || cacheCreation != 0 {
+		t.Fatalf("normalized usage = %q/%d/%d/%d/%d", mode, uncachedInput, totalInput, cacheRead, cacheCreation)
+	}
+	assertTableCount(t, db, "usage_account_model_rollups", 0)
+	assertTableCount(t, db, "usage_dashboard_hourly_rollups", 0)
+	var lastEventID, updatedAt int64
+	var lastError sql.NullString
+	if err := db.QueryRow(`select last_event_id, updated_at_ms, last_error
+		from usage_rollup_checkpoints where name = 'account_history'`).Scan(&lastEventID, &updatedAt, &lastError); err != nil {
+		t.Fatalf("read reset checkpoint: %v", err)
+	}
+	if lastEventID != 0 || updatedAt != 0 || lastError.Valid {
+		t.Fatalf("checkpoint = %d/%d/%v", lastEventID, updatedAt, lastError)
+	}
+}
+
 func TestEnsureModelPriceColumnsPreservesLegacyZeroBasePrices(t *testing.T) {
 	db, err := sql.Open("sqlite", dataSourceName(filepath.Join(t.TempDir(), "model-price-migration.sqlite")))
 	if err != nil {
