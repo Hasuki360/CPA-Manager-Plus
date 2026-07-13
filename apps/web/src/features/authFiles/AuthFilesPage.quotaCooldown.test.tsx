@@ -432,6 +432,33 @@ describe('AuthFilesPage quota cooldown derived badge', () => {
     ).toBe('');
   });
 
+  it('shows an active xAI quota cooldown badge', async () => {
+    mocks.list.mockReturnValue([
+      { name: 'xai-one.json', type: 'xai', authIndex: 'xai-1' },
+      { name: 'codex-two.json', type: 'codex' },
+    ]);
+    mocks.getActiveQuotaCooldowns.mockResolvedValue([
+      {
+        authFileName: 'xai-one.json',
+        authIndex: 'xai-1',
+        provider: 'xai',
+        owner: 'cpamp_xai_free_usage',
+        recoverAtMs: 2_000_000_000_000,
+      },
+    ]);
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<AuthFilesPage />);
+    });
+
+    await vi.waitFor(() => {
+      expect(renderer!.root.findByProps({ 'data-auth-card': 'xai-one.json' }).props['data-quota-cooldown']).toBe(
+        'xai-one.json@2000000000000'
+      );
+    });
+  });
+
   it('passes observed Codex quota from usage response headers to auth file cards', async () => {
     mocks.getHeaderSnapshots.mockResolvedValue({
       generated_at_ms: 1_700_000_000_000,

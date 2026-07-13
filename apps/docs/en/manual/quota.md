@@ -34,7 +34,7 @@ Different providers return different data. Unknown means CPAMP did not get enoug
 
 ## Quota Cooldown
 
-When quota cooldown is enabled and an account reaches its usage limit, CPAMP can temporarily disable the related auth file and recover it after the reset time.
+When quota cooldown is enabled and a supported account reaches a strict quota signal, CPAMP can temporarily disable the related auth file and recover it after the reset time. Supported signals currently include Codex `usage_limit_reached` with an explicit reset and xAI `subscription:free-usage-exhausted`, which uses the documented rolling 24-hour recovery window.
 
 Notes:
 

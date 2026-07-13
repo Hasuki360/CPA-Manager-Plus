@@ -303,7 +303,8 @@ export function AuthFilesPage() {
   const uniqueAuthFileKeyByFallbackCooldownKey = useMemo(() => {
     const fallbackEntries = new Map<string, { authFileKey: string; count: number }>();
     files.forEach((file) => {
-      if (isRuntimeOnlyAuthFile(file) || resolveAuthProvider(file) !== 'codex') return;
+      const provider = resolveAuthProvider(file);
+      if (isRuntimeOnlyAuthFile(file) || (provider !== 'codex' && provider !== 'xai')) return;
       const fallbackKey = getAuthFileCodexInspectionKey(file.name, null);
       const authFileKey = getAuthFileCodexInspectionKeyForFile(file);
       const existing = fallbackEntries.get(fallbackKey);
@@ -322,7 +323,8 @@ export function AuthFilesPage() {
   }, [files]);
   const getQuotaCooldownForFile = useCallback(
     (file: AuthFileItem): QuotaCooldownInfo | undefined => {
-      if (isRuntimeOnlyAuthFile(file) || resolveAuthProvider(file) !== 'codex') {
+      const provider = resolveAuthProvider(file);
+      if (isRuntimeOnlyAuthFile(file) || (provider !== 'codex' && provider !== 'xai')) {
         return undefined;
       }
       const authFileKey = getAuthFileCodexInspectionKeyForFile(file);
