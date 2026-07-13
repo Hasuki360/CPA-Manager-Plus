@@ -698,7 +698,9 @@ const buildRealtimeTokenSummary = (row: MonitoringEventRow, t: TFunction, locale
   const cacheTitle: string[] = [];
   if (row.cachedTokens > 0) {
     cache.push(`C ${formatRealtimeUsageNumber(row.cachedTokens, locale)}`);
-    cacheTitle.push(`${t('monitoring.cached_tokens')}: ${formatRealtimeUsageNumber(row.cachedTokens, locale)}`);
+    cacheTitle.push(
+      `${t('monitoring.cached_tokens')}: ${formatRealtimeUsageNumber(row.cachedTokens, locale)}`
+    );
   }
   if (row.cacheReadTokens > 0) {
     cache.push(`CR ${formatRealtimeUsageNumber(row.cacheReadTokens, locale)}`);

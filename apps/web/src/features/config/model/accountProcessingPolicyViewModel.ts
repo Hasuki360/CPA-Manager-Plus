@@ -1,7 +1,7 @@
 import type { AccountPolicyCapability, AccountProcessingPolicy } from '@/services/api/usageService';
 
 export type AccountPolicyCapabilityKey =
-  | 'codexQuotaCooldown'
+  | 'providerQuotaCooldown'
   | 'antigravityQuotaCooldown'
   | 'authIssueQueue'
   | 'authIssueAutoDisable';
@@ -42,11 +42,21 @@ export interface AccountPolicyViewGroup {
 }
 
 const capabilityKeys: AccountPolicyCapabilityKey[] = [
-  'codexQuotaCooldown',
+  'providerQuotaCooldown',
   'antigravityQuotaCooldown',
   'authIssueQueue',
   'authIssueAutoDisable',
 ];
+
+const capabilitySourceKey: Record<
+  AccountPolicyCapabilityKey,
+  'codexQuotaCooldown' | 'antigravityQuotaCooldown' | 'authIssueQueue' | 'authIssueAutoDisable'
+> = {
+  providerQuotaCooldown: 'codexQuotaCooldown',
+  antigravityQuotaCooldown: 'antigravityQuotaCooldown',
+  authIssueQueue: 'authIssueQueue',
+  authIssueAutoDisable: 'authIssueAutoDisable',
+};
 
 const capabilityMetadata: Record<
   AccountPolicyCapabilityKey,
@@ -55,12 +65,12 @@ const capabilityMetadata: Record<
     'titleKey' | 'descriptionKey' | 'behaviorKey' | 'summaryKey' | 'toggleLabelKey' | 'nested'
   >
 > = {
-  codexQuotaCooldown: {
-    titleKey: 'accountPolicy.codexQuotaCooldown_title',
-    descriptionKey: 'accountPolicy.codexQuotaCooldown_description',
-    behaviorKey: 'accountPolicy.codexQuotaCooldown_behavior',
-    summaryKey: 'accountPolicy.codexQuotaCooldown_summary',
-    toggleLabelKey: 'accountPolicy.codexQuotaCooldown_toggle',
+  providerQuotaCooldown: {
+    titleKey: 'accountPolicy.providerQuotaCooldown_title',
+    descriptionKey: 'accountPolicy.providerQuotaCooldown_description',
+    behaviorKey: 'accountPolicy.providerQuotaCooldown_behavior',
+    summaryKey: 'accountPolicy.providerQuotaCooldown_summary',
+    toggleLabelKey: 'accountPolicy.providerQuotaCooldown_toggle',
     nested: false,
   },
   antigravityQuotaCooldown: {
@@ -99,7 +109,7 @@ const groupDefinitions: Array<{
     key: 'quota',
     titleKey: 'accountPolicy.group_quota_title',
     descriptionKey: 'accountPolicy.group_quota_description',
-    itemKeys: ['codexQuotaCooldown', 'antigravityQuotaCooldown'],
+    itemKeys: ['providerQuotaCooldown', 'antigravityQuotaCooldown'],
   },
   {
     key: 'authIssues',
@@ -130,13 +140,16 @@ function buildItem(
   key: AccountPolicyCapabilityKey,
   options: AccountPolicyViewOptions
 ): AccountPolicyViewItem {
-  const capability = status[key];
+  const capability = status[capabilitySourceKey[key]];
   const configured = capability.configured ?? capability.enabled;
   const enabled = Boolean(capability.enabled);
   const locked = Boolean(capability.locked);
   const dependencyKey = parseCapabilityKey(capability.dependsOn);
+  const dependencyCapability = dependencyKey
+    ? status[capabilitySourceKey[dependencyKey]]
+    : undefined;
   const dependencyBlocked = Boolean(
-    dependencyKey && status[dependencyKey] && !status[dependencyKey].enabled
+    dependencyKey && dependencyCapability && !dependencyCapability.enabled
   );
   const toggleDisabled = Boolean(
     options.loading ||

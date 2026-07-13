@@ -57,7 +57,7 @@ describe('buildAccountProcessingPolicyViewModel', () => {
     expect(groups).toHaveLength(2);
     expect(groups[0].key).toBe('quota');
     expect(groups[0].items.map((item) => item.key)).toEqual([
-      'codexQuotaCooldown',
+      'providerQuotaCooldown',
       'antigravityQuotaCooldown',
     ]);
     expect(groups[1].key).toBe('authIssues');
@@ -115,6 +115,7 @@ describe('buildAccountProcessingPolicyViewModel', () => {
     );
 
     const quota = groups[0].items[0];
+    expect(quota.key).toBe('providerQuotaCooldown');
     expect(quota.locked).toBe(true);
     expect(quota.statusTone).toBe('locked');
     expect(quota.toggleDisabled).toBe(true);
