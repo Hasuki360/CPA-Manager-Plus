@@ -715,8 +715,7 @@ const buildRealtimeTokenSummary = (row: MonitoringEventRow, t: TFunction, locale
   return {
     primary: primary.join(' · '),
     cache: cache.join(' · '),
-    cacheTitle: cacheTitle.join('
-'),
+    cacheTitle: cacheTitle.join('\n'),
     cacheAriaLabel: cacheTitle.join(', '),
   };
 };
