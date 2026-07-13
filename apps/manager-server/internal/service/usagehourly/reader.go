@@ -168,7 +168,7 @@ func (r *Reader) AnalyticsTimeline(
 	if granularity != "day" {
 		granularity = "hour"
 	}
-	if !bucketsRepresentable(snapshot.fullStartMS, snapshot.fullEndMS, granularity, location) {
+	if !usage.CanMapUTCWholeHours(snapshot.fullStartMS, snapshot.fullEndMS, granularity, location) {
 		return nil, false
 	}
 
@@ -203,7 +203,7 @@ func (r *Reader) CanRepresentAnalyticsTimeline(fromMS, toMS int64, granularity s
 	}
 	fullStartMS := ceilHourMS(fromMS)
 	fullEndMS := floorHourMS(toMS)
-	return fullStartMS < fullEndMS && bucketsRepresentable(fullStartMS, fullEndMS, granularity, location)
+	return fullStartMS < fullEndMS && usage.CanMapUTCWholeHours(fullStartMS, fullEndMS, granularity, location)
 }
 
 func rawEdges(fromMS, toMS, fullStartMS, fullEndMS int64) []timeRange {
@@ -499,15 +499,6 @@ func sortedAnalyticsTimeline(grouped map[analyticsTimelineKey]*store.TimelinePoi
 		return result[i].ServiceTier < result[j].ServiceTier
 	})
 	return result
-}
-
-func bucketsRepresentable(fromMS, toMS int64, granularity string, location *time.Location) bool {
-	for bucketMS := fromMS; bucketMS < toMS; bucketMS += hourMS {
-		if usage.AnalyticsBucketMS(bucketMS, granularity, location) != usage.AnalyticsBucketMS(bucketMS+hourMS-1, granularity, location) {
-			return false
-		}
-	}
-	return true
 }
 
 func (r *Reader) logFallback(reason string) {
