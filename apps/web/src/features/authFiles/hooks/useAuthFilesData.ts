@@ -8,10 +8,9 @@ import { formatFileSize } from '@/utils/format';
 import { MAX_AUTH_FILE_SIZE } from '@/utils/constants';
 import { downloadBlob } from '@/utils/download';
 import {
-  convertAuthJsonInput,
-  getDefaultSub2ApiAuthFileName,
-  getDefaultSessionAuthFileName,
-  type AuthJsonConversionResult,
+  buildAuthJsonFilePayloads,
+  isSub2ApiAuthJsonInput,
+  type AuthJsonFilePayload,
   type AuthJsonInputType,
 } from '@/features/authFiles/sessionAuthConverter';
 import {
@@ -26,6 +25,7 @@ import {
   getAuthFileSelectionKey,
   type AuthFilePatchTarget,
 } from '@/features/authFiles/model/authFilesPageModel';
+import { clearCodexInspectionDisableOwnership } from '@/features/monitoring/model/codexInspectionOwnership';
 
 type DeleteAllOptions = {
   filter: string;
@@ -67,7 +67,7 @@ export type UseAuthFilesDataResult = {
     type: AuthJsonInputType,
     fileName: string,
     jsonText: string
-  ) => Promise<string>;
+  ) => Promise<string[]>;
   handleDelete: (name: string) => void;
   handleDeleteAll: (options: DeleteAllOptions) => void;
   handleDownload: (name: string) => Promise<void>;
@@ -85,9 +85,15 @@ export type UseAuthFilesDataResult = {
   batchDelete: (names: string[]) => void;
 };
 
-type PastedAuthJsonPayload = {
-  authJson: AuthJsonConversionResult;
-  resolvedFileName: string;
+type AuthFilePreparationFailure = {
+  name: string;
+  error: string;
+};
+
+export type PreparedAuthFileUpload = {
+  files: File[];
+  failures: AuthFilePreparationFailure[];
+  convertedSourceCount: number;
 };
 
 type AuthFilePatchTargetGroup = {
@@ -148,25 +154,102 @@ const groupBatchPatchTargets = (targets: AuthFilePatchTarget[]): AuthFilePatchTa
   return Array.from(groups.values());
 };
 
-export const buildPastedAuthJsonPayload = (
+export const buildPastedAuthJsonPayloads = (
   type: AuthJsonInputType,
   fileName: string,
   jsonText: string
-): PastedAuthJsonPayload => {
-  const authJson = convertAuthJsonInput(jsonText, type);
-  const resolvedFileName =
-    type === 'session' && fileName === 'codex-account.json'
-      ? getDefaultSessionAuthFileName(authJson as Record<string, unknown>)
-      : type === 'sub2api' && fileName === 'codex-account.json'
-        ? getDefaultSub2ApiAuthFileName(authJson)
-        : fileName;
+): AuthJsonFilePayload[] => buildAuthJsonFilePayloads(type, fileName, jsonText);
+
+const appendUploadFileNameSuffix = (fileName: string, suffix: number) => {
+  const baseName = fileName.toLowerCase().endsWith('.json')
+    ? fileName.slice(0, -'.json'.length)
+    : fileName;
+  return `${baseName}-${suffix}.json`;
+};
+
+const hasAuthFileUploadFailureStatus = (status: string) => {
+  const normalizedStatus = status.trim().toLowerCase();
+  return (
+    normalizedStatus === 'error' || normalizedStatus === 'failed' || normalizedStatus === 'partial'
+  );
+};
+
+const createUniqueConvertedAuthFiles = (
+  payloads: AuthJsonFilePayload[],
+  reservedFileNames: Iterable<string>
+) => {
+  const usedNames = new Set(Array.from(reservedFileNames, (name) => name.toLowerCase()));
+
+  return payloads.map((payload) => {
+    let fileName = payload.fileName;
+    let suffix = 2;
+    while (usedNames.has(fileName.toLowerCase())) {
+      fileName = appendUploadFileNameSuffix(payload.fileName, suffix);
+      suffix += 1;
+    }
+    usedNames.add(fileName.toLowerCase());
+    return new File([JSON.stringify(payload.authJson)], fileName, { type: 'application/json' });
+  });
+};
+
+export const prepareAuthFilesForUpload = async (files: File[]): Promise<PreparedAuthFileUpload> => {
+  const ordinaryFiles: File[] = [];
+  const convertedPayloads: AuthJsonFilePayload[] = [];
+  const failures: AuthFilePreparationFailure[] = [];
+  let convertedSourceCount = 0;
+
+  for (const file of files) {
+    let text: string;
+    try {
+      text = await file.text();
+    } catch (err) {
+      failures.push({
+        name: file.name,
+        error: err instanceof Error ? err.message : 'Failed to read file',
+      });
+      continue;
+    }
+
+    if (!isSub2ApiAuthJsonInput(text, MAX_AUTH_FILE_SIZE)) {
+      ordinaryFiles.push(file);
+      continue;
+    }
+
+    try {
+      convertedPayloads.push(
+        ...buildAuthJsonFilePayloads(
+          'sub2api',
+          'codex-account.json',
+          text,
+          new Date(),
+          MAX_AUTH_FILE_SIZE
+        )
+      );
+      convertedSourceCount += 1;
+    } catch (err) {
+      failures.push({
+        name: file.name,
+        error: err instanceof Error ? err.message : 'Failed to convert sub2api auth JSON',
+      });
+    }
+  }
+
+  const convertedFiles = createUniqueConvertedAuthFiles(
+    convertedPayloads,
+    ordinaryFiles.map((file) => file.name)
+  );
   return {
-    authJson,
-    resolvedFileName,
+    files: [...ordinaryFiles, ...convertedFiles],
+    failures,
+    convertedSourceCount,
   };
 };
 
-export function useAuthFilesData(): UseAuthFilesDataResult {
+type UseAuthFilesDataOptions = {
+  connectionFingerprint?: string | null;
+};
+
+export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuthFilesDataResult {
   const { t } = useTranslation();
   const { showNotification, showConfirmation } = useNotificationStore();
 
@@ -187,6 +270,14 @@ export function useAuthFilesData(): UseAuthFilesDataResult {
   const batchStatusPendingRef = useRef(false);
   const batchFieldsPendingRef = useRef(false);
   const selectionCount = selectedFiles.size;
+  const clearInspectionOwnershipForFile = useCallback(
+    (fileName: string) => {
+      const scope = options.connectionFingerprint?.trim();
+      if (!scope) return;
+      clearCodexInspectionDisableOwnership(scope, fileName);
+    },
+    [options.connectionFingerprint]
+  );
   const toggleSelect = useCallback((key: string) => {
     setSelectedFiles((prev) => {
       const next = new Set(prev);
@@ -234,27 +325,31 @@ export function useAuthFilesData(): UseAuthFilesDataResult {
     setSelectedFiles(new Set());
   }, []);
 
-  const applyDeletedFiles = useCallback((names: string[]) => {
-    const deletedNames = Array.from(new Set(names.map((name) => name.trim()).filter(Boolean)));
-    if (deletedNames.length === 0) return;
+  const applyDeletedFiles = useCallback(
+    (names: string[]) => {
+      const deletedNames = Array.from(new Set(names.map((name) => name.trim()).filter(Boolean)));
+      if (deletedNames.length === 0) return;
 
-    const deletedSet = new Set(deletedNames);
-    setFiles((prev) => prev.filter((file) => !deletedSet.has(file.name)));
-    setSelectedFiles((prev) => {
-      if (prev.size === 0) return prev;
-      let changed = false;
-      const next = new Set<string>();
-      prev.forEach((key) => {
-        const name = getAuthFileNameFromSelectionKey(key);
-        if (deletedSet.has(name)) {
-          changed = true;
-        } else {
-          next.add(key);
-        }
+      const deletedSet = new Set(deletedNames);
+      deletedNames.forEach(clearInspectionOwnershipForFile);
+      setFiles((prev) => prev.filter((file) => !deletedSet.has(file.name)));
+      setSelectedFiles((prev) => {
+        if (prev.size === 0) return prev;
+        let changed = false;
+        const next = new Set<string>();
+        prev.forEach((key) => {
+          const name = getAuthFileNameFromSelectionKey(key);
+          if (deletedSet.has(name)) {
+            changed = true;
+          } else {
+            next.add(key);
+          }
+        });
+        return changed ? next : prev;
       });
-      return changed ? next : prev;
-    });
-  }, []);
+    },
+    [clearInspectionOwnershipForFile]
+  );
 
   useEffect(() => {
     if (selectedFiles.size === 0) return;
@@ -336,21 +431,36 @@ export function useAuthFilesData(): UseAuthFilesDataResult {
 
       setUploading(true);
       try {
-        const result = await authFilesApi.uploadFiles(validFiles);
+        const prepared = await prepareAuthFilesForUpload(validFiles);
+        const result =
+          prepared.files.length > 0
+            ? await authFilesApi.uploadFiles(prepared.files)
+            : { status: 'error', uploaded: 0, files: [], failed: [] };
         const successCount = result.uploaded;
+        const failures = [...prepared.failures, ...result.failed];
+        const hasFailureStatus = hasAuthFileUploadFailureStatus(result.status);
 
         if (successCount > 0) {
-          const suffix = validFiles.length > 1 ? ` (${successCount}/${validFiles.length})` : '';
-          showNotification(
-            `${t('auth_files.upload_success')}${suffix}`,
-            result.failed.length ? 'warning' : 'success'
-          );
+          result.files.forEach(clearInspectionOwnershipForFile);
+          if (!hasFailureStatus || failures.length > 0) {
+            const suffix =
+              prepared.files.length > 1 ? ` (${successCount}/${prepared.files.length})` : '';
+            showNotification(
+              `${t('auth_files.upload_success')}${suffix}`,
+              failures.length ? 'warning' : 'success'
+            );
+          }
           await loadFiles();
         }
 
-        if (result.failed.length > 0) {
-          const details = result.failed.map((item) => `${item.name}: ${item.error}`).join('; ');
-          showNotification(`${t('notification.upload_failed')}: ${details}`, 'error');
+        if (failures.length > 0 || hasFailureStatus) {
+          const details = failures.map((item) => `${item.name}: ${item.error}`).join('; ');
+          showNotification(
+            details
+              ? `${t('notification.upload_failed')}: ${details}`
+              : t('notification.upload_failed'),
+            'error'
+          );
         }
       } catch (err: unknown) {
         const errorMessage = err instanceof Error ? err.message : 'Unknown error';
@@ -360,7 +470,7 @@ export function useAuthFilesData(): UseAuthFilesDataResult {
         event.target.value = '';
       }
     },
-    [loadFiles, showNotification, t]
+    [clearInspectionOwnershipForFile, loadFiles, showNotification, t]
   );
 
   const savePastedAuthJson = useCallback(
@@ -371,23 +481,85 @@ export function useAuthFilesData(): UseAuthFilesDataResult {
       authJsonPasteSavingRef.current = true;
       setAuthJsonPasteSaving(true);
       try {
-        const { authJson, resolvedFileName } = buildPastedAuthJsonPayload(type, fileName, jsonText);
-        try {
-          await authFilesApi.saveJsonObject(resolvedFileName, authJson);
-        } catch {
-          throw new Error(t('notification.save_failed'));
+        const payloads = buildPastedAuthJsonPayloads(type, fileName, jsonText);
+        const savedFileNames = payloads.map((payload) => payload.fileName);
+        if (payloads.length === 1) {
+          try {
+            await authFilesApi.saveJsonObject(payloads[0].fileName, payloads[0].authJson);
+            clearInspectionOwnershipForFile(payloads[0].fileName);
+          } catch {
+            throw new Error(t('notification.save_failed'));
+          }
+        } else {
+          const uploadFiles = createUniqueConvertedAuthFiles(payloads, []);
+          let result;
+          try {
+            result = await authFilesApi.uploadFiles(uploadFiles);
+          } catch {
+            throw new Error(t('notification.save_failed'));
+          }
+          result.files.forEach(clearInspectionOwnershipForFile);
+          if (
+            hasAuthFileUploadFailureStatus(result.status) ||
+            result.failed.length > 0 ||
+            result.uploaded !== uploadFiles.length
+          ) {
+            const hasFailureStatus = hasAuthFileUploadFailureStatus(result.status);
+            const failedNames = result.failed.map((item) => item.name);
+            const unresolvedNames = uploadFiles
+              .map((file) => file.name)
+              .filter((name) => !result.files.includes(name) && !failedNames.includes(name));
+            const affectedNames = [...failedNames, ...unresolvedNames];
+            if (result.uploaded > 0) {
+              try {
+                await loadFiles({ throwOnError: true });
+              } catch (reloadError) {
+                const reloadMessage =
+                  reloadError instanceof Error
+                    ? reloadError.message
+                    : t('notification.refresh_failed');
+                showNotification(
+                  `${t('notification.refresh_failed')}: ${reloadMessage}`,
+                  'warning'
+                );
+              }
+            }
+            if (hasFailureStatus && affectedNames.length === 0) {
+              throw new Error(t('notification.save_failed'));
+            }
+            throw new Error(
+              t('auth_files.paste_error_partial', {
+                uploaded: result.uploaded,
+                total: uploadFiles.length,
+                names: (affectedNames.length > 0
+                  ? affectedNames
+                  : uploadFiles.map((file) => file.name)
+                ).join(', '),
+              })
+            );
+          }
         }
+        const showPasteSuccess = () => {
+          if (savedFileNames.length === 1) {
+            showNotification(t('auth_files.paste_success', { name: savedFileNames[0] }), 'success');
+            return;
+          }
+          showNotification(
+            t('auth_files.paste_success_many', { count: savedFileNames.length }),
+            'success'
+          );
+        };
         try {
           await loadFiles({ throwOnError: true });
         } catch (reloadError) {
           const reloadMessage =
             reloadError instanceof Error ? reloadError.message : t('notification.refresh_failed');
-          showNotification(t('auth_files.paste_success', { name: resolvedFileName }), 'success');
+          showPasteSuccess();
           showNotification(`${t('notification.refresh_failed')}: ${reloadMessage}`, 'warning');
-          return resolvedFileName;
+          return savedFileNames;
         }
-        showNotification(t('auth_files.paste_success', { name: resolvedFileName }), 'success');
-        return resolvedFileName;
+        showPasteSuccess();
+        return savedFileNames;
       } catch (err) {
         throw new Error(err instanceof Error ? err.message : t('notification.save_failed'));
       } finally {
@@ -395,7 +567,7 @@ export function useAuthFilesData(): UseAuthFilesDataResult {
         setAuthJsonPasteSaving(false);
       }
     },
-    [loadFiles, showNotification, t]
+    [clearInspectionOwnershipForFile, loadFiles, showNotification, t]
   );
 
   const handleDelete = useCallback(
@@ -409,8 +581,16 @@ export function useAuthFilesData(): UseAuthFilesDataResult {
           setDeleting(name);
           try {
             const result = await authFilesApi.deleteFile(name);
+            if (result.deleted <= 0 || result.files.length === 0) {
+              const failure = result.failed.find((item) => item.name === name) ?? result.failed[0];
+              const message = failure?.error
+                ? `${t('notification.delete_failed')}: ${failure.error}`
+                : t('notification.delete_failed');
+              showNotification(message, 'error');
+              return;
+            }
             showNotification(t('auth_files.delete_success'), 'success');
-            applyDeletedFiles(result.files.length > 0 ? result.files : [name]);
+            applyDeletedFiles(result.files);
           } catch (err: unknown) {
             const errorMessage = err instanceof Error ? err.message : '';
             showNotification(`${t('notification.delete_failed')}: ${errorMessage}`, 'error');
@@ -617,6 +797,7 @@ export function useAuthFilesData(): UseAuthFilesDataResult {
         setFiles((prev) =>
           prev.map((f) => (f.name === name ? { ...f, disabled: res.disabled } : f))
         );
+        clearInspectionOwnershipForFile(name);
         showNotification(
           enabled
             ? t('auth_files.status_enabled_success', { name })
@@ -638,7 +819,7 @@ export function useAuthFilesData(): UseAuthFilesDataResult {
         });
       }
     },
-    [showNotification, t]
+    [clearInspectionOwnershipForFile, showNotification, t]
   );
 
   const batchSetStatus = useCallback(
@@ -690,6 +871,7 @@ export function useAuthFilesData(): UseAuthFilesDataResult {
           if (result.status === 'fulfilled') {
             successCount++;
             confirmedDisabled.set(name, result.value.disabled);
+            clearInspectionOwnershipForFile(name);
           } else {
             failCount++;
             failedNames.add(name);
@@ -733,7 +915,7 @@ export function useAuthFilesData(): UseAuthFilesDataResult {
         });
       }
     },
-    [deselectAll, files, showNotification, statusUpdating, t]
+    [clearInspectionOwnershipForFile, deselectAll, files, showNotification, statusUpdating, t]
   );
 
   const batchPatchFields = useCallback(
