@@ -220,18 +220,6 @@ export function QuotaPage() {
         headerSnapshotLookup={headerSnapshotLookup}
       />
       <QuotaSection
-        config={CLAUDE_CONFIG}
-        files={files}
-        loading={loading}
-        disabled={disableControls}
-        searchQuery={searchQuery}
-        sortMode={sortMode}
-        viewMode={getSectionViewMode(CLAUDE_CONFIG.type)}
-        onViewModeChange={(viewMode) => setSectionViewMode(CLAUDE_CONFIG.type, viewMode)}
-        accountDisplayMode={getAccountDisplayMode(CLAUDE_CONFIG.type)}
-        onAccountDisplayModeChange={(mode) => setAccountDisplayMode(CLAUDE_CONFIG.type, mode)}
-      />
-      <QuotaSection
         config={ANTIGRAVITY_CONFIG}
         files={files}
         loading={loading}
@@ -244,6 +232,18 @@ export function QuotaPage() {
         onAccountDisplayModeChange={(mode) =>
           setAccountDisplayMode(ANTIGRAVITY_CONFIG.type, mode)
         }
+      />
+      <QuotaSection
+        config={CLAUDE_CONFIG}
+        files={files}
+        loading={loading}
+        disabled={disableControls}
+        searchQuery={searchQuery}
+        sortMode={sortMode}
+        viewMode={getSectionViewMode(CLAUDE_CONFIG.type)}
+        onViewModeChange={(viewMode) => setSectionViewMode(CLAUDE_CONFIG.type, viewMode)}
+        accountDisplayMode={getAccountDisplayMode(CLAUDE_CONFIG.type)}
+        onAccountDisplayModeChange={(mode) => setAccountDisplayMode(CLAUDE_CONFIG.type, mode)}
       />
       <QuotaSection
         config={KIMI_CONFIG}
