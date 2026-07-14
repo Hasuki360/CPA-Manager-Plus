@@ -45,6 +45,7 @@ import {
   formatHeatmapMetricValue,
   formatLocalDateTime,
   formatMetricValue,
+  getUsageCacheTokens,
   hasUsageData,
   maskApiKeyHash,
   parseDateTimeLocalValue,
@@ -471,7 +472,8 @@ const getApiKeyContributorDisplayLabel = (row: UsageHeatmapContributor) => {
   return label && label.toLowerCase() !== row.key.toLowerCase() ? label : maskApiKeyHash(row.key);
 };
 
-const metricValue = (point: UsageTimelinePoint, key: UsageMetricKey) => point[key];
+const metricValue = (point: UsageTimelinePoint, key: UsageMetricKey) =>
+  key === 'cachedTokens' ? getUsageCacheTokens(point) : point[key];
 
 const getMetricAxisIndex = (axis: (typeof USAGE_METRICS)[number]['axis']) =>
   usageChartAxisKeys[axis];
@@ -1896,7 +1898,7 @@ function TokenStructureChart({ timeline }: { timeline: UsageTimelinePoint[] }) {
         },
         {
           barMaxWidth: 22,
-          data: timeline.map((point) => point.cachedTokens),
+          data: timeline.map((point) => getUsageCacheTokens(point)),
           itemStyle: tokenBarItemStyle,
           name: t('usage_analytics.metric_cached_tokens'),
           stack: 'tokens',
@@ -3706,7 +3708,7 @@ function RankTable({
                 <td>{compactNumber(row.totalTokens)}</td>
                 <td>{compactNumber(row.inputTokens)}</td>
                 <td>{compactNumber(row.outputTokens)}</td>
-                <td>{compactNumber(row.cachedTokens)}</td>
+                <td>{compactNumber(getUsageCacheTokens(row))}</td>
                 {type !== 'credential' ? (
                   <td>{formatPercent(computeRowCacheHitRate(row))}</td>
                 ) : null}

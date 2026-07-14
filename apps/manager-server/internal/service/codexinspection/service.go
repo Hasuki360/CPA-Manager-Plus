@@ -19,27 +19,30 @@ import (
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/model"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/cpa"
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/cpaauthfiles"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/managerconfig"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/store"
 )
 
 const (
-	codexUsageURL       = "https://chatgpt.com/backend-api/wham/usage"
-	codexFiveHourWindow = 18_000
-	codexWeekWindow     = 604_800
-	codexMonthWindow    = 2_592_000
-	codexMinMonthWindow = 28 * 24 * 60 * 60
-	codexMaxMonthWindow = 31 * 24 * 60 * 60
-	maxStoredBodyText   = 2048
+	codexUsageURL             = "https://chatgpt.com/backend-api/wham/usage"
+	codexFiveHourWindow       = 18_000
+	codexWeekWindow           = 604_800
+	codexMonthWindow          = 2_592_000
+	codexMinMonthWindow       = 28 * 24 * 60 * 60
+	codexMaxMonthWindow       = 31 * 24 * 60 * 60
+	maxStoredBodyText         = 2048
+	maxCPAAPICallResponseSize = 16 * 1024 * 1024
 )
 
 var (
-	ErrRunAlreadyActive    = errors.New("codex inspection is already running")
-	ErrNotConfigured       = errors.New("usage service is not configured")
-	ErrRunNotFound         = errors.New("codex inspection run not found")
-	ErrRunNotCompleted     = errors.New("codex inspection run is not completed")
-	ErrActionIDsRequired   = errors.New("codex inspection action result ids are required")
-	ErrNoActionableResults = errors.New("codex inspection has no actionable results")
+	ErrRunAlreadyActive           = errors.New("codex inspection is already running")
+	ErrNotConfigured              = errors.New("usage service is not configured")
+	ErrRunNotFound                = errors.New("codex inspection run not found")
+	ErrRunNotCompleted            = errors.New("codex inspection run is not completed")
+	ErrActionIDsRequired          = errors.New("codex inspection action result ids are required")
+	ErrNoActionableResults        = errors.New("codex inspection has no actionable results")
+	errCPAAPICallResponseTooLarge = errors.New("CPA api-call response too large")
 )
 
 type Service struct {
@@ -478,37 +481,15 @@ func (s *Service) failRun(ctx context.Context, run model.CodexInspectionRun, cau
 }
 
 func (s *Service) fetchAuthFiles(ctx context.Context, setup store.Setup) ([]authFile, error) {
-	files, _, err := s.fetchAuthFilesAt(ctx, setup, "/v0/management/auth-files")
-	return files, err
-}
-
-func (s *Service) fetchAuthFilesAt(ctx context.Context, setup store.Setup, path string) ([]authFile, int, error) {
-	req, err := http.NewRequestWithContext(
-		ctx,
-		http.MethodGet,
-		cpa.NormalizeBaseURL(setup.CPAUpstreamURL)+path,
-		nil,
-	)
+	files, err := cpaauthfiles.New(s.client).Fetch(ctx, setup.CPAUpstreamURL, setup.ManagementKey)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+setup.ManagementKey)
-	res, err := s.client.Do(req)
-	if err != nil {
-		return nil, 0, err
+	result := make([]authFile, 0, len(files))
+	for _, file := range files {
+		result = append(result, authFile(file.Raw))
 	}
-	defer res.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(res.Body, 8*1024*1024))
-	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return nil, res.StatusCode, fmt.Errorf("auth files request failed: %s %s", res.Status, truncate(string(body), maxStoredBodyText))
-	}
-	var payload struct {
-		Files []authFile `json:"files"`
-	}
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, res.StatusCode, err
-	}
-	return payload.Files, res.StatusCode, nil
+	return result, nil
 }
 
 func (s *Service) inspectAccounts(
@@ -742,13 +723,13 @@ func (s *Service) requestCodexUsageAt(
 		return apiCallResponse{}, 0, err
 	}
 	defer res.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(res.Body, 8*1024*1024))
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(res.Body, maxStoredBodyText))
 		return apiCallResponse{}, res.StatusCode, fmt.Errorf("api-call failed: %s %s", res.Status, truncate(string(body), maxStoredBodyText))
 	}
 
 	var raw map[string]any
-	if err := json.Unmarshal(body, &raw); err != nil {
+	if err := decodeCPAAPICallResponse(res.Body, maxCPAAPICallResponseSize, &raw); err != nil {
 		return apiCallResponse{}, res.StatusCode, err
 	}
 	statusRaw, hasStatus := firstValue(raw, "status_code", "statusCode")
@@ -761,6 +742,38 @@ func (s *Service) requestCodexUsageAt(
 		BodyText:      bodyText,
 		Body:          bodyValue,
 	}, res.StatusCode, nil
+}
+
+func decodeCPAAPICallResponse(body io.Reader, maxBytes int64, target any) error {
+	if body == nil {
+		return io.EOF
+	}
+	if maxBytes <= 0 {
+		return errors.New("CPA api-call response size limit must be positive")
+	}
+	limited := &io.LimitedReader{R: body, N: maxBytes + 1}
+	decoder := json.NewDecoder(limited)
+	if err := decoder.Decode(target); err != nil {
+		if limited.N == 0 {
+			return fmt.Errorf("%w: exceeds %d bytes", errCPAAPICallResponseTooLarge, maxBytes)
+		}
+		return err
+	}
+	if limited.N == 0 {
+		return fmt.Errorf("%w: exceeds %d bytes", errCPAAPICallResponseTooLarge, maxBytes)
+	}
+	var trailing any
+	trailingErr := decoder.Decode(&trailing)
+	if limited.N == 0 {
+		return fmt.Errorf("%w: exceeds %d bytes", errCPAAPICallResponseTooLarge, maxBytes)
+	}
+	if errors.Is(trailingErr, io.EOF) {
+		return nil
+	}
+	if trailingErr == nil {
+		return errors.New("api-call response contains multiple JSON values")
+	}
+	return fmt.Errorf("decode api-call response trailing data: %w", trailingErr)
 }
 
 func (s *Service) executeAutoActions(
@@ -936,15 +949,12 @@ func (s *Service) doCPAAction(req *http.Request, managementKey string) (error, i
 		return err, 0
 	}
 	defer res.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(res.Body, 1024*1024))
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(res.Body, maxStoredBodyText))
 		return fmt.Errorf("%s %s", res.Status, truncate(string(body), maxStoredBodyText)), res.StatusCode
 	}
-	var payload map[string]any
-	if err := json.Unmarshal(body, &payload); err == nil {
-		if failed, ok := payload["failed"].([]any); ok && len(failed) > 0 {
-			return fmt.Errorf("CPA action failed: %s", truncate(fmt.Sprint(failed[0]), maxStoredBodyText)), res.StatusCode
-		}
+	if err := cpaauthfiles.ValidateActionResponse(res.Body); err != nil {
+		return err, res.StatusCode
 	}
 	return nil, res.StatusCode
 }

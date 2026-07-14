@@ -1,6 +1,7 @@
 import { act } from 'react';
 import { create, type ReactTestInstance, type ReactTestRenderer } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { EChartsView } from '@/components/charts/EChartsView';
 import { Button } from '@/components/ui/Button';
 import { Select } from '@/components/ui/Select';
 import {
@@ -534,6 +535,52 @@ describe('UsageAnalyticsPage', () => {
     expect(text).not.toContain('usage_analytics.model_overview_title');
     expect(text).not.toContain('usage_analytics.api_key_overview_title');
     expect(text).not.toContain('usage_analytics.drilldown_preview_title');
+  });
+
+  it('renders fine-grained cache buckets in token charts', () => {
+    const point = createTimelinePoint({
+      cachedTokens: 0,
+      cacheReadTokens: 80,
+      cacheCreationTokens: 20,
+    });
+    mocks.usageState = createUsageState({
+      activeTab: 'trends',
+      timeline: [point],
+      anomalyAnalysis: null,
+      selectedBucket: null,
+    });
+
+    const renderer = renderPage();
+    const cacheSeries = renderer.root
+      .findAllByType(EChartsView)
+      .flatMap(
+        (node) => (node.props.option?.series ?? []) as Array<{ data?: number[]; name?: string }>
+      )
+      .find((series) => series.name === 'usage_analytics.metric_cached_tokens');
+
+    expect(cacheSeries?.data).toEqual([100]);
+  });
+
+  it('renders fine-grained cache buckets in rank tables', () => {
+    const modelRow = createRankRow({
+      cachedTokens: 0,
+      cacheReadTokens: 80,
+      cacheCreationTokens: 20,
+    });
+    mocks.usageState = createUsageState({
+      activeTab: 'models',
+      modelRows: [modelRow],
+      selectedModel: modelRow,
+    });
+
+    const renderer = renderPage();
+    const cells = renderer.root
+      .findAllByType('tr')
+      .map((row) => row.findAllByType('td'))
+      .find((rowCells) => rowCells.length >= 10 && getText(rowCells[1]).includes('gpt-4o'));
+
+    expect(cells).toBeDefined();
+    expect(getText(cells![6])).toBe('100');
   });
 
   it('shows empty and error states from the analytics hook', () => {

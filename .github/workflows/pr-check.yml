@@ -70,6 +70,24 @@ jobs:
         working-directory: apps/manager-server
         run: go test ./...
 
+  manager-server-windows-sqlite:
+    name: Manager Server SQLite (Windows)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache-dependency-path: apps/manager-server/go.sum
+
+      - name: Test SQLite repository
+        working-directory: apps/manager-server
+        run: go test ./internal/repository/sqlite
+
   native-control:
     name: Native Control (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

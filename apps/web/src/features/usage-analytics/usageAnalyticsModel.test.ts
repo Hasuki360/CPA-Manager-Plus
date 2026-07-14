@@ -29,6 +29,7 @@ import {
   computeCacheHitRate,
   computeRowAverageCostPerCall,
   computeRowCacheHitRate,
+  getUsageCacheTokens,
   getUsageRangeBounds,
   maskApiKeyHash,
   resolveUsageGranularity,
@@ -396,6 +397,23 @@ describe('usage analytics adapters', () => {
       successRate: 2 / 3,
       averageLatencyMs: 250,
     });
+  });
+
+  it('combines compatible, cache-read, and cache-creation buckets for display', () => {
+    expect(
+      getUsageCacheTokens({
+        cachedTokens: 0,
+        cacheReadTokens: 80,
+        cacheCreationTokens: 20,
+      })
+    ).toBe(100);
+    expect(
+      getUsageCacheTokens({
+        cachedTokens: 5,
+        cacheReadTokens: 4,
+        cacheCreationTokens: 1,
+      })
+    ).toBe(10);
   });
 
   it('builds selected credential trend series from backend credential timeline buckets', () => {
@@ -1266,10 +1284,7 @@ describe('model rank derivations', () => {
       cacheHitRate: 151_000 / 152_600,
     });
     expect(computeRowCacheHitRate(row)).toBeCloseTo(151_000 / 152_600, 6);
-    expect(computeRowCacheHitRate(rankRow({ models: [row] }))).toBeCloseTo(
-      151_000 / 152_600,
-      6
-    );
+    expect(computeRowCacheHitRate(rankRow({ models: [row] }))).toBeCloseTo(151_000 / 152_600, 6);
   });
 
   it('builds the reverse key distribution for a model from API key breakdowns', () => {
@@ -1373,6 +1388,41 @@ describe('usage anomaly drilldown', () => {
         averageTokensPerRequest: 0,
       })
     ).toEqual(['usage_analytics.cause_request_drop', 'usage_analytics.cause_cost_drop']);
+  });
+
+  it('detects cache growth from fine-grained cache buckets', () => {
+    const timeline = buildUsageTimeline(
+      [
+        {
+          bucket_ms: NOW_MS,
+          label: '',
+          calls: 1,
+          tokens: 100,
+          success: 1,
+          failure: 0,
+          input_tokens: 100,
+          cache_read_tokens: 10,
+          cache_creation_tokens: 0,
+        },
+        {
+          bucket_ms: NOW_MS + HOUR_MS,
+          label: '',
+          calls: 1,
+          tokens: 100,
+          success: 1,
+          failure: 0,
+          input_tokens: 100,
+          cache_read_tokens: 25,
+          cache_creation_tokens: 5,
+        },
+      ],
+      'hour'
+    );
+
+    const analysis = analyzeUsageBucket(timeline, NOW_MS + HOUR_MS);
+
+    expect(analysis?.changes.cachedTokens).toBe(2);
+    expect(analysis?.causeKeys).toContain('usage_analytics.cause_cache_growth');
   });
 
   it('builds stable monitoring detail query parameters', () => {

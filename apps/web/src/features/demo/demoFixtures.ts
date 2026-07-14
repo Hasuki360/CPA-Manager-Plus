@@ -63,11 +63,11 @@ const splitTokens = (totalTokens: number) => {
   const cachedTokens = Math.round(totalTokens * 0.13);
   const cacheReadTokens = Math.round(cachedTokens * 0.78);
   const cacheCreationTokens = cachedTokens - cacheReadTokens;
-  const reasoningTokens = Math.max(0, totalTokens - inputTokens - outputTokens - cachedTokens);
+  const reasoningTokens = Math.max(0, totalTokens - inputTokens - outputTokens);
   return {
     input_tokens: inputTokens,
     output_tokens: outputTokens,
-    cached_tokens: cachedTokens,
+    cached_tokens: 0,
     cache_read_tokens: cacheReadTokens,
     cache_creation_tokens: cacheCreationTokens,
     reasoning_tokens: reasoningTokens,
@@ -1958,11 +1958,12 @@ const buildMonitoringAnalytics = (
     const profile = eventProfiles[index % eventProfiles.length];
     const failed = index % 9 === 0 || index % 22 === 0;
     const quotaFailure = failed && index % 2 === 0;
-    const inputTokens = 620 + ((index * 113) % 2600);
+    const uncachedInputTokens = 620 + ((index * 113) % 2600);
     const outputTokens = 210 + ((index * 71) % 980);
     const cachedTokens = index % 3 === 0 ? 180 + ((index * 17) % 520) : 0;
+    const inputTokens = uncachedInputTokens + cachedTokens;
     const reasoningTokens = index % 4 === 0 ? 80 + ((index * 13) % 360) : 0;
-    const totalTokens = inputTokens + outputTokens + cachedTokens + reasoningTokens;
+    const totalTokens = inputTokens + outputTokens + reasoningTokens;
     const timestampMs = analyticsNow - (index * 5 + (index % 4)) * minute;
     return {
       request_id: `demo-request-${String(index + 1).padStart(3, '0')}`,
@@ -1990,7 +1991,7 @@ const buildMonitoringAnalytics = (
       executor_type: profile.executor,
       input_tokens: inputTokens,
       output_tokens: outputTokens,
-      cached_tokens: cachedTokens,
+      cached_tokens: 0,
       cache_read_tokens: Math.round(cachedTokens * 0.78),
       cache_creation_tokens: Math.round(cachedTokens * 0.22),
       reasoning_tokens: reasoningTokens,
@@ -2376,9 +2377,9 @@ const buildMonitoringAnalytics = (
         auth_index: 'codex-team-01',
         models: ['gpt-4.1-mini', 'gpt-4.1'],
         endpoints: ['/v1/chat/completions', '/v1/responses'],
-        input_tokens: 1_260_000,
+        input_tokens: 1_520_000,
         output_tokens: 540_000,
-        cached_tokens: 260_000,
+        cached_tokens: 0,
         cache_read_tokens: 210_000,
         cache_creation_tokens: 50_000,
         total_tokens: 2_060_000,
@@ -2397,9 +2398,9 @@ const buildMonitoringAnalytics = (
         auth_index: 'claude-team-01',
         models: ['claude-sonnet-4-5'],
         endpoints: ['/v1/messages'],
-        input_tokens: 1_480_000,
+        input_tokens: 1_660_000,
         output_tokens: 620_000,
-        cached_tokens: 180_000,
+        cached_tokens: 0,
         cache_read_tokens: 150_000,
         cache_creation_tokens: 30_000,
         total_tokens: 2_280_000,
