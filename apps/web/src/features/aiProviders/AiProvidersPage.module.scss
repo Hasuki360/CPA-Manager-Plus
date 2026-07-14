@@ -55,7 +55,15 @@
   flex-shrink: 0;
 }
 
-.charityMonitorSummary,
+.charityMonitorSummary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: $spacing-md;
+  flex-wrap: wrap;
+}
+
+.charityMonitorSummaryTags,
 .charityProviderMeta {
   display: flex;
   flex-wrap: wrap;
@@ -71,20 +79,92 @@
   }
 }
 
+.charityIntervalInline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.charityIntervalInlineField {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+
+  span {
+    white-space: nowrap;
+    font-weight: 600;
+  }
+
+  input {
+    width: 72px;
+    height: 34px;
+    padding: 0 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 999px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: 13px;
+  }
+
+  input:focus {
+    outline: none;
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary-color) 18%, transparent);
+  }
+}
+
 .charityMonitorGrid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: $spacing-sm;
 }
 
-.charityProviderCard {
+.charityProviderCard,
+.charityProviderCardExpanded {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: $radius-lg;
+  padding: 10px 12px;
+  background: var(--surface-subtle);
+}
+
+.charityProviderCardExpanded {
+  gap: 8px;
+  padding: $spacing-md;
+}
+
+.charityProviderToggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: $spacing-sm;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.charityProviderChevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+.charityProviderBody {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  border: 1px solid var(--border-subtle);
-  border-radius: $radius-lg;
-  padding: $spacing-md;
-  background: var(--surface-subtle);
 
   p {
     margin: 0;
@@ -100,6 +180,15 @@
   align-items: center;
   justify-content: space-between;
   gap: $spacing-sm;
+  min-width: 0;
+  flex: 1;
+
+  strong {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 }
 
 .charityStatusOn,
@@ -159,17 +248,19 @@
   gap: $spacing-md;
 }
 
-.charityIntervalPanel {
+.http500CollapsedSummary {
   display: flex;
-  align-items: flex-start;
-  gap: $spacing-md;
   flex-wrap: wrap;
-  border-top: 1px solid var(--border-subtle);
-  padding-top: $spacing-md;
-}
+  gap: 8px;
 
-.charityIntervalPanel .numberField {
-  max-width: 320px;
+  span {
+    border: 1px solid var(--border-subtle);
+    border-radius: 999px;
+    background: var(--surface-subtle);
+    color: var(--text-secondary);
+    padding: 4px 10px;
+    font-size: 12px;
+  }
 }
 
 .numberField {

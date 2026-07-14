@@ -31,7 +31,7 @@ import { Card } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Select } from '@/components/ui/Select';
 import { ToggleSwitch } from '@/components/ui/ToggleSwitch';
-import { IconRefreshCw } from '@/components/ui/icons';
+import { IconChevronDown, IconChevronUp, IconRefreshCw } from '@/components/ui/icons';
 import { useHeaderRefresh } from '@/hooks/useHeaderRefresh';
 import { usePanelFeatureAvailability } from '@/hooks/usePanelFeatureAvailability';
 import { providersApi } from '@/services/api';
@@ -165,6 +165,8 @@ export function AiProvidersPage() {
   });
   const [http500Preset, setHttp500Preset] = useState<Http500PresetKey>('standard');
   const [http500Saving, setHttp500Saving] = useState(false);
+  const [http500Expanded, setHttp500Expanded] = useState(false);
+  const [expandedCharityKeys, setExpandedCharityKeys] = useState<Set<string>>(() => new Set());
   const http500DirtyRef = useRef(false);
   const [charityLoadError, setCharityLoadError] = useState('');
 
@@ -480,6 +482,15 @@ export function AiProvidersPage() {
       windowMinutes: preset.windowMinutes,
       threshold: preset.threshold,
       durationMinutes: preset.durationMinutes,
+    });
+  }, []);
+
+  const toggleCharityCard = useCallback((key: string) => {
+    setExpandedCharityKeys((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
     });
   }, []);
 
@@ -1592,32 +1603,89 @@ export function AiProvidersPage() {
             </div>
           </div>
           <div className={styles.charityMonitorSummary}>
-            <span>总开关：{charityEnabled ? '已开启' : '已关闭'}</span>
-            <span>最近检测：{charityPolicy?.charityModelMonitorState?.lastCheck || '暂无'}</span>
-            <span>Codex 版本：{charityPolicy?.charityModelMonitorState?.lastCodexCliVersion || '等待同步'}</span>
+            <div className={styles.charityMonitorSummaryTags}>
+              <span>总开关：{charityEnabled ? '已开启' : '已关闭'}</span>
+              <span>最近检测：{charityPolicy?.charityModelMonitorState?.lastCheck || '暂无'}</span>
+              <span>Codex 版本：{charityPolicy?.charityModelMonitorState?.lastCodexCliVersion || '等待同步'}</span>
+            </div>
+            <div className={styles.charityIntervalInline}>
+              <label className={styles.charityIntervalInlineField}>
+                <span>检查间隔（分钟）</span>
+                <input
+                  type="number"
+                  min={5}
+                  max={1440}
+                  value={charityIntervalDraft}
+                  onChange={(event) => updateCharityIntervalDraft(event.target.value)}
+                  aria-label="公益站检查间隔（分钟）"
+                />
+              </label>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => void persistCharityInterval()}
+                disabled={
+                  charityIntervalSaving ||
+                  charityIntervalUnchanged ||
+                  !managerServiceBase ||
+                  charityIntervalDraft < 5 ||
+                  charityIntervalDraft > 1440
+                }
+              >
+                保存
+              </Button>
+            </div>
           </div>
           {charityLoadError ? (
             <div className={styles.charityMonitorNotice}>{charityLoadError}</div>
           ) : null}
           {charityRows.length > 0 ? (
             <div className={styles.charityMonitorGrid}>
-              {charityRows.map(({ row, state }) => (
-                <section className={styles.charityProviderCard} key={`${row.key}:charity`}>
-                  <div className={styles.charityProviderTitle}>
-                    <strong>{state.site} / {state.label}</strong>
-                    <span className={state.desiredEnabled ? styles.charityStatusOn : styles.charityStatusOff}>
-                      {state.desiredEnabled ? '应开启' : '应关闭'}
-                    </span>
-                  </div>
-                  <p>{row.baseUrl}</p>
-                  <div className={styles.charityProviderMeta}>
-                    <span>检查范围：{state.checkMode === 'custom' ? `自定义模型 ${state.customModels?.length ?? 0} 个` : `${row.kind === 'codex' ? 'gpt-*' : 'claude-*'}`}</span>
-                    <span>命中：{state.matchedModels?.length ?? 0} 个</span>
-                    <span>动作：{state.reason || (state.changed ? '已同步' : '无变化')}</span>
-                    {state.headersChanged ? <span>请求头已同步</span> : null}
-                  </div>
-                </section>
-              ))}
+              {charityRows.map(({ row, state }) => {
+                const cardKey = `${row.key}:charity`;
+                const expanded = expandedCharityKeys.has(cardKey);
+                return (
+                  <section
+                    className={expanded ? styles.charityProviderCardExpanded : styles.charityProviderCard}
+                    key={cardKey}
+                  >
+                    <button
+                      type="button"
+                      className={styles.charityProviderToggle}
+                      onClick={() => toggleCharityCard(cardKey)}
+                      aria-expanded={expanded}
+                    >
+                      <div className={styles.charityProviderTitle}>
+                        <strong>
+                          {state.site} / {state.label}
+                        </strong>
+                        <span className={state.desiredEnabled ? styles.charityStatusOn : styles.charityStatusOff}>
+                          {state.desiredEnabled ? '应开启' : '应关闭'}
+                        </span>
+                      </div>
+                      <span className={styles.charityProviderChevron} aria-hidden="true">
+                        {expanded ? <IconChevronUp size={14} /> : <IconChevronDown size={14} />}
+                      </span>
+                    </button>
+                    {expanded ? (
+                      <div className={styles.charityProviderBody}>
+                        <p>{row.baseUrl}</p>
+                        <div className={styles.charityProviderMeta}>
+                          <span>
+                            检查范围：
+                            {state.checkMode === 'custom'
+                              ? `自定义模型 ${state.customModels?.length ?? 0} 个`
+                              : `${row.kind === 'codex' ? 'gpt-*' : 'claude-*'}`}
+                          </span>
+                          <span>命中：{state.matchedModels?.length ?? 0} 个</span>
+                          <span>动作：{state.reason || (state.changed ? '已同步' : '无变化')}</span>
+                          {state.headersChanged ? <span>请求头已同步</span> : null}
+                        </div>
+                      </div>
+                    ) : null}
+                  </section>
+                );
+              })}
             </div>
           ) : (
             <p className={styles.charityMonitorEmpty}>
@@ -1631,33 +1699,6 @@ export function AiProvidersPage() {
               ))}
             </div>
           ) : null}
-          <div className={styles.charityIntervalPanel}>
-            <label className={styles.numberField}>
-              <span>检查间隔（分钟）</span>
-              <input
-                type="number"
-                min={5}
-                max={1440}
-                value={charityIntervalDraft}
-                onChange={(event) => updateCharityIntervalDraft(event.target.value)}
-              />
-              <small>每隔多少分钟检查一次公益站模型和通道状态，建议 15 分钟起。</small>
-            </label>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => void persistCharityInterval()}
-              disabled={
-                charityIntervalSaving ||
-                charityIntervalUnchanged ||
-                !managerServiceBase ||
-                charityIntervalDraft < 5 ||
-                charityIntervalDraft > 1440
-              }
-            >
-              保存检查间隔
-            </Button>
-          </div>
         </Card>
 
         <Card className={styles.http500Card}>
@@ -1669,77 +1710,104 @@ export function AiProvidersPage() {
               </p>
             </div>
             <div className={styles.charityMonitorActions}>
+              {http500Expanded ? (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => void persistHttp500Settings()}
+                  disabled={http500Saving || http500Unchanged || !managerServiceBase}
+                >
+                  保存关闭策略
+                </Button>
+              ) : null}
               <Button
-                variant="secondary"
+                variant="ghost"
                 size="sm"
-                onClick={() => void persistHttp500Settings()}
-                disabled={http500Saving || http500Unchanged || !managerServiceBase}
+                onClick={() => setHttp500Expanded((value) => !value)}
+                aria-expanded={http500Expanded}
               >
-                保存关闭策略
+                {http500Expanded ? <IconChevronUp size={14} /> : <IconChevronDown size={14} />}
+                {http500Expanded ? '收起' : '展开设置'}
               </Button>
             </div>
           </div>
-          <div className={styles.http500PresetGrid}>
-            {(Object.entries(HTTP500_PRESETS) as Array<[Exclude<Http500PresetKey, 'custom'>, typeof HTTP500_PRESETS[keyof typeof HTTP500_PRESETS]]>).map(([key, preset]) => (
-              <button
-                key={key}
-                type="button"
-                className={key === http500Preset ? styles.http500PresetActive : styles.http500PresetCard}
-                onClick={() => applyHttp500Preset(key)}
-              >
-                <strong>{preset.label}</strong>
-                <span>{preset.windowMinutes} 分钟内 {preset.threshold} 次，关闭渠道 {preset.durationMinutes} 分钟</span>
-                <small>{preset.description}</small>
-              </button>
-            ))}
-            <button
-              type="button"
-              className={http500Preset === 'custom' ? styles.http500PresetActive : styles.http500PresetCard}
-              onClick={() => {
-                http500DirtyRef.current = true;
-                setHttp500Preset('custom');
-              }}
-            >
-              <strong>自定义</strong>
-              <span>{http500Draft.windowMinutes} 分钟内 {http500Draft.threshold} 次，关闭渠道 {http500Draft.durationMinutes} 分钟</span>
-              <small>手动调整下面三项参数。</small>
-            </button>
+          <div className={styles.http500CollapsedSummary}>
+            <span>
+              当前策略：
+              {http500Preset === 'custom'
+                ? '自定义'
+                : HTTP500_PRESETS[http500Preset as Exclude<Http500PresetKey, 'custom'>]?.label || '标准'}
+            </span>
+            <span>
+              {http500Draft.windowMinutes} 分钟内 {http500Draft.threshold} 次，关闭渠道{' '}
+              {http500Draft.durationMinutes} 分钟
+            </span>
           </div>
-          <div className={styles.http500Grid}>
-            <label className={styles.numberField}>
-              <span>统计窗口（分钟）</span>
-              <input
-                type="number"
-                min={1}
-                max={1440}
-                value={http500Draft.windowMinutes}
-                onChange={(event) => updateHttp500Draft('windowMinutes', event.target.value)}
-              />
-              <small>只统计这个时间窗口内同一通道的 HTTP 500 失败次数。</small>
-            </label>
-            <label className={styles.numberField}>
-              <span>触发次数</span>
-              <input
-                type="number"
-                min={1}
-                max={100}
-                value={http500Draft.threshold}
-                onChange={(event) => updateHttp500Draft('threshold', event.target.value)}
-              />
-              <small>窗口内累计达到该次数后，自动关闭这个通道。</small>
-            </label>
-            <label className={styles.numberField}>
-              <span>关闭渠道时长（分钟）</span>
-              <input
-                type="number"
-                min={1}
-                max={1440}
-                value={http500Draft.durationMinutes}
-                onChange={(event) => updateHttp500Draft('durationMinutes', event.target.value)}
-              />
-              <small>关闭后等待多久自动恢复；到期会重新参与调度。</small>
-            </label>
-          </div>
+          {http500Expanded ? (
+            <>
+              <div className={styles.http500PresetGrid}>
+                {(Object.entries(HTTP500_PRESETS) as Array<[Exclude<Http500PresetKey, 'custom'>, typeof HTTP500_PRESETS[keyof typeof HTTP500_PRESETS]]>).map(([key, preset]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    className={key === http500Preset ? styles.http500PresetActive : styles.http500PresetCard}
+                    onClick={() => applyHttp500Preset(key)}
+                  >
+                    <strong>{preset.label}</strong>
+                    <span>{preset.windowMinutes} 分钟内 {preset.threshold} 次，关闭渠道 {preset.durationMinutes} 分钟</span>
+                    <small>{preset.description}</small>
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  className={http500Preset === 'custom' ? styles.http500PresetActive : styles.http500PresetCard}
+                  onClick={() => {
+                    http500DirtyRef.current = true;
+                    setHttp500Preset('custom');
+                  }}
+                >
+                  <strong>自定义</strong>
+                  <span>{http500Draft.windowMinutes} 分钟内 {http500Draft.threshold} 次，关闭渠道 {http500Draft.durationMinutes} 分钟</span>
+                  <small>手动调整下面三项参数。</small>
+                </button>
+              </div>
+              <div className={styles.http500Grid}>
+                <label className={styles.numberField}>
+                  <span>统计窗口（分钟）</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={1440}
+                    value={http500Draft.windowMinutes}
+                    onChange={(event) => updateHttp500Draft('windowMinutes', event.target.value)}
+                  />
+                  <small>只统计这个时间窗口内同一通道的 HTTP 500 失败次数。</small>
+                </label>
+                <label className={styles.numberField}>
+                  <span>触发次数</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={100}
+                    value={http500Draft.threshold}
+                    onChange={(event) => updateHttp500Draft('threshold', event.target.value)}
+                  />
+                  <small>窗口内累计达到该次数后，自动关闭这个通道。</small>
+                </label>
+                <label className={styles.numberField}>
+                  <span>关闭渠道时长（分钟）</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={1440}
+                    value={http500Draft.durationMinutes}
+                    onChange={(event) => updateHttp500Draft('durationMinutes', event.target.value)}
+                  />
+                  <small>关闭后等待多久自动恢复；到期会重新参与调度。</small>
+                </label>
+              </div>
+            </>
+          ) : null}
         </Card>
 
         <div>
