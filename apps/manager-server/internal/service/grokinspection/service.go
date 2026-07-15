@@ -876,7 +876,13 @@ func classifyProbe(input classifyInput) classifyResult {
 	blob := lower(input.ChatCode) + " " + lower(input.ChatError)
 	disabled := input.Disabled
 	if status == http.StatusUnauthorized || containsAny(blob, "token is expired", "token has been invalidated", "invalid_grant", "unauthorized") {
-		return classifyResult{Classification: "reauth", Action: "delete", Reason: "认证已过期或失效"}
+		// Grok/xAI: 401 / token invalid → disable, not delete.
+		// Keep already-disabled credentials as-is.
+		action := "disable"
+		if disabled {
+			action = "keep"
+		}
+		return classifyResult{Classification: "reauth", Action: action, Reason: "认证已过期或失效，建议禁用"}
 	}
 	if isFreeUsageExhausted(input.ChatCode, input.ChatError) {
 		action := "disable"
