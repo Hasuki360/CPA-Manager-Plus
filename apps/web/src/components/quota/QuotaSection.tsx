@@ -47,7 +47,6 @@ type QuotaUpdater<T> = T | ((prev: T) => T);
 type QuotaSetter<T> = (updater: QuotaUpdater<T>) => void;
 
 const MAX_ITEMS_PER_PAGE = 25;
-const MAX_SHOW_ALL_THRESHOLD = 30;
 
 const stringifySearchValue = (value: unknown): string[] => {
   if (value === undefined || value === null) return [];
@@ -165,7 +164,6 @@ export function QuotaSection<TState extends QuotaStatusState, TData>({
   const [internalViewMode, setInternalViewMode] = useState<QuotaSectionViewMode>('paged');
   const [internalAccountDisplayMode, setInternalAccountDisplayMode] =
     useState<QuotaAccountDisplayMode>(DEFAULT_QUOTA_ACCOUNT_DISPLAY_MODE);
-  const [showTooManyWarning, setShowTooManyWarning] = useState(false);
   const resolvedViewMode = viewMode ?? internalViewMode;
   const resolvedAccountDisplayMode = accountDisplayMode ?? internalAccountDisplayMode;
   const setViewMode = useCallback(
@@ -274,9 +272,7 @@ export function QuotaSection<TState extends QuotaStatusState, TData>({
     return sortedFiles;
   }, [config, filteredFiles, getDisplayQuota, normalizedSearchQuery, sortMode, t]);
 
-  const showAllAllowed = displayFiles.length <= MAX_SHOW_ALL_THRESHOLD;
-  const effectiveViewMode: QuotaSectionViewMode =
-    resolvedViewMode === 'all' && !showAllAllowed ? 'paged' : resolvedViewMode;
+  const effectiveViewMode: QuotaSectionViewMode = resolvedViewMode;
 
   const {
     pageSize,
@@ -289,22 +285,6 @@ export function QuotaSection<TState extends QuotaStatusState, TData>({
     loading: sectionLoading,
     setLoading,
   } = useQuotaPagination(displayFiles);
-
-  useEffect(() => {
-    if (showAllAllowed) return;
-    if (resolvedViewMode !== 'all') return;
-
-    let cancelled = false;
-    queueMicrotask(() => {
-      if (cancelled) return;
-      setViewMode('paged');
-      setShowTooManyWarning(true);
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [resolvedViewMode, setViewMode, showAllAllowed]);
 
   // Update page size based on view mode and columns
   useEffect(() => {
@@ -553,11 +533,7 @@ export function QuotaSection<TState extends QuotaStatusState, TData>({
                 effectiveViewMode === 'all' ? styles.viewModeButtonActive : ''
               }`}
               onClick={() => {
-                if (displayFiles.length > MAX_SHOW_ALL_THRESHOLD) {
-                  setShowTooManyWarning(true);
-                } else {
-                  setViewMode('all');
-                }
+                setViewMode('all');
               }}
             >
               {t('auth_files.view_mode_all')}
@@ -662,16 +638,6 @@ export function QuotaSection<TState extends QuotaStatusState, TData>({
             </div>
           )}
         </>
-      )}
-      {showTooManyWarning && (
-        <div className={styles.warningOverlay} onClick={() => setShowTooManyWarning(false)}>
-          <div className={styles.warningModal} onClick={(e) => e.stopPropagation()}>
-            <p>{t('auth_files.too_many_files_warning')}</p>
-            <Button variant="primary" size="sm" onClick={() => setShowTooManyWarning(false)}>
-              {t('common.confirm')}
-            </Button>
-          </div>
-        </div>
       )}
     </Card>
   );
