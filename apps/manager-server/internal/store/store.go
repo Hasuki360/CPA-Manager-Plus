@@ -12,6 +12,7 @@ import (
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/apikeyalias"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/codexinspection"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/deadletter"
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/grokinspection"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/modelprice"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/quotacooldown"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/setting"
@@ -35,6 +36,9 @@ type CodexInspectionRun = model.CodexInspectionRun
 type CodexInspectionResult = model.CodexInspectionResult
 type CodexInspectionLog = model.CodexInspectionLog
 type CodexInspectionDisableOwnership = model.CodexInspectionDisableOwnership
+type GrokInspectionRun = model.GrokInspectionRun
+type GrokInspectionResult = model.GrokInspectionResult
+type GrokInspectionLog = model.GrokInspectionLog
 type InsertResult = model.InsertResult
 type ModelPrice = model.ModelPrice
 type ModelPriceSyncResult = model.ModelPriceSyncResult
@@ -94,6 +98,7 @@ type Store struct {
 	APIKeyAliases    apikeyalias.Repository
 	AccountActions   accountaction.Repository
 	CodexInspections codexinspection.Repository
+	GrokInspections  grokinspection.Repository
 	QuotaCooldowns   quotacooldown.Repository
 	UsageRollups     usagerollup.Repository
 }
@@ -116,6 +121,7 @@ func New(db *sql.DB, protector ...*security.Protector) *Store {
 		APIKeyAliases:    apikeyalias.New(db),
 		AccountActions:   accountaction.New(db),
 		CodexInspections: codexinspection.New(db),
+		GrokInspections:  grokinspection.New(db),
 		QuotaCooldowns:   quotacooldown.New(db),
 		UsageRollups:     usagerollup.New(db),
 	}
@@ -294,6 +300,38 @@ func (s *Store) RevokeCodexInspectionDisableOwnership(ctx context.Context, fileN
 
 func (s *Store) RestoreCodexInspectionDisableOwnership(ctx context.Context, items []CodexInspectionDisableOwnership) error {
 	return s.CodexInspections.RestoreDisableOwnership(ctx, items)
+}
+
+func (s *Store) CreateGrokInspectionRun(ctx context.Context, run GrokInspectionRun) (GrokInspectionRun, error) {
+	return s.GrokInspections.CreateRun(ctx, run)
+}
+
+func (s *Store) UpdateGrokInspectionRun(ctx context.Context, run GrokInspectionRun) error {
+	return s.GrokInspections.UpdateRun(ctx, run)
+}
+
+func (s *Store) InsertGrokInspectionResult(ctx context.Context, result GrokInspectionResult) (GrokInspectionResult, error) {
+	return s.GrokInspections.InsertResult(ctx, result)
+}
+
+func (s *Store) InsertGrokInspectionLog(ctx context.Context, entry GrokInspectionLog) (GrokInspectionLog, error) {
+	return s.GrokInspections.InsertLog(ctx, entry)
+}
+
+func (s *Store) ListGrokInspectionRuns(ctx context.Context, limit int) ([]GrokInspectionRun, error) {
+	return s.GrokInspections.ListRuns(ctx, limit)
+}
+
+func (s *Store) GetGrokInspectionRun(ctx context.Context, id int64) (GrokInspectionRun, bool, error) {
+	return s.GrokInspections.GetRun(ctx, id)
+}
+
+func (s *Store) ListGrokInspectionResults(ctx context.Context, runID int64) ([]GrokInspectionResult, error) {
+	return s.GrokInspections.ListResults(ctx, runID)
+}
+
+func (s *Store) ListGrokInspectionLogs(ctx context.Context, runID int64) ([]GrokInspectionLog, error) {
+	return s.GrokInspections.ListLogs(ctx, runID)
 }
 
 func (s *Store) InsertEvents(ctx context.Context, events []usage.Event) (InsertResult, error) {

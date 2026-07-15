@@ -205,20 +205,7 @@ export function QuotaPage() {
         </div>
       </div>
 
-      <QuotaSection
-        config={CODEX_CONFIG}
-        files={files}
-        loading={loading}
-        disabled={disableControls}
-        searchQuery={searchQuery}
-        sortMode={sortMode}
-        viewMode={getSectionViewMode(CODEX_CONFIG.type)}
-        onViewModeChange={(viewMode) => setSectionViewMode(CODEX_CONFIG.type, viewMode)}
-        onReauthAccount={(file) => setCodexReauthTarget(createCodexReauthTargetFromAuthFile(file))}
-        accountDisplayMode={getAccountDisplayMode(CODEX_CONFIG.type)}
-        onAccountDisplayModeChange={(mode) => setAccountDisplayMode(CODEX_CONFIG.type, mode)}
-        headerSnapshotLookup={headerSnapshotLookup}
-      />
+      {/* 显示顺序：Antigravity → xAI → Codex → Claude → Kimi */}
       <QuotaSection
         config={ANTIGRAVITY_CONFIG}
         files={files}
@@ -232,6 +219,32 @@ export function QuotaPage() {
         onAccountDisplayModeChange={(mode) =>
           setAccountDisplayMode(ANTIGRAVITY_CONFIG.type, mode)
         }
+      />
+      <QuotaSection
+        config={XAI_CONFIG}
+        files={files}
+        loading={loading}
+        disabled={disableControls}
+        searchQuery={searchQuery}
+        sortMode={sortMode}
+        viewMode={getSectionViewMode(XAI_CONFIG.type)}
+        onViewModeChange={(viewMode) => setSectionViewMode(XAI_CONFIG.type, viewMode)}
+        accountDisplayMode={getAccountDisplayMode(XAI_CONFIG.type)}
+        onAccountDisplayModeChange={(mode) => setAccountDisplayMode(XAI_CONFIG.type, mode)}
+      />
+      <QuotaSection
+        config={CODEX_CONFIG}
+        files={files}
+        loading={loading}
+        disabled={disableControls}
+        searchQuery={searchQuery}
+        sortMode={sortMode}
+        viewMode={getSectionViewMode(CODEX_CONFIG.type)}
+        onViewModeChange={(viewMode) => setSectionViewMode(CODEX_CONFIG.type, viewMode)}
+        onReauthAccount={(file) => setCodexReauthTarget(createCodexReauthTargetFromAuthFile(file))}
+        accountDisplayMode={getAccountDisplayMode(CODEX_CONFIG.type)}
+        onAccountDisplayModeChange={(mode) => setAccountDisplayMode(CODEX_CONFIG.type, mode)}
+        headerSnapshotLookup={headerSnapshotLookup}
       />
       <QuotaSection
         config={CLAUDE_CONFIG}
@@ -256,18 +269,6 @@ export function QuotaPage() {
         onViewModeChange={(viewMode) => setSectionViewMode(KIMI_CONFIG.type, viewMode)}
         accountDisplayMode={getAccountDisplayMode(KIMI_CONFIG.type)}
         onAccountDisplayModeChange={(mode) => setAccountDisplayMode(KIMI_CONFIG.type, mode)}
-      />
-      <QuotaSection
-        config={XAI_CONFIG}
-        files={files}
-        loading={loading}
-        disabled={disableControls}
-        searchQuery={searchQuery}
-        sortMode={sortMode}
-        viewMode={getSectionViewMode(XAI_CONFIG.type)}
-        onViewModeChange={(viewMode) => setSectionViewMode(XAI_CONFIG.type, viewMode)}
-        accountDisplayMode={getAccountDisplayMode(XAI_CONFIG.type)}
-        onAccountDisplayModeChange={(mode) => setAccountDisplayMode(XAI_CONFIG.type, mode)}
       />
 
       <CodexReauthDialog

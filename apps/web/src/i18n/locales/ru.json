@@ -188,7 +188,9 @@
     "logs": "Просмотр логов",
     "logs_short": "Логи",
     "system_info": "Информация системы",
-    "system_info_short": "Система"
+    "system_info_short": "Система",
+    "grok_inspection": "Grok inspection",
+    "grok_inspection_short": "Grok"
   },
   "account_actions": {
     "eyebrow": "Проблемы аккаунтов",
@@ -3521,33 +3523,41 @@
     "codexQuotaCooldown_summary": "Когда кратковременная квота Codex закончилась, временно отключает соответствующий файл входа и включает его снова после восстановления квоты.",
     "codexQuotaCooldown_toggle": "Включить обработку охлаждения квоты",
     "codexQuotaCooldown_description": "Когда мониторинг подтверждает, что кратковременная квота Codex закончилась, файл входа временно отключается и автоматически включается после восстановления квоты.",
-      "codexQuotaCooldown_behavior": [
-        "Только Codex",
-        "Только явная ошибка исчерпанной квоты",
-        "Нужно определить время восстановления",
-        "Временно отключает файл входа",
-        "Автоматически включает после восстановления квоты",
-        "Восстанавливает только аккаунты, отключённые CPAMP",
-        "Не восстанавливает файлы входа, отключённые вручную"
-      ],
-      "antigravityQuotaCooldown_title": "Antigravity Quota Cooldown Handling",
-      "antigravityQuotaCooldown_summary": "Temporarily pauses the matching Antigravity login file after short-term quota runs out, then enables it again after quota recovers.",
-      "antigravityQuotaCooldown_toggle": "Enable Antigravity quota cooldown handling",
-      "antigravityQuotaCooldown_description": "When request monitoring confirms short-term Antigravity quota is exhausted, it temporarily pauses the matching login file and enables it again after quota recovers.",
-      "antigravityQuotaCooldown_behavior": [
-        "Handles Antigravity only",
-        "Handles only clear quota-exhausted errors",
-        "Requires a known recovery time",
-        "Temporarily pauses the login file",
-        "Auto-recovers after the reset time",
-        "Restores only accounts paused by CPAMP",
-        "Does not restore login files you disabled manually"
-      ],
-      "providerQuotaCooldown_title": "Автоматизация охлаждения квоты провайдера",
+    "codexQuotaCooldown_behavior": [
+      "Только Codex",
+      "Только явная ошибка исчерпанной квоты",
+      "Нужно определить время восстановления",
+      "Временно отключает файл входа",
+      "Автоматически включает после восстановления квоты",
+      "Восстанавливает только аккаунты, отключённые CPAMP",
+      "Не восстанавливает файлы входа, отключённые вручную"
+    ],
+    "antigravityQuotaCooldown_title": "Antigravity Quota Cooldown Handling",
+    "antigravityQuotaCooldown_summary": "Temporarily pauses the matching Antigravity login file after short-term quota runs out, then enables it again after quota recovers.",
+    "antigravityQuotaCooldown_toggle": "Enable Antigravity quota cooldown handling",
+    "antigravityQuotaCooldown_description": "When request monitoring confirms short-term Antigravity quota is exhausted, it temporarily pauses the matching login file and enables it again after quota recovers.",
+    "antigravityQuotaCooldown_behavior": [
+      "Handles Antigravity only",
+      "Handles only clear quota-exhausted errors",
+      "Requires a known recovery time",
+      "Temporarily pauses the login file",
+      "Auto-recovers after the reset time",
+      "Restores only accounts paused by CPAMP",
+      "Does not restore login files you disabled manually"
+    ],
+    "providerQuotaCooldown_title": "Автоматизация охлаждения квоты провайдера",
     "providerQuotaCooldown_summary": "Временно отключает соответствующие учётные данные после явного сигнала об исчерпании квоты в реальном запросе Codex или xAI и восстанавливает их после времени восстановления.",
     "providerQuotaCooldown_toggle": "Включить охлаждение квоты провайдера",
     "providerQuotaCooldown_description": "Политика использует события мониторинга реальных запросов и не выполняет активные проверки провайдера. После точного сигнала об исчерпании квоты она временно отключает учётные данные и автоматически восстанавливает их.",
-    "providerQuotaCooldown_behavior": ["Обрабатывает usage-limit Codex и исчерпание бесплатного лимита xAI", "Обрабатывает только точные ошибки исчерпания квоты", "Требует известного или документированного окна восстановления", "Временно отключает файл входа", "Автоматически включает после восстановления квоты", "Восстанавливает только аккаунты, отключённые CPAMP", "Не восстанавливает файлы входа, отключённые вручную"],
+    "providerQuotaCooldown_behavior": [
+      "Обрабатывает usage-limit Codex и исчерпание бесплатного лимита xAI",
+      "Обрабатывает только точные ошибки исчерпания квоты",
+      "Требует известного или документированного окна восстановления",
+      "Временно отключает файл входа",
+      "Автоматически включает после восстановления квоты",
+      "Восстанавливает только аккаунты, отключённые CPAMP",
+      "Не восстанавливает файлы входа, отключённые вручную"
+    ],
     "authIssueQueue_title": "Список проблем аутентификации",
     "authIssueQueue_summary": "Записывает явные проблемы входа или аккаунта, чтобы вы могли обработать их вручную.",
     "authIssueQueue_toggle": "Записывать проблемы аутентификации",

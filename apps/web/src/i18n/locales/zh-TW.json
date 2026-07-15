@@ -188,7 +188,9 @@
     "logs": "記錄檢視",
     "logs_short": "記錄",
     "system_info": "系統資訊",
-    "system_info_short": "系統"
+    "system_info_short": "系統",
+    "grok_inspection": "Grok 账号巡检",
+    "grok_inspection_short": "Grok 巡检"
   },
   "account_actions": {
     "eyebrow": "帳號異常",
@@ -3521,33 +3523,41 @@
     "codexQuotaCooldown_summary": "確認 Codex 短時間額度用完後，暫時停用對應登入檔案，並在額度恢復後重新啟用。",
     "codexQuotaCooldown_toggle": "啟用額度冷卻處理",
     "codexQuotaCooldown_description": "請求監控確認 Codex 短時間額度用完後，會暫時停用對應登入檔案，並在額度恢復後自動啟用。",
-      "codexQuotaCooldown_behavior": [
-        "只處理 Codex",
-        "只處理明確的額度用完錯誤",
-        "必須能判斷恢復時間",
-        "會暫時停用登入檔案",
-        "重置時間後自動恢復",
-        "只恢復 CPAMP 自動停用的帳號",
-        "不會恢復使用者手動停用的登入檔案"
-      ],
-      "antigravityQuotaCooldown_title": "Antigravity 額度冷卻處理",
-      "antigravityQuotaCooldown_summary": "確認 Antigravity 短時間額度用完後，會暫時停用對應登入檔案，並在額度恢復後重新啟用。",
-      "antigravityQuotaCooldown_toggle": "啟用 Antigravity 額度冷卻處理",
-      "antigravityQuotaCooldown_description": "請求監控確認 Antigravity 短時間額度用完後，會暫時停用對應登入檔案，並在額度恢復後自動啟用。",
-      "antigravityQuotaCooldown_behavior": [
-        "只處理 Antigravity",
-        "只處理明確的額度用完錯誤",
-        "必須能判斷恢復時間",
-        "會暫時停用登入檔案",
-        "重置時間後自動恢復",
-        "只恢復 CPAMP 自動停用的帳號",
-        "不會恢復使用者手動停用的登入檔案"
-      ],
-      "providerQuotaCooldown_title": "Provider 額度冷卻自動化",
+    "codexQuotaCooldown_behavior": [
+      "只處理 Codex",
+      "只處理明確的額度用完錯誤",
+      "必須能判斷恢復時間",
+      "會暫時停用登入檔案",
+      "重置時間後自動恢復",
+      "只恢復 CPAMP 自動停用的帳號",
+      "不會恢復使用者手動停用的登入檔案"
+    ],
+    "antigravityQuotaCooldown_title": "Antigravity 額度冷卻處理",
+    "antigravityQuotaCooldown_summary": "確認 Antigravity 短時間額度用完後，會暫時停用對應登入檔案，並在額度恢復後重新啟用。",
+    "antigravityQuotaCooldown_toggle": "啟用 Antigravity 額度冷卻處理",
+    "antigravityQuotaCooldown_description": "請求監控確認 Antigravity 短時間額度用完後，會暫時停用對應登入檔案，並在額度恢復後自動啟用。",
+    "antigravityQuotaCooldown_behavior": [
+      "只處理 Antigravity",
+      "只處理明確的額度用完錯誤",
+      "必須能判斷恢復時間",
+      "會暫時停用登入檔案",
+      "重置時間後自動恢復",
+      "只恢復 CPAMP 自動停用的帳號",
+      "不會恢復使用者手動停用的登入檔案"
+    ],
+    "providerQuotaCooldown_title": "Provider 額度冷卻自動化",
     "providerQuotaCooldown_summary": "真實 Codex 或 xAI 請求回傳明確額度耗盡訊號後，暫時停用對應憑證，並在恢復時間後重新啟用。",
     "providerQuotaCooldown_toggle": "啟用 Provider 額度冷卻",
     "providerQuotaCooldown_description": "此策略消費真實請求監控事件，不會主動探測 Provider。匹配明確額度耗盡訊號後，會暫時停用對應憑證並自動恢復。",
-    "providerQuotaCooldown_behavior": ["處理 Codex usage-limit 和 xAI 免費額度耗盡", "只處理精確匹配的額度耗盡錯誤", "必須有明確或官方說明的恢復視窗", "會暫時停用登入檔案", "重置時間後自動恢復", "只恢復 CPAMP 自動停用的帳號", "不會恢復使用者手動停用的登入檔案"],
+    "providerQuotaCooldown_behavior": [
+      "處理 Codex usage-limit 和 xAI 免費額度耗盡",
+      "只處理精確匹配的額度耗盡錯誤",
+      "必須有明確或官方說明的恢復視窗",
+      "會暫時停用登入檔案",
+      "重置時間後自動恢復",
+      "只恢復 CPAMP 自動停用的帳號",
+      "不會恢復使用者手動停用的登入檔案"
+    ],
     "authIssueQueue_title": "認證異常待處理列表",
     "authIssueQueue_summary": "把明確的登入或帳號異常記錄下來，方便你在認證異常頁面繼續處理。",
     "authIssueQueue_toggle": "記錄認證異常",

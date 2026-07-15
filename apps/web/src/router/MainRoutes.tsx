@@ -28,6 +28,7 @@ import { AccountActionCandidatesPage } from '@/pages/AccountActionCandidatesPage
 import { ModelPricesPage } from '@/pages/ModelPricesPage';
 import { CodexInspectionPage } from '@/pages/CodexInspectionPage';
 import { ServerCodexInspectionPage } from '@/pages/ServerCodexInspectionPage';
+import { GrokInspectionPage } from '@/pages/GrokInspectionPage';
 import { ConfigPage } from '@/pages/ConfigPage';
 import { LogsPage } from '@/pages/LogsPage';
 import { PluginResourcePage } from '@/pages/PluginResourcePage';
@@ -219,6 +220,7 @@ const mainRoutes: RouteObject[] = [
       </FeatureGate>
     ),
   },
+  { path: '/grok-inspection', element: <GrokInspectionPage /> },
   {
     path: '/model-prices',
     element: (
@@ -260,6 +262,7 @@ const mainRoutes: RouteObject[] = [
       </FeatureGate>
     ),
   },
+  { path: '/monitoring/grok-inspection', element: <Navigate to="/grok-inspection" replace /> },
   {
     path: '/plugins',
     element: (

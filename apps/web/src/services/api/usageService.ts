@@ -331,6 +331,83 @@ export interface CodexInspectionLog {
   createdAtMs: number;
 }
 
+export interface GrokInspectionRun {
+  id: number;
+  triggerType: string;
+  status: string;
+  startedAtMs: number;
+  finishedAtMs?: number;
+  totalFiles: number;
+  probeSetCount: number;
+  healthyCount: number;
+  permissionCount: number;
+  quotaCount: number;
+  reauthCount: number;
+  modelUnavailableCount: number;
+  probeErrorCount: number;
+  unknownCount: number;
+  deleteCount: number;
+  disableCount: number;
+  enableCount: number;
+  keepCount: number;
+  error?: string;
+  createdAtMs: number;
+  updatedAtMs: number;
+}
+
+export interface GrokInspectionResult {
+  id: number;
+  runId: number;
+  accountKey: string;
+  fileName: string;
+  displayAccount: string;
+  authIndex?: string;
+  provider: string;
+  disabled: boolean;
+  classification: string;
+  action: string;
+  actionReason: string;
+  actionStatus?: string;
+  executedAction?: string;
+  actionError?: string;
+  statusCode?: number;
+  model?: string;
+  error?: string;
+  createdAtMs: number;
+}
+
+export interface GrokInspectionLog {
+  id: number;
+  runId: number;
+  level: string;
+  message: string;
+  detail?: unknown;
+  createdAtMs: number;
+}
+
+export interface GrokInspectionRunDetail {
+  run: GrokInspectionRun;
+  results: GrokInspectionResult[];
+  logs: GrokInspectionLog[];
+}
+
+export interface GrokInspectionRunsResponse {
+  items: GrokInspectionRun[];
+}
+
+export interface GrokInspectionActionsResponse {
+  outcomes: Array<{
+    resultId?: number;
+    fileName: string;
+    displayAccount: string;
+    action: string;
+    status: string;
+    success: boolean;
+    error?: string;
+  }>;
+  detail: GrokInspectionRunDetail;
+}
+
 export interface CodexInspectionRunsResponse {
   items: CodexInspectionRun[];
 }
@@ -1671,6 +1748,79 @@ export const usageServiceApi = {
       const response = await axios.post<CodexInspectionActionsResponse>(
         buildUrl(base, `/v0/management/codex-inspection/runs/${runId}/actions`),
         { resultIds },
+        {
+          timeout: CODEX_INSPECTION_RUN_TIMEOUT_MS,
+          headers: authHeaders(managementKey),
+        }
+      );
+      return response.data;
+    });
+  },
+
+  listGrokInspectionRuns: async (
+    base: string,
+    managementKey?: string,
+    limit = 20
+  ): Promise<GrokInspectionRunsResponse> => {
+    return withUsageServiceError(async () => {
+      const response = await axios.get<GrokInspectionRunsResponse>(
+        buildUrl(base, '/v0/management/grok-inspection/runs'),
+        {
+          timeout: USAGE_SERVICE_TIMEOUT_MS,
+          headers: authHeaders(managementKey),
+          params: { limit },
+        }
+      );
+      return response.data;
+    });
+  },
+
+  getGrokInspectionRun: async (
+    base: string,
+    managementKey: string | undefined,
+    id: number
+  ): Promise<GrokInspectionRunDetail> => {
+    return withUsageServiceError(async () => {
+      const response = await axios.get<GrokInspectionRunDetail>(
+        buildUrl(base, `/v0/management/grok-inspection/runs/${id}`),
+        {
+          timeout: USAGE_SERVICE_TIMEOUT_MS,
+          headers: authHeaders(managementKey),
+        }
+      );
+      return response.data;
+    });
+  },
+
+  runGrokInspection: async (
+    base: string,
+    managementKey?: string,
+    body?: { includeDisabled?: boolean; onlyDisabled?: boolean; workers?: number }
+  ): Promise<GrokInspectionRunDetail> => {
+    return withUsageServiceError(async () => {
+      const response = await axios.post<GrokInspectionRunDetail>(
+        buildUrl(base, '/v0/management/grok-inspection/run'),
+        body ?? {},
+        {
+          timeout: CODEX_INSPECTION_RUN_TIMEOUT_MS,
+          headers: authHeaders(managementKey),
+        }
+      );
+      return response.data;
+    });
+  },
+
+  executeGrokInspectionActions: async (
+    base: string,
+    managementKey: string | undefined,
+    runId: number,
+    resultIds: number[],
+    force?: string
+  ): Promise<GrokInspectionActionsResponse> => {
+    return withUsageServiceError(async () => {
+      const response = await axios.post<GrokInspectionActionsResponse>(
+        buildUrl(base, `/v0/management/grok-inspection/runs/${runId}/actions`),
+        { resultIds, force },
         {
           timeout: CODEX_INSPECTION_RUN_TIMEOUT_MS,
           headers: authHeaders(managementKey),
