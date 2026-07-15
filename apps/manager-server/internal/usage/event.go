@@ -168,8 +168,25 @@ type CacheAccounting struct {
 	CacheCreationTokens int64
 }
 
-func NormalizeCacheAccounting(mode, provider, executorType, modelName string, inputTokens, cachedTokens, cacheTokens, cacheReadTokens, cacheCreationTokens int64) CacheAccounting {
-	mode = inferCacheInputMode(mode, provider, executorType, modelName, cacheReadTokens, cacheCreationTokens)
+type CacheInputContext struct {
+	ExplicitMode     string
+	ExecutorType     string
+	Provider         string
+	ProviderSnapshot string
+	ResolvedModel    string
+	RequestedModel   string
+	DisplayModel     string
+}
+
+type RawCacheAccountingHints struct {
+	ExplicitMode     string
+	ExplicitTotal    int64
+	HasExplicitTotal bool
+	ValidPayload     bool
+}
+
+func NormalizeCacheAccounting(context CacheInputContext, inputTokens, cachedTokens, cacheTokens, cacheReadTokens, cacheCreationTokens int64) CacheAccounting {
+	mode := InferCacheInputMode(context, cacheReadTokens, cacheCreationTokens)
 	input := maxInt64(inputTokens, 0)
 	cacheRead := CompatibleCachedTokens(cachedTokens, cacheTokens, cacheReadTokens, cacheCreationTokens) + maxInt64(cacheReadTokens, 0)
 	cacheCreation := maxInt64(cacheCreationTokens, 0)
@@ -188,24 +205,178 @@ func NormalizeCacheAccounting(mode, provider, executorType, modelName string, in
 	return accounting
 }
 
-func inferCacheInputMode(mode, provider, executorType, modelName string, cacheReadTokens, cacheCreationTokens int64) string {
-	mode = strings.ToLower(strings.TrimSpace(mode))
+func InferCacheInputMode(context CacheInputContext, cacheReadTokens, cacheCreationTokens int64) string {
+	mode := normalizeCacheInputMode(context.ExplicitMode)
 	if mode == CacheInputModeIncluded || mode == CacheInputModeSeparate {
 		return mode
 	}
-	identity := strings.ToLower(strings.Join([]string{provider, executorType, modelName}, " "))
-	if strings.Contains(identity, "anthropic") || strings.Contains(identity, "claude") {
-		return CacheInputModeSeparate
+	if classified, ok := classifyExecutorCacheInputMode(context.ExecutorType); ok {
+		return classified
 	}
-	if strings.Contains(identity, "openai") || strings.Contains(identity, "codex") ||
-		strings.Contains(identity, "gemini") || strings.Contains(identity, "antigravity") ||
-		strings.Contains(identity, "interaction") || strings.Contains(identity, "gpt-") {
-		return CacheInputModeIncluded
+	for _, provider := range []string{context.Provider, context.ProviderSnapshot} {
+		if classified, ok := classifyProviderCacheInputMode(provider); ok {
+			return classified
+		}
+	}
+	for _, model := range []string{context.ResolvedModel, context.RequestedModel, context.DisplayModel} {
+		if classified, ok := classifyModelCacheInputMode(model); ok {
+			return classified
+		}
 	}
 	if cacheReadTokens > 0 || cacheCreationTokens > 0 {
 		return CacheInputModeSeparate
 	}
 	return CacheInputModeIncluded
+}
+
+func normalizeCacheInputMode(mode string) string {
+	return strings.ToLower(strings.TrimSpace(mode))
+}
+
+func classifyExecutorCacheInputMode(executorType string) (string, bool) {
+	executor := strings.ToLower(strings.TrimSpace(executorType))
+	if executor == "" {
+		return "", false
+	}
+	if strings.Contains(executor, "claude") {
+		return CacheInputModeSeparate, true
+	}
+	for _, marker := range []string{
+		"openaicompat", "openai_compat", "openai-compat", "openai",
+		"codex", "gemini", "aistudio", "ai_studio", "ai-studio",
+		"antigravity", "xai", "kimi",
+	} {
+		if strings.Contains(executor, marker) {
+			return CacheInputModeIncluded, true
+		}
+	}
+	return "", false
+}
+
+func classifyProviderCacheInputMode(provider string) (string, bool) {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	if provider == "" {
+		return "", false
+	}
+	if strings.Contains(provider, "anthropic") || strings.Contains(provider, "claude") {
+		return CacheInputModeSeparate, true
+	}
+	for _, marker := range []string{
+		"openai", "codex", "gemini", "vertex", "aistudio", "ai_studio",
+		"ai-studio", "interaction", "antigravity", "xai", "kimi", "moonshot",
+	} {
+		if strings.Contains(provider, marker) {
+			return CacheInputModeIncluded, true
+		}
+	}
+	return "", false
+}
+
+func classifyModelCacheInputMode(model string) (string, bool) {
+	model = strings.ToLower(strings.TrimSpace(model))
+	if model == "" {
+		return "", false
+	}
+	if strings.Contains(model, "anthropic") || strings.Contains(model, "claude") {
+		return CacheInputModeSeparate, true
+	}
+	for _, marker := range []string{
+		"gpt-", "openai", "codex", "gemini", "vertex", "aistudio",
+		"antigravity", "grok", "xai", "kimi", "moonshot",
+	} {
+		if strings.Contains(model, marker) {
+			return CacheInputModeIncluded, true
+		}
+	}
+	return "", false
+}
+
+func RawCacheAccountingHintsFromJSON(raw string) RawCacheAccountingHints {
+	return rawCacheAccountingHintsFromJSON(raw, 0)
+}
+
+func rawCacheAccountingHintsFromJSON(raw string, depth int) RawCacheAccountingHints {
+	if depth > 1 || strings.TrimSpace(raw) == "" {
+		return RawCacheAccountingHints{}
+	}
+	var payload any
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return RawCacheAccountingHints{}
+	}
+	record, ok := payload.(map[string]any)
+	if !ok {
+		return RawCacheAccountingHints{}
+	}
+	if detail, ok := record["detail"].(map[string]any); ok {
+		record = detail
+	}
+	hints := RawCacheAccountingHints{ExplicitMode: cacheInputModeFromRecord(record), ValidPayload: true}
+	if total, ok := explicitPositiveTotalFromRecord(record); ok {
+		hints.ExplicitTotal = total
+		hints.HasExplicitTotal = true
+	}
+	if nestedRaw := readString(record, "raw_json", "rawJson"); nestedRaw != "" {
+		nested := rawCacheAccountingHintsFromJSON(nestedRaw, depth+1)
+		if hints.ExplicitMode == "" {
+			hints.ExplicitMode = nested.ExplicitMode
+		}
+		if !hints.HasExplicitTotal && nested.HasExplicitTotal {
+			hints.ExplicitTotal = nested.ExplicitTotal
+			hints.HasExplicitTotal = true
+		}
+	}
+	return hints
+}
+
+func cacheInputModeFromRecord(record map[string]any) string {
+	for _, parent := range []string{"tokens", "usage"} {
+		mode := normalizeCacheInputMode(readStringFromNested(record, parent, "cache_input_mode", "cacheInputMode"))
+		if mode == CacheInputModeIncluded || mode == CacheInputModeSeparate {
+			return mode
+		}
+	}
+	mode := normalizeCacheInputMode(readString(record, "cache_input_mode", "cacheInputMode"))
+	if mode == CacheInputModeIncluded || mode == CacheInputModeSeparate {
+		return mode
+	}
+	return ""
+}
+
+func explicitPositiveTotalFromRecord(record map[string]any) (int64, bool) {
+	for _, parent := range []string{"tokens", "usage"} {
+		if nested, ok := record[parent].(map[string]any); ok {
+			if total, ok := positiveIntValue(first(nested, "total_tokens", "totalTokens", "total")); ok {
+				return total, true
+			}
+		}
+	}
+	return positiveIntValue(first(record, "total_tokens", "totalTokens", "total"))
+}
+
+func positiveIntValue(value any) (int64, bool) {
+	switch typed := value.(type) {
+	case float64:
+		if typed > 0 {
+			return int64(typed), true
+		}
+	case json.Number:
+		if parsed, err := typed.Int64(); err == nil && parsed > 0 {
+			return parsed, true
+		}
+	case string:
+		if parsed, err := strconv.ParseInt(strings.TrimSpace(typed), 10, 64); err == nil && parsed > 0 {
+			return parsed, true
+		}
+	case int64:
+		if typed > 0 {
+			return typed, true
+		}
+	case int:
+		if typed > 0 {
+			return int64(typed), true
+		}
+	}
+	return 0, false
 }
 
 func IsLongContextInput(inputTokens int64) bool {
@@ -323,7 +494,7 @@ func NormalizeRaw(raw []byte) (Event, error) {
 	apiKey := readString(record, "api_key", "apiKey", "key")
 	authIndex := readString(record, "auth_index", "authIndex", "AuthIndex")
 	requestedModel := readString(record, "alias", "requested_model", "requestedModel")
-	resolvedModel := readString(record, "model", "model_name", "modelName", "resolved_model", "resolvedModel")
+	resolvedModel := readString(record, "resolved_model", "resolvedModel", "model", "model_name", "modelName")
 	model := requestedModel
 	if model == "" {
 		model = resolvedModel
@@ -336,11 +507,16 @@ func NormalizeRaw(raw []byte) (Event, error) {
 	if serviceTier == "" {
 		serviceTier = requestServiceTier
 	}
-	cacheInputMode := readStringFromNested(record, "tokens", "cache_input_mode", "cacheInputMode")
-	if cacheInputMode == "" {
-		cacheInputMode = readString(record, "cache_input_mode", "cacheInputMode")
-	}
-	cacheAccounting := NormalizeCacheAccounting(cacheInputMode, provider, executorType, resolvedModel, inputTokens, cachedTokens, cacheTokens, cacheReadTokens, cacheCreationTokens)
+	authProviderSnapshot := readString(record, "auth_provider_snapshot", "authProviderSnapshot")
+	cacheAccounting := NormalizeCacheAccounting(CacheInputContext{
+		ExplicitMode:     cacheInputModeFromRecord(record),
+		ExecutorType:     executorType,
+		Provider:         provider,
+		ProviderSnapshot: authProviderSnapshot,
+		ResolvedModel:    resolvedModel,
+		RequestedModel:   requestedModel,
+		DisplayModel:     model,
+	}, inputTokens, cachedTokens, cacheTokens, cacheReadTokens, cacheCreationTokens)
 	if totalTokens <= 0 {
 		totalTokens = cacheAccounting.TotalInputTokens + maxInt64(outputTokens, 0) + maxInt64(reasoningTokens, 0)
 	}
@@ -365,7 +541,7 @@ func NormalizeRaw(raw []byte) (Event, error) {
 		AccountSnapshot:               readString(record, "account_snapshot", "accountSnapshot"),
 		AuthLabelSnapshot:             readString(record, "auth_label_snapshot", "authLabelSnapshot"),
 		AuthFileSnapshot:              readString(record, "auth_file_snapshot", "authFileSnapshot"),
-		AuthProviderSnapshot:          readString(record, "auth_provider_snapshot", "authProviderSnapshot"),
+		AuthProviderSnapshot:          authProviderSnapshot,
 		AuthProjectIDSnapshot:         readString(record, "auth_project_id_snapshot", "authProjectIdSnapshot", "project_id", "projectId"),
 		AuthSnapshotAtMS:              readInt(record, "auth_snapshot_at_ms", "authSnapshotAtMs"),
 		ReasoningEffort:               readString(record, "reasoning_effort", "reasoningEffort"),
@@ -507,45 +683,18 @@ func readTimestamp(record map[string]any) (int64, string) {
 }
 
 func readTokenFields(record map[string]any) (int64, int64, int64, int64, int64, int64, int64, int64) {
-	tokens := map[string]any{}
-	if nested, ok := first(record, "tokens", "usage").(map[string]any); ok {
-		tokens = nested
-	}
-	input := readIntFrom(tokens, "input_tokens", "inputTokens", "prompt_tokens", "promptTokens")
-	if input == 0 {
-		input = readInt(record, "input_tokens", "inputTokens", "prompt_tokens", "promptTokens")
-	}
-	output := readIntFrom(tokens, "output_tokens", "outputTokens", "completion_tokens", "completionTokens")
-	if output == 0 {
-		output = readInt(record, "output_tokens", "outputTokens", "completion_tokens", "completionTokens")
-	}
-	reasoning := readIntFrom(tokens, "reasoning_tokens", "reasoningTokens")
-	if reasoning == 0 {
-		reasoning = readInt(record, "reasoning_tokens", "reasoningTokens")
-	}
-	cached := readIntFrom(tokens, "cached_tokens", "cachedTokens")
-	if cached == 0 {
-		cached = readInt(record, "cached_tokens", "cachedTokens")
-	}
-	cache := readIntFrom(tokens, "cache_tokens", "cacheTokens")
-	if cache == 0 {
-		cache = readInt(record, "cache_tokens", "cacheTokens")
-	}
-	cacheRead := readFirstIntFrom(tokens,
+	input := readNestedThenTopInt(record, []string{"input_tokens", "inputTokens", "prompt_tokens", "promptTokens"})
+	output := readNestedThenTopInt(record, []string{"output_tokens", "outputTokens", "completion_tokens", "completionTokens"})
+	reasoning := readNestedThenTopInt(record, []string{"reasoning_tokens", "reasoningTokens"})
+	cached := readNestedThenTopInt(record, []string{"cached_tokens", "cachedTokens"})
+	cache := readNestedThenTopInt(record, []string{"cache_tokens", "cacheTokens"})
+	cacheRead := readNestedThenTopInt(record, []string{
 		"cache_read_tokens",
 		"cacheReadTokens",
 		"cache_read_input_tokens",
 		"cacheReadInputTokens",
-	)
-	if cacheRead == 0 {
-		cacheRead = readFirstIntFrom(record,
-			"cache_read_tokens",
-			"cacheReadTokens",
-			"cache_read_input_tokens",
-			"cacheReadInputTokens",
-		)
-	}
-	cacheCreation := readFirstIntFrom(tokens,
+	})
+	cacheCreation := readNestedThenTopInt(record, []string{
 		"cache_creation_tokens",
 		"cacheCreationTokens",
 		"cache_creation_input_tokens",
@@ -554,24 +703,20 @@ func readTokenFields(record map[string]any) (int64, int64, int64, int64, int64, 
 		"cacheWriteTokens",
 		"cache_write_input_tokens",
 		"cacheWriteInputTokens",
-	)
-	if cacheCreation == 0 {
-		cacheCreation = readFirstIntFrom(record,
-			"cache_creation_tokens",
-			"cacheCreationTokens",
-			"cache_creation_input_tokens",
-			"cacheCreationInputTokens",
-			"cache_write_tokens",
-			"cacheWriteTokens",
-			"cache_write_input_tokens",
-			"cacheWriteInputTokens",
-		)
-	}
-	total := readIntFrom(tokens, "total_tokens", "totalTokens", "total")
-	if total == 0 {
-		total = readInt(record, "total_tokens", "totalTokens", "total")
-	}
+	})
+	total := readNestedThenTopInt(record, []string{"total_tokens", "totalTokens", "total"})
 	return input, output, reasoning, cached, cache, cacheRead, cacheCreation, total
+}
+
+func readNestedThenTopInt(record map[string]any, keys []string) int64 {
+	for _, parent := range []string{"tokens", "usage"} {
+		if nested, ok := record[parent].(map[string]any); ok {
+			if value := readFirstIntFrom(nested, keys...); value != 0 {
+				return value
+			}
+		}
+	}
+	return readFirstIntFrom(record, keys...)
 }
 
 func readFailed(record map[string]any) bool {

@@ -277,6 +277,12 @@ func parseJSONObjectImport(data []byte) (ImportParseResult, error) {
 	if err := decodeJSON(data, &record); err != nil {
 		return ImportParseResult{}, err
 	}
+	if event, ok, err := eventFromExportedRecord(record); ok || err != nil {
+		if err != nil {
+			return ImportParseResult{Format: ImportFormatJSONL, Failed: 1}, err
+		}
+		return ImportParseResult{Format: ImportFormatJSONL, Events: []Event{event}}, nil
+	}
 
 	if usageRaw, ok := record["usage"]; ok {
 		usageRecord, ok := usageRaw.(map[string]any)
@@ -298,13 +304,6 @@ func parseJSONObjectImport(data []byte) (ImportParseResult, error) {
 
 	if hasUsageAPIs(record) {
 		return eventsFromLegacyUsage(record, ImportFormatLegacyPayload)
-	}
-
-	if event, ok, err := eventFromExportedRecord(record); ok || err != nil {
-		if err != nil {
-			return ImportParseResult{Format: ImportFormatJSONL, Failed: 1}, err
-		}
-		return ImportParseResult{Format: ImportFormatJSONL, Events: []Event{event}}, nil
 	}
 
 	if looksLikeLegacyUsageSummary(record) {
@@ -392,68 +391,98 @@ func eventFromExportedRecord(record map[string]any) (Event, bool, error) {
 	}
 
 	inputTokens, outputTokens, reasoningTokens, cachedTokens, cacheTokens, cacheReadTokens, cacheCreationTokens, totalTokens := readTokenFields(record)
-	if totalTokens <= 0 {
-		totalTokens = inputTokens + outputTokens + reasoningTokens +
-			CompatibleCachedTokens(cachedTokens, cacheTokens, cacheReadTokens, cacheCreationTokens) +
-			maxInt64(cacheReadTokens, 0) + maxInt64(cacheCreationTokens, 0)
-	}
 	failStatusCode, failBody := readFailFields(record)
 	failSummary := readString(record, "fail_summary", "failSummary")
 	if failSummary == "" {
 		failSummary = FailSummaryFromBody(failBody)
 	}
 
-	event := Event{
-		RequestID:             readString(record, "request_id", "requestId"),
-		EventHash:             eventHash,
-		TimestampMS:           timestampMS,
-		Timestamp:             timestamp,
-		Provider:              readString(record, "provider"),
-		ExecutorType:          readString(record, "executor_type", "executorType"),
-		Model:                 readString(record, "model"),
-		RequestedModel:        readString(record, "requested_model", "requestedModel"),
-		ResolvedModel:         readString(record, "resolved_model", "resolvedModel"),
-		Endpoint:              readString(record, "endpoint"),
-		Method:                readString(record, "method"),
-		Path:                  readString(record, "path"),
-		AuthType:              readString(record, "auth_type", "authType"),
-		AuthIndex:             readString(record, "auth_index", "authIndex", "AuthIndex"),
-		Source:                readString(record, "source"),
-		SourceHash:            readString(record, "source_hash", "sourceHash"),
-		APIKeyHash:            readString(record, "api_key_hash", "apiKeyHash"),
-		AccountSnapshot:       readString(record, "account_snapshot", "accountSnapshot"),
-		AuthLabelSnapshot:     readString(record, "auth_label_snapshot", "authLabelSnapshot"),
-		AuthFileSnapshot:      readString(record, "auth_file_snapshot", "authFileSnapshot"),
-		AuthProviderSnapshot:  readString(record, "auth_provider_snapshot", "authProviderSnapshot"),
-		AuthProjectIDSnapshot: readString(record, "auth_project_id_snapshot", "authProjectIdSnapshot"),
-		AuthSnapshotAtMS:      readInt(record, "auth_snapshot_at_ms", "authSnapshotAtMs"),
-		ReasoningEffort:       readString(record, "reasoning_effort", "reasoningEffort"),
-		ServiceTier:           readString(record, "service_tier", "serviceTier"),
-		InputTokens:           inputTokens,
-		OutputTokens:          outputTokens,
-		ReasoningTokens:       reasoningTokens,
-		CachedTokens:          cachedTokens,
-		CacheTokens:           cacheTokens,
-		CacheReadTokens:       cacheReadTokens,
-		CacheCreationTokens:   cacheCreationTokens,
-		TotalTokens:           totalTokens,
-		LatencyMS:             readOptionalInt(record, "latency_ms", "latencyMs"),
-		TTFTMS:                readOptionalInt(record, "ttft_ms", "ttftMs", "time_to_first_token_ms", "timeToFirstTokenMs"),
-		Failed:                readBool(record, "failed", "is_failed", "isFailed"),
-		FailStatusCode:        int(failStatusCode),
-		FailSummary:           failSummary,
-		FailBody:              failBody,
-		RawJSON:               SafeRawJSON(readString(record, "raw_json", "rawJson")),
-		CreatedAtMS:           readInt(record, "created_at_ms", "createdAtMs"),
+	requestedModel := readString(record, "requested_model", "requestedModel")
+	resolvedModel := readString(record, "resolved_model", "resolvedModel")
+	model := readString(record, "model")
+	if model == "" {
+		model = requestedModel
 	}
-	if event.Model == "" {
-		if event.RequestedModel != "" {
-			event.Model = event.RequestedModel
-		} else if event.ResolvedModel != "" {
-			event.Model = event.ResolvedModel
-		} else {
-			event.Model = "-"
-		}
+	if model == "" {
+		model = resolvedModel
+	}
+	if model == "" {
+		model = "-"
+	}
+	provider := readString(record, "provider")
+	executorType := readString(record, "executor_type", "executorType")
+	providerSnapshot := readString(record, "auth_provider_snapshot", "authProviderSnapshot")
+	rawJSON := importCacheAccountingRawJSON(record)
+	rawHints := RawCacheAccountingHintsFromJSON(rawJSON)
+	explicitMode := cacheInputModeFromRecord(record)
+	if explicitMode == "" {
+		explicitMode = rawHints.ExplicitMode
+	}
+	accounting := NormalizeCacheAccounting(CacheInputContext{
+		ExplicitMode:     explicitMode,
+		ExecutorType:     executorType,
+		Provider:         provider,
+		ProviderSnapshot: providerSnapshot,
+		ResolvedModel:    resolvedModel,
+		RequestedModel:   requestedModel,
+		DisplayModel:     model,
+	}, inputTokens, cachedTokens, cacheTokens, cacheReadTokens, cacheCreationTokens)
+	if totalTokens <= 0 && rawHints.HasExplicitTotal {
+		totalTokens = rawHints.ExplicitTotal
+	}
+	if totalTokens <= 0 {
+		totalTokens = accounting.TotalInputTokens + maxInt64(outputTokens, 0) + maxInt64(reasoningTokens, 0)
+	}
+
+	event := Event{
+		RequestID:                     readString(record, "request_id", "requestId"),
+		EventHash:                     eventHash,
+		TimestampMS:                   timestampMS,
+		Timestamp:                     timestamp,
+		Provider:                      provider,
+		ExecutorType:                  executorType,
+		Model:                         model,
+		RequestedModel:                requestedModel,
+		ResolvedModel:                 resolvedModel,
+		Endpoint:                      readString(record, "endpoint"),
+		Method:                        readString(record, "method"),
+		Path:                          readString(record, "path"),
+		AuthType:                      readString(record, "auth_type", "authType"),
+		AuthIndex:                     readString(record, "auth_index", "authIndex", "AuthIndex"),
+		Source:                        readString(record, "source"),
+		SourceHash:                    readString(record, "source_hash", "sourceHash"),
+		APIKeyHash:                    readString(record, "api_key_hash", "apiKeyHash"),
+		AccountSnapshot:               readString(record, "account_snapshot", "accountSnapshot"),
+		AuthLabelSnapshot:             readString(record, "auth_label_snapshot", "authLabelSnapshot"),
+		AuthFileSnapshot:              readString(record, "auth_file_snapshot", "authFileSnapshot"),
+		AuthProviderSnapshot:          providerSnapshot,
+		AuthProjectIDSnapshot:         readString(record, "auth_project_id_snapshot", "authProjectIdSnapshot"),
+		AuthSnapshotAtMS:              readInt(record, "auth_snapshot_at_ms", "authSnapshotAtMs"),
+		ReasoningEffort:               readString(record, "reasoning_effort", "reasoningEffort"),
+		ServiceTier:                   readString(record, "service_tier", "serviceTier"),
+		RequestServiceTier:            readString(record, "request_service_tier", "requestServiceTier"),
+		ResponseServiceTier:           readString(record, "response_service_tier", "responseServiceTier"),
+		CacheInputMode:                accounting.Mode,
+		InputTokens:                   inputTokens,
+		OutputTokens:                  outputTokens,
+		ReasoningTokens:               reasoningTokens,
+		CachedTokens:                  cachedTokens,
+		CacheTokens:                   cacheTokens,
+		CacheReadTokens:               cacheReadTokens,
+		CacheCreationTokens:           cacheCreationTokens,
+		NormalizedUncachedInputTokens: accounting.UncachedInputTokens,
+		NormalizedTotalInputTokens:    accounting.TotalInputTokens,
+		NormalizedCacheReadTokens:     accounting.CacheReadTokens,
+		NormalizedCacheCreationTokens: accounting.CacheCreationTokens,
+		TotalTokens:                   totalTokens,
+		LatencyMS:                     readOptionalInt(record, "latency_ms", "latencyMs"),
+		TTFTMS:                        readOptionalInt(record, "ttft_ms", "ttftMs", "time_to_first_token_ms", "timeToFirstTokenMs"),
+		Failed:                        readBool(record, "failed", "is_failed", "isFailed"),
+		FailStatusCode:                int(failStatusCode),
+		FailSummary:                   failSummary,
+		FailBody:                      failBody,
+		RawJSON:                       rawJSON,
+		CreatedAtMS:                   readInt(record, "created_at_ms", "createdAtMs"),
 	}
 	if event.Endpoint == "" {
 		event.Endpoint = "-"
@@ -559,11 +588,6 @@ func eventFromLegacyDetail(
 	timestampMS, normalizedTimestamp := readTimestamp(detail)
 
 	inputTokens, outputTokens, reasoningTokens, cachedTokens, cacheTokens, cacheReadTokens, cacheCreationTokens, totalTokens := readTokenFields(detail)
-	if totalTokens <= 0 {
-		totalTokens = inputTokens + outputTokens + reasoningTokens +
-			CompatibleCachedTokens(cachedTokens, cacheTokens, cacheReadTokens, cacheCreationTokens) +
-			maxInt64(cacheReadTokens, 0) + maxInt64(cacheCreationTokens, 0)
-	}
 	failStatusCode, failBody := readFailFields(detail)
 	failSummary := readString(detail, "fail_summary", "failSummary")
 	if failSummary == "" {
@@ -574,50 +598,76 @@ func eventFromLegacyDetail(
 	apiKey := readString(detail, "api_key", "apiKey", "key")
 	authIndex := readString(detail, "auth_index", "authIndex", "AuthIndex")
 	rawJSON := legacyRawJSON(endpoint, model, detail)
+	provider := readString(detail, "provider", "type", "auth_type", "authType")
+	executorType := readString(detail, "executor_type", "executorType")
+	providerSnapshot := readString(detail, "auth_provider_snapshot", "authProviderSnapshot")
+	requestedModel := readString(detail, "requested_model", "requestedModel", "alias")
+	resolvedModel := readString(detail, "resolved_model", "resolvedModel")
+	accounting := NormalizeCacheAccounting(CacheInputContext{
+		ExplicitMode:     cacheInputModeFromRecord(detail),
+		ExecutorType:     executorType,
+		Provider:         provider,
+		ProviderSnapshot: providerSnapshot,
+		ResolvedModel:    resolvedModel,
+		RequestedModel:   requestedModel,
+		DisplayModel:     model,
+	}, inputTokens, cachedTokens, cacheTokens, cacheReadTokens, cacheCreationTokens)
+	if totalTokens <= 0 {
+		totalTokens = accounting.TotalInputTokens + maxInt64(outputTokens, 0) + maxInt64(reasoningTokens, 0)
+	}
 	requestID := readString(detail, "request_id", "requestId", "id")
 	if requestID == "" {
 		requestID = legacyRequestID(endpoint, model, normalizedTimestamp, rawJSON, endpointIndex, modelIndex, detailIndex)
 	}
 
 	event := Event{
-		RequestID:             requestID,
-		TimestampMS:           timestampMS,
-		Timestamp:             normalizedTimestamp,
-		Provider:              readString(detail, "provider", "type", "auth_type", "authType"),
-		ExecutorType:          readString(detail, "executor_type", "executorType"),
-		Model:                 model,
-		Endpoint:              endpoint,
-		Method:                method,
-		Path:                  path,
-		AuthType:              readString(detail, "auth_type", "authType"),
-		AuthIndex:             authIndex,
-		Source:                maskSource(sourceRaw),
-		SourceHash:            hashString(sourceRaw),
-		APIKeyHash:            hashString(apiKey),
-		AccountSnapshot:       readString(detail, "account_snapshot", "accountSnapshot"),
-		AuthLabelSnapshot:     readString(detail, "auth_label_snapshot", "authLabelSnapshot"),
-		AuthFileSnapshot:      readString(detail, "auth_file_snapshot", "authFileSnapshot"),
-		AuthProviderSnapshot:  readString(detail, "auth_provider_snapshot", "authProviderSnapshot"),
-		AuthProjectIDSnapshot: readString(detail, "auth_project_id_snapshot", "authProjectIdSnapshot"),
-		AuthSnapshotAtMS:      readInt(detail, "auth_snapshot_at_ms", "authSnapshotAtMs"),
-		ReasoningEffort:       readString(detail, "reasoning_effort", "reasoningEffort"),
-		ServiceTier:           readString(detail, "service_tier", "serviceTier"),
-		InputTokens:           inputTokens,
-		OutputTokens:          outputTokens,
-		ReasoningTokens:       reasoningTokens,
-		CachedTokens:          cachedTokens,
-		CacheTokens:           cacheTokens,
-		CacheReadTokens:       cacheReadTokens,
-		CacheCreationTokens:   cacheCreationTokens,
-		TotalTokens:           totalTokens,
-		LatencyMS:             readOptionalInt(detail, "latency_ms", "latencyMs", "duration_ms", "durationMs", "elapsed_ms", "elapsedMs"),
-		TTFTMS:                readOptionalInt(detail, "ttft_ms", "ttftMs", "time_to_first_token_ms", "timeToFirstTokenMs"),
-		Failed:                readFailed(detail),
-		FailStatusCode:        int(failStatusCode),
-		FailSummary:           failSummary,
-		FailBody:              failBody,
-		RawJSON:               rawJSON,
-		CreatedAtMS:           now,
+		RequestID:                     requestID,
+		TimestampMS:                   timestampMS,
+		Timestamp:                     normalizedTimestamp,
+		Provider:                      provider,
+		ExecutorType:                  executorType,
+		Model:                         model,
+		RequestedModel:                requestedModel,
+		ResolvedModel:                 resolvedModel,
+		Endpoint:                      endpoint,
+		Method:                        method,
+		Path:                          path,
+		AuthType:                      readString(detail, "auth_type", "authType"),
+		AuthIndex:                     authIndex,
+		Source:                        maskSource(sourceRaw),
+		SourceHash:                    hashString(sourceRaw),
+		APIKeyHash:                    hashString(apiKey),
+		AccountSnapshot:               readString(detail, "account_snapshot", "accountSnapshot"),
+		AuthLabelSnapshot:             readString(detail, "auth_label_snapshot", "authLabelSnapshot"),
+		AuthFileSnapshot:              readString(detail, "auth_file_snapshot", "authFileSnapshot"),
+		AuthProviderSnapshot:          providerSnapshot,
+		AuthProjectIDSnapshot:         readString(detail, "auth_project_id_snapshot", "authProjectIdSnapshot"),
+		AuthSnapshotAtMS:              readInt(detail, "auth_snapshot_at_ms", "authSnapshotAtMs"),
+		ReasoningEffort:               readString(detail, "reasoning_effort", "reasoningEffort"),
+		ServiceTier:                   readString(detail, "service_tier", "serviceTier"),
+		RequestServiceTier:            readString(detail, "request_service_tier", "requestServiceTier"),
+		ResponseServiceTier:           readString(detail, "response_service_tier", "responseServiceTier"),
+		CacheInputMode:                accounting.Mode,
+		InputTokens:                   inputTokens,
+		OutputTokens:                  outputTokens,
+		ReasoningTokens:               reasoningTokens,
+		CachedTokens:                  cachedTokens,
+		CacheTokens:                   cacheTokens,
+		CacheReadTokens:               cacheReadTokens,
+		CacheCreationTokens:           cacheCreationTokens,
+		NormalizedUncachedInputTokens: accounting.UncachedInputTokens,
+		NormalizedTotalInputTokens:    accounting.TotalInputTokens,
+		NormalizedCacheReadTokens:     accounting.CacheReadTokens,
+		NormalizedCacheCreationTokens: accounting.CacheCreationTokens,
+		TotalTokens:                   totalTokens,
+		LatencyMS:                     readOptionalInt(detail, "latency_ms", "latencyMs", "duration_ms", "durationMs", "elapsed_ms", "elapsedMs"),
+		TTFTMS:                        readOptionalInt(detail, "ttft_ms", "ttftMs", "time_to_first_token_ms", "timeToFirstTokenMs"),
+		Failed:                        readFailed(detail),
+		FailStatusCode:                int(failStatusCode),
+		FailSummary:                   failSummary,
+		FailBody:                      failBody,
+		RawJSON:                       rawJSON,
+		CreatedAtMS:                   now,
 	}
 	if event.Model == "" {
 		event.Model = "-"
@@ -628,6 +678,35 @@ func eventFromLegacyDetail(
 	AttachResponseHeaderMetadata(&event, ResponseHeaderMetadataFromRecord(detail, time.UnixMilli(timestampMS)))
 	event.EventHash = buildEventHash(event)
 	return event, nil
+}
+
+func importCacheAccountingRawJSON(record map[string]any) string {
+	existing := SafeRawJSON(readString(record, "raw_json", "rawJson"))
+	recordHints := RawCacheAccountingHints{
+		ExplicitMode: cacheInputModeFromRecord(record),
+	}
+	if total, ok := explicitPositiveTotalFromRecord(record); ok {
+		recordHints.ExplicitTotal = total
+		recordHints.HasExplicitTotal = true
+	}
+	existingHints := RawCacheAccountingHintsFromJSON(existing)
+	modeCovered := recordHints.ExplicitMode == "" || existingHints.ExplicitMode == recordHints.ExplicitMode
+	totalCovered := !recordHints.HasExplicitTotal || (existingHints.HasExplicitTotal && existingHints.ExplicitTotal == recordHints.ExplicitTotal)
+	if modeCovered && totalCovered {
+		return existing
+	}
+	provenance := map[string]any{}
+	if recordHints.ExplicitMode != "" {
+		provenance["cache_input_mode"] = recordHints.ExplicitMode
+	}
+	if recordHints.HasExplicitTotal {
+		provenance["total_tokens"] = recordHints.ExplicitTotal
+	}
+	if existing != "" {
+		provenance["raw_json"] = existing
+	}
+	raw, _ := json.Marshal(provenance)
+	return string(raw)
 }
 
 func legacyRawJSON(endpoint string, model string, detail map[string]any) string {

@@ -2,17 +2,94 @@ package monitoring
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"path/filepath"
 	"reflect"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/store"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usage"
 )
+
+func TestAnalyticsQueryGroupBoundsConcurrency(t *testing.T) {
+	group := newAnalyticsQueryGroup(context.Background(), 2)
+	release := make(chan struct{})
+	started := make(chan struct{}, 4)
+	var current atomic.Int64
+	var maximum atomic.Int64
+	for range 4 {
+		group.Go(func(ctx context.Context) error {
+			running := current.Add(1)
+			defer current.Add(-1)
+			for {
+				observed := maximum.Load()
+				if running <= observed || maximum.CompareAndSwap(observed, running) {
+					break
+				}
+			}
+			started <- struct{}{}
+			select {
+			case <-release:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		})
+	}
+	<-started
+	<-started
+	close(release)
+	if err := group.Wait(); err != nil {
+		t.Fatalf("wait query group: %v", err)
+	}
+	if got := maximum.Load(); got != 2 {
+		t.Fatalf("maximum concurrency = %d, want 2", got)
+	}
+}
+
+func TestAnalyticsQueryGroupCancelsSiblingsOnError(t *testing.T) {
+	group := newAnalyticsQueryGroup(context.Background(), 2)
+	started := make(chan struct{})
+	cancelled := make(chan struct{})
+	group.Go(func(ctx context.Context) error {
+		close(started)
+		<-ctx.Done()
+		close(cancelled)
+		return nil
+	})
+	<-started
+	wantErr := errors.New("query failed")
+	group.Go(func(context.Context) error { return wantErr })
+	if err := group.Wait(); !errors.Is(err, wantErr) {
+		t.Fatalf("wait error = %v, want %v", err, wantErr)
+	}
+	select {
+	case <-cancelled:
+	default:
+		t.Fatal("sibling query did not observe cancellation")
+	}
+}
+
+func TestAnalyticsQueryGroupReturnsRequestCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	group := newAnalyticsQueryGroup(ctx, 1)
+	started := make(chan struct{})
+	group.Go(func(queryCtx context.Context) error {
+		close(started)
+		<-queryCtx.Done()
+		return nil
+	})
+	<-started
+	cancel()
+	if err := group.Wait(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("wait error = %v, want context canceled", err)
+	}
+}
 
 func TestAnalyticsBuildsIncludedSections(t *testing.T) {
 	db := newMonitoringTestStore(t)
@@ -1292,6 +1369,51 @@ func TestAnalyticsAppliesAccountFallbackFilter(t *testing.T) {
 	}
 }
 
+func TestAnalyticsUnfilteredFullResponseKeepsFilterOptionStatsInSync(t *testing.T) {
+	db := newMonitoringTestStore(t)
+	ctx := context.Background()
+	fromMS := int64(1_778_250_000_000)
+	toMS := fromMS + 60*60*1000
+
+	alice := monitoringEvent("reuse-alice", fromMS+1_000, "gpt-a", "auth-a", "source-a", false, 10, 5, 0, 0, 15, nil)
+	alice.AccountSnapshot = "alice@example.com"
+	alice.AuthLabelSnapshot = "Alice Auth"
+	alice.AuthProviderSnapshot = "codex"
+	alice.APIKeyHash = "key-alice"
+	bob := monitoringEvent("reuse-bob", fromMS+2_000, "gpt-b", "auth-b", "source-b", true, 20, 10, 0, 0, 30, nil)
+	bob.AccountSnapshot = "bob@example.com"
+	bob.AuthLabelSnapshot = "Bob Auth"
+	bob.AuthProviderSnapshot = "gemini"
+	bob.APIKeyHash = "key-bob"
+	if _, err := db.InsertEvents(ctx, []usage.Event{alice, bob}); err != nil {
+		t.Fatalf("insert events: %v", err)
+	}
+
+	resp, err := New(db).Analytics(ctx, Request{
+		FromMS: fromMS,
+		ToMS:   toMS,
+		Include: Include{
+			ModelStats:    true,
+			ChannelShare:  true,
+			AccountStats:  true,
+			APIKeyStats:   true,
+			FilterOptions: true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("analytics: %v", err)
+	}
+	if resp.FilterOptions == nil {
+		t.Fatal("filter options are nil")
+	}
+	if !reflect.DeepEqual(resp.FilterOptions.ModelStats, resp.ModelStats) ||
+		!reflect.DeepEqual(resp.FilterOptions.ChannelShare, resp.ChannelShare) ||
+		!reflect.DeepEqual(resp.FilterOptions.AccountStats, resp.AccountStats) ||
+		!reflect.DeepEqual(resp.FilterOptions.APIKeyStats, resp.APIKeyStats) {
+		t.Fatalf("filter option stats diverged from unfiltered response: options=%#v response=%#v", resp.FilterOptions, resp)
+	}
+}
+
 func TestAnalyticsFilterOptionsIgnoreActiveScopeFilters(t *testing.T) {
 	db := newMonitoringTestStore(t)
 	ctx := context.Background()
@@ -1463,6 +1585,46 @@ func TestAnalyticsEventsPageReportsTotalCountWhilePaging(t *testing.T) {
 	}
 	if resp2.Events.Items[0].EventHash == resp.Events.Items[len(resp.Events.Items)-1].EventHash {
 		t.Fatalf("page 2 overlaps page 1 boundary item")
+	}
+}
+
+func TestAnalyticsEventsPageUsesNormalizedTotalInput(t *testing.T) {
+	db := newMonitoringTestStore(t)
+	ctx := context.Background()
+	fromMS := int64(1_778_400_000_000)
+	events := []usage.Event{
+		{
+			EventHash: "xai-included", TimestampMS: fromMS + 1, Timestamp: "2026-05-06T00:00:00Z",
+			ExecutorType: "XAIExecutor", Model: "grok-4", InputTokens: 100, CacheReadTokens: 40, OutputTokens: 20, CreatedAtMS: fromMS + 1,
+		},
+		{
+			EventHash: "claude-separate", TimestampMS: fromMS + 2, Timestamp: "2026-05-06T00:00:01Z",
+			ExecutorType: "ClaudeExecutor", Model: "claude-sonnet", InputTokens: 100, CacheReadTokens: 40, OutputTokens: 20, CreatedAtMS: fromMS + 2,
+		},
+	}
+	if _, err := db.InsertEvents(ctx, events); err != nil {
+		t.Fatalf("insert events: %v", err)
+	}
+
+	resp, err := New(db).Analytics(ctx, Request{
+		FromMS: fromMS,
+		ToMS:   fromMS + 60_000,
+		Include: Include{
+			EventsPage: &EventsPage{Limit: 10},
+		},
+	})
+	if err != nil {
+		t.Fatalf("analytics: %v", err)
+	}
+	if resp.Events == nil || len(resp.Events.Items) != 2 {
+		t.Fatalf("events = %#v", resp.Events)
+	}
+	inputs := map[string]int64{}
+	for _, item := range resp.Events.Items {
+		inputs[item.EventHash] = item.InputTokens
+	}
+	if inputs["xai-included"] != 100 || inputs["claude-separate"] != 140 {
+		t.Fatalf("normalized event inputs = %#v", inputs)
 	}
 }
 

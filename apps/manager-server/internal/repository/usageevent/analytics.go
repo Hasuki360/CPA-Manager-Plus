@@ -1951,7 +1951,7 @@ func (r *repository) EventsPageWithFilter(ctx context.Context, filter AnalyticsF
 	coalesce(reasoning_effort, ''),
 	coalesce(service_tier, ''),
 	coalesce(executor_type, ''),
-	input_tokens,
+	`+normalizedInputExpr+`,
 	output_tokens,
 	`+compatCachedExpr+`,
 	cache_read_tokens,

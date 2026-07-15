@@ -222,7 +222,20 @@ go tool pprof http://127.0.0.1:6060/debug/pprof/heap
 USAGE_DASHBOARD_HOURLY_ROLLUP_ENABLED=false
 ```
 
-关闭后需重启 Manager Server，Dashboard 和 Usage Analytics 将始终读取 raw events，已有 rollup 表不会被删除。该运行期开关不接入 UI。
+关闭后需重启 Manager Server，Dashboard 和 Usage Analytics 将始终读取 raw events。除下述启动时的一次性格式升级外，关闭该运行时开关本身不会删除当前格式的 rollup 数据。该开关不接入 UI。
+
+升级到使用无损 model 编码的版本时，Manager Server 会清空旧的 `usage_dashboard_hourly_rollups` 并重置 `dashboard_hourly` checkpoint。小时汇总启用时，后台 worker 会随后分批重建；禁用时则保持为空，直到重新启用。该格式迁移本身不会修改或删除 `usage_events`，也不会重置 account-history rollup；重建完成前相关长窗口查询会临时回退 raw events。新的编码会区分空 model、字面量 `-` 和包含前后空格的 model，避免合法的 `-` model 使整个查询回退。
+
+升级旧数据库时，Manager Server 在启动阶段执行 schema/metadata 变更和必要的派生 rollup 重置，但不扫描历史 `usage_events`。需要扫描历史事件的 cache accounting 修正会在 HTTP 服务开始监听后，以每批 1000 条的方式在后台执行。每批数据更新和 checkpoint 在同一个事务中提交，进程重启后会从最后成功的 event ID 继续，不会重新处理已经提交的批次。
+
+迁移期间：
+
+- 新采集的事件会按新格式直接写入，不进入旧数据迁移目标范围。
+- account history 和 dashboard hourly rollup 暂停追平，避免基于半迁移数据生成错误汇总。
+- 日志输出迁移进度、完成状态或可重试错误。
+- `GET /status` 的 `dataMigration` 字段可查看 `status`、`lastEventId`、`targetEventId` 和 `processedRows`；该接口不返回底层迁移错误文本。
+
+迁移完成后，response metadata backfill 和两个 rollup worker 会自动继续。不要为了缩短迁移时间同时启动第二个 Manager Server 连接同一 SQLite 或消费同一 CPA 队列。
 
 完整的优化原因、实现阶段和 100k benchmark 数据见 [2026-07-10 性能优化报告](./performance-optimization-2026-07-10.md)。
 
@@ -233,7 +246,7 @@ USAGE_DASHBOARD_HOURLY_ROLLUP_ENABLED=false
 | Endpoint | 用途 |
 |---|---|
 | `GET /health` | 健康检查。 |
-| `GET /status` | 采集器、SQLite、事件计数和错误。 |
+| `GET /status` | 采集器、SQLite、事件计数和后台数据迁移进度。 |
 | `GET /usage-service/info` | Manager Server 模式探测。 |
 | `GET /usage-service/config` | 读取 CPAMP Manager Server 配置。 |
 | `PUT /usage-service/config` | 保存 CPAMP 配置，必要时重启采集器。 |

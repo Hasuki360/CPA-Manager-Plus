@@ -39,6 +39,8 @@ export interface UsageTokens {
   cache_write_input_tokens?: number;
   cacheWriteInputTokens?: number;
   total_tokens?: number;
+  cache_input_mode?: CacheInputMode | string;
+  cacheInputMode?: CacheInputMode | string;
 }
 
 export type CacheInputMode = 'included_in_input' | 'separate_from_input';
@@ -142,6 +144,11 @@ export interface UsageDetail {
   cacheInputMode?: CacheInputMode | string;
   executor_type?: string;
   executorType?: string;
+  provider?: string;
+  requested_model?: string;
+  requestedModel?: string;
+  resolved_model?: string;
+  resolvedModel?: string;
   latency_ms?: number;
   ttft_ms?: number;
   tokens: UsageTokens;
@@ -366,39 +373,124 @@ export const compatibleCachedTokens = (
   return Math.max(cached - fineGrained, 0);
 };
 
-const inferCacheInputMode = (
-  mode: unknown,
-  identity: string,
-  cacheReadTokens: number,
-  cacheCreationTokens: number
-): CacheInputMode => {
-  const normalizedMode = String(mode ?? '')
+export interface CacheInputContext {
+  explicitMode?: unknown;
+  executorType?: unknown;
+  provider?: unknown;
+  providerSnapshot?: unknown;
+  resolvedModel?: unknown;
+  requestedModel?: unknown;
+  displayModel?: unknown;
+}
+
+const normalizeCacheIdentity = (value: unknown): string =>
+  String(value ?? '')
     .trim()
     .toLowerCase();
-  if (normalizedMode === 'separate_from_input') return 'separate_from_input';
-  if (normalizedMode === 'included_in_input') return 'included_in_input';
-  const normalizedIdentity = identity.toLowerCase();
-  if (normalizedIdentity.includes('anthropic') || normalizedIdentity.includes('claude')) {
+
+const classifyExecutorCacheInputMode = (value: unknown): CacheInputMode | undefined => {
+  const executor = normalizeCacheIdentity(value);
+  if (!executor) return undefined;
+  if (executor.includes('claude')) return 'separate_from_input';
+  if (
+    [
+      'openaicompat',
+      'openai_compat',
+      'openai-compat',
+      'openai',
+      'codex',
+      'gemini',
+      'aistudio',
+      'ai_studio',
+      'ai-studio',
+      'antigravity',
+      'xai',
+      'kimi',
+    ].some((marker) => executor.includes(marker))
+  ) {
+    return 'included_in_input';
+  }
+  return undefined;
+};
+
+const classifyProviderCacheInputMode = (value: unknown): CacheInputMode | undefined => {
+  const provider = normalizeCacheIdentity(value);
+  if (!provider) return undefined;
+  if (provider.includes('anthropic') || provider.includes('claude')) {
     return 'separate_from_input';
   }
   if (
-    normalizedIdentity.includes('openai') ||
-    normalizedIdentity.includes('codex') ||
-    normalizedIdentity.includes('gemini') ||
-    normalizedIdentity.includes('antigravity') ||
-    normalizedIdentity.includes('interaction') ||
-    normalizedIdentity.includes('gpt-')
+    [
+      'openai',
+      'codex',
+      'gemini',
+      'vertex',
+      'aistudio',
+      'ai_studio',
+      'ai-studio',
+      'interaction',
+      'antigravity',
+      'xai',
+      'kimi',
+      'moonshot',
+    ].some((marker) => provider.includes(marker))
   ) {
     return 'included_in_input';
+  }
+  return undefined;
+};
+
+const classifyModelCacheInputMode = (value: unknown): CacheInputMode | undefined => {
+  const model = normalizeCacheIdentity(value);
+  if (!model) return undefined;
+  if (model.includes('anthropic') || model.includes('claude')) {
+    return 'separate_from_input';
+  }
+  if (
+    [
+      'gpt-',
+      'openai',
+      'codex',
+      'gemini',
+      'vertex',
+      'aistudio',
+      'antigravity',
+      'grok',
+      'xai',
+      'kimi',
+      'moonshot',
+    ].some((marker) => model.includes(marker))
+  ) {
+    return 'included_in_input';
+  }
+  return undefined;
+};
+
+export const inferCacheInputMode = (
+  context: CacheInputContext,
+  cacheReadTokens: number,
+  cacheCreationTokens: number
+): CacheInputMode => {
+  const normalizedMode = normalizeCacheIdentity(context.explicitMode);
+  if (normalizedMode === 'separate_from_input') return 'separate_from_input';
+  if (normalizedMode === 'included_in_input') return 'included_in_input';
+  const executorMode = classifyExecutorCacheInputMode(context.executorType);
+  if (executorMode) return executorMode;
+  for (const provider of [context.provider, context.providerSnapshot]) {
+    const providerMode = classifyProviderCacheInputMode(provider);
+    if (providerMode) return providerMode;
+  }
+  for (const model of [context.resolvedModel, context.requestedModel, context.displayModel]) {
+    const modelMode = classifyModelCacheInputMode(model);
+    if (modelMode) return modelMode;
   }
   return cacheReadTokens > 0 || cacheCreationTokens > 0
     ? 'separate_from_input'
     : 'included_in_input';
 };
 
-const normalizeCacheAccounting = (input: {
-  mode?: unknown;
-  identity?: string;
+export const normalizeCacheAccounting = (input: {
+  context: CacheInputContext;
   inputTokens: unknown;
   cachedTokens: unknown;
   cacheTokens: unknown;
@@ -415,7 +507,7 @@ const normalizeCacheAccounting = (input: {
     creation
   );
   const read = legacyRead + rawRead;
-  const mode = inferCacheInputMode(input.mode, input.identity ?? '', rawRead, creation);
+  const mode = inferCacheInputMode(input.context, rawRead, creation);
   return {
     mode,
     legacyRead,
@@ -621,16 +713,20 @@ const readTokens = (detail: Record<string, unknown>, modelName: string): UsageTo
   const cacheReadTokens = readFirstTokenNumber(tokensRaw, CACHE_READ_TOKEN_KEYS);
   const cacheCreationTokens = readFirstTokenNumber(tokensRaw, CACHE_CREATION_TOKEN_KEYS);
   const accounting = normalizeCacheAccounting({
-    mode: detail.cache_input_mode ?? detail.cacheInputMode,
-    identity: [
-      modelName,
-      detail.executor_type,
-      detail.executorType,
-      detail.auth_provider_snapshot,
-      detail.authProviderSnapshot,
-    ]
-      .filter(Boolean)
-      .join(' '),
+    context: {
+      explicitMode:
+        tokensRaw.cache_input_mode ??
+        tokensRaw.cacheInputMode ??
+        detail.cache_input_mode ??
+        detail.cacheInputMode,
+      executorType: detail.executor_type ?? detail.executorType,
+      provider: detail.provider,
+      providerSnapshot: detail.auth_provider_snapshot ?? detail.authProviderSnapshot,
+      resolvedModel: detail.resolved_model ?? detail.resolvedModel,
+      requestedModel:
+        detail.requested_model ?? detail.requestedModel ?? detail.alias,
+      displayModel: modelName,
+    },
     inputTokens: tokensRaw.input_tokens ?? tokensRaw.inputTokens,
     cachedTokens: tokensRaw.cached_tokens ?? tokensRaw.cachedTokens,
     cacheTokens: tokensRaw.cache_tokens ?? tokensRaw.cacheTokens,
@@ -729,6 +825,13 @@ export function collectUsageDetails(usageData: unknown): UsageDetail[] {
           ),
           service_tier: readDetailString(detailRaw.service_tier ?? detailRaw.serviceTier),
           executor_type: readDetailString(detailRaw.executor_type ?? detailRaw.executorType),
+          provider: readDetailString(detailRaw.provider),
+          requested_model: readDetailString(
+            detailRaw.requested_model ?? detailRaw.requestedModel ?? detailRaw.alias
+          ),
+          resolved_model: readDetailString(
+            detailRaw.resolved_model ?? detailRaw.resolvedModel
+          ),
           latency_ms: latencyMs ?? undefined,
           ttft_ms: ttftMs ?? undefined,
           request_service_tier: readDetailString(
@@ -848,6 +951,13 @@ export function collectUsageDetailsWithEndpoint(usageData: unknown): UsageDetail
           ),
           service_tier: readDetailString(detailRaw.service_tier ?? detailRaw.serviceTier),
           executor_type: readDetailString(detailRaw.executor_type ?? detailRaw.executorType),
+          provider: readDetailString(detailRaw.provider),
+          requested_model: readDetailString(
+            detailRaw.requested_model ?? detailRaw.requestedModel ?? detailRaw.alias
+          ),
+          resolved_model: readDetailString(
+            detailRaw.resolved_model ?? detailRaw.resolvedModel
+          ),
           request_service_tier: readDetailString(
             detailRaw.request_service_tier ?? detailRaw.requestServiceTier
           ),

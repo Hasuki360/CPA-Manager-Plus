@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -224,6 +224,7 @@ const resolveCallbackUrl = (
 export function OAuthPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const location = useLocation();
   const { showNotification } = useNotificationStore();
   const resolvedTheme = useThemeStore((state) => state.resolvedTheme);
   const connectionStatus = useAuthStore((state) => state.connectionStatus);
@@ -279,6 +280,15 @@ export function OAuthPage() {
     () => providers.filter((provider) => !PRIORITY_OAUTH_PROVIDER_IDS.has(provider.id)),
     [providers]
   );
+
+  useEffect(() => {
+    const targetId = location.hash.replace(/^#/, '');
+    if (!targetId) return;
+    const frame = window.requestAnimationFrame(() => {
+      document.getElementById(targetId)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [location.hash, providers.length]);
 
   const clearTimers = useCallback(() => {
     Object.values(pollingTimers.current).forEach((timer) => {
@@ -600,7 +610,7 @@ export function OAuthPage() {
       .filter(Boolean)
       .join(' ');
     return (
-      <div key={provider.id}>
+      <div key={provider.id} id={`oauth-provider-${provider.id}`}>
         <Card
           title={
             <span className={styles.cardTitle}>

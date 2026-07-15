@@ -2,7 +2,14 @@ package sqlite
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
+	"time"
+)
+
+const (
+	dashboardHourlyRollupFormatVersionKey = "usage_dashboard_hourly_format_version"
+	dashboardHourlyRollupFormatVersion    = "2"
 )
 
 func Migrate(db *sql.DB) error {
@@ -141,6 +148,37 @@ func Migrate(db *sql.DB) error {
 			updated_at_ms integer not null,
 			primary key (bucket_ms, model, billing_model, service_tier)
 		)`,
+		`create table if not exists usage_data_migrations (
+			name text primary key,
+			status text not null,
+			last_event_id integer not null default 0,
+			target_event_id integer not null default 0,
+			processed_rows integer not null default 0,
+			changed_rows integer not null default 0,
+			started_at_ms integer,
+			updated_at_ms integer not null default 0,
+			finished_at_ms integer,
+			last_error text
+		)`,
+		`insert or ignore into usage_data_migrations (
+			name, status, last_event_id, target_event_id, processed_rows, updated_at_ms
+		) select 'usage_cache_accounting_v1',
+			case when exists (select 1 from usage_events limit 1) then 'discovering' else 'completed' end,
+			0, 0, 0, 0`,
+		`insert or ignore into usage_data_migrations (
+			name, status, last_event_id, target_event_id, processed_rows, updated_at_ms
+		) select 'usage_cache_accounting_v2',
+			case when exists (select 1 from usage_events limit 1) then 'discovering' else 'completed' end,
+			0, 0, 0, 0`,
+		`create table if not exists usage_cache_accounting_v2_changes (
+			event_id integer primary key,
+			cache_input_mode text not null,
+			normalized_uncached_input_tokens integer not null,
+			normalized_total_input_tokens integer not null,
+			normalized_cache_read_tokens integer not null,
+			normalized_cache_creation_tokens integer not null,
+			total_tokens integer not null
+		)`,
 		`create table if not exists dead_letter_events (
 			id integer primary key autoincrement,
 			payload text not null,
@@ -184,7 +222,10 @@ func Migrate(db *sql.DB) error {
 			account_snapshot text,
 			account_id_snapshot text,
 			auth_label text,
+			reason_code text,
 			reason text,
+			auto_disable_eligible integer not null default 0,
+			auto_disabled_at_ms integer,
 			evidence_json text,
 			last_error text,
 			first_seen_at_ms integer not null,
@@ -193,8 +234,6 @@ func Migrate(db *sql.DB) error {
 			created_at_ms integer not null,
 			updated_at_ms integer not null
 		)`,
-		`create unique index if not exists idx_account_action_candidates_pending_identity_action
-			on account_action_candidates(auth_file_name, action_type, coalesce(auth_index, ''), coalesce(account_id_snapshot, '')) where status = 'pending'`,
 		`drop index if exists idx_account_action_candidates_pending_file_action`,
 		`create index if not exists idx_account_action_candidates_status_seen
 			on account_action_candidates(status, last_seen_at_ms)`,
@@ -266,6 +305,7 @@ func Migrate(db *sql.DB) error {
 		`create index if not exists idx_codex_inspection_logs_run on codex_inspection_logs(run_id, created_at_ms)`,
 		`create table if not exists codex_inspection_disable_ownership (
 			file_name text primary key,
+			provider text not null default 'codex',
 			auth_index text,
 			account_id text,
 			disabled_at_ms integer not null,
@@ -335,6 +375,8 @@ func Migrate(db *sql.DB) error {
 			auth_index text,
 			account_snapshot text,
 			provider text,
+			reason_code text,
+			window_kind text,
 			recover_at_ms integer not null,
 			owner text not null,
 			event_hash text,
@@ -354,6 +396,9 @@ func Migrate(db *sql.DB) error {
 			return err
 		}
 	}
+	if err := ensureUsageDataMigrationColumns(db); err != nil {
+		return err
+	}
 	if err := ensureUsageEventSnapshotColumns(db); err != nil {
 		return err
 	}
@@ -363,13 +408,153 @@ func Migrate(db *sql.DB) error {
 	if err := ensureCodexInspectionResultColumns(db); err != nil {
 		return err
 	}
+	if err := ensureCodexInspectionOwnershipColumns(db); err != nil {
+		return err
+	}
 	if err := ensureAccountActionCandidateColumns(db); err != nil {
+		return err
+	}
+	if err := ensureQuotaCooldownColumns(db); err != nil {
 		return err
 	}
 	if err := ensureUsageRollupLongContextColumns(db); err != nil {
 		return err
 	}
+	if err := ensureDashboardHourlyRollupFormatVersion(db); err != nil {
+		return err
+	}
 	return ensureModelPriceColumns(db)
+}
+
+func ensureDashboardHourlyRollupFormatVersion(db *sql.DB) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var version string
+	err = tx.QueryRow(`select value from settings where key = ?`, dashboardHourlyRollupFormatVersionKey).Scan(&version)
+	switch {
+	case err == nil && version == dashboardHourlyRollupFormatVersion:
+		return tx.Commit()
+	case err == nil:
+		return fmt.Errorf("unsupported dashboard hourly rollup format version %q", version)
+	case !errors.Is(err, sql.ErrNoRows):
+		return err
+	}
+
+	for _, statement := range []string{
+		`delete from usage_dashboard_hourly_rollups`,
+		`delete from usage_rollup_checkpoints where name = 'dashboard_hourly'`,
+	} {
+		if _, err := tx.Exec(statement); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(`insert into settings (key, value, updated_at_ms) values (?, ?, ?)`,
+		dashboardHourlyRollupFormatVersionKey,
+		dashboardHourlyRollupFormatVersion,
+		time.Now().UnixMilli(),
+	); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func ensureUsageDataMigrationColumns(db *sql.DB) error {
+	rows, err := db.Query(`pragma table_info(usage_data_migrations)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	existing := map[string]struct{}{}
+	for rows.Next() {
+		var cid int
+		var name, columnType string
+		var notNull int
+		var defaultValue any
+		var pk int
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &pk); err != nil {
+			return err
+		}
+		existing[name] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if _, ok := existing["changed_rows"]; ok {
+		return nil
+	}
+	_, err = db.Exec(`alter table usage_data_migrations add column changed_rows integer not null default 0`)
+	return err
+}
+
+func ensureCodexInspectionOwnershipColumns(db *sql.DB) error {
+	rows, err := db.Query(`pragma table_info(codex_inspection_disable_ownership)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	existing := map[string]struct{}{}
+	for rows.Next() {
+		var cid int
+		var name, columnType string
+		var notNull, pk int
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &pk); err != nil {
+			return err
+		}
+		existing[name] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if _, ok := existing["provider"]; ok {
+		return nil
+	}
+	if _, err := db.Exec(`alter table codex_inspection_disable_ownership add column provider text not null default 'codex'`); err != nil {
+		return err
+	}
+	return nil
+}
+
+func ensureQuotaCooldownColumns(db *sql.DB) error {
+	rows, err := db.Query(`pragma table_info(quota_cooldowns)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	existing := map[string]struct{}{}
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull int
+		var defaultValue any
+		var pk int
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			return err
+		}
+		existing[name] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, column := range []struct {
+		name       string
+		definition string
+	}{
+		{name: "reason_code", definition: "text"},
+		{name: "window_kind", definition: "text"},
+	} {
+		if _, ok := existing[column.name]; ok {
+			continue
+		}
+		if _, err := db.Exec(`alter table quota_cooldowns add column ` + column.name + ` ` + column.definition); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func ensureUsageRollupLongContextColumns(db *sql.DB) error {
@@ -469,6 +654,9 @@ func ensureAccountActionCandidateColumns(db *sql.DB) error {
 	}{
 		{name: "account_id_snapshot", definition: "text"},
 		{name: "last_error", definition: "text"},
+		{name: "reason_code", definition: "text"},
+		{name: "auto_disable_eligible", definition: "integer not null default 0"},
+		{name: "auto_disabled_at_ms", definition: "integer"},
 	}
 	for _, column := range columns {
 		if _, ok := existing[column.name]; ok {
@@ -478,8 +666,11 @@ func ensureAccountActionCandidateColumns(db *sql.DB) error {
 			return err
 		}
 	}
-	if _, err := db.Exec(`create unique index if not exists idx_account_action_candidates_pending_identity_action
-		on account_action_candidates(auth_file_name, action_type, coalesce(auth_index, ''), coalesce(account_id_snapshot, '')) where status = 'pending'`); err != nil {
+	if _, err := db.Exec(`drop index if exists idx_account_action_candidates_pending_identity_action`); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`create unique index idx_account_action_candidates_pending_identity_action
+		on account_action_candidates(auth_file_name, action_type, coalesce(auth_index, ''), coalesce(account_id_snapshot, ''), coalesce(reason_code, '')) where status = 'pending'`); err != nil {
 		return err
 	}
 	_, err = db.Exec(`drop index if exists idx_account_action_candidates_pending_file_action`)
@@ -673,55 +864,10 @@ func ensureUsageEventSnapshotColumns(db *sql.DB) error {
 			return err
 		}
 	}
-	if _, err := tx.Exec(`update usage_events set
-		cache_input_mode = case
-			when lower(coalesce(provider, '') || ' ' || coalesce(executor_type, '') || ' ' || coalesce(resolved_model, '') || ' ' || coalesce(model, '')) like '%anthropic%'
-				or lower(coalesce(provider, '') || ' ' || coalesce(executor_type, '') || ' ' || coalesce(resolved_model, '') || ' ' || coalesce(model, '')) like '%claude%'
-				then 'separate_from_input'
-			when lower(coalesce(provider, '') || ' ' || coalesce(executor_type, '') || ' ' || coalesce(resolved_model, '') || ' ' || coalesce(model, '')) like '%openai%'
-				or lower(coalesce(provider, '') || ' ' || coalesce(executor_type, '') || ' ' || coalesce(resolved_model, '') || ' ' || coalesce(model, '')) like '%codex%'
-				or lower(coalesce(provider, '') || ' ' || coalesce(executor_type, '') || ' ' || coalesce(resolved_model, '') || ' ' || coalesce(model, '')) like '%gemini%'
-				or lower(coalesce(provider, '') || ' ' || coalesce(executor_type, '') || ' ' || coalesce(resolved_model, '') || ' ' || coalesce(model, '')) like '%antigravity%'
-				or lower(coalesce(provider, '') || ' ' || coalesce(executor_type, '') || ' ' || coalesce(resolved_model, '') || ' ' || coalesce(model, '')) like '%gpt-%'
-				then 'included_in_input'
-			when coalesce(cache_read_tokens, 0) > 0 or coalesce(cache_creation_tokens, 0) > 0 then 'separate_from_input'
-			else 'included_in_input'
-		end
-	where cache_input_mode is null or trim(cache_input_mode) = ''`); err != nil {
+	if err := tx.Commit(); err != nil {
 		return err
 	}
-	compatCache := `max(max(cached_tokens, cache_tokens) - max(cache_read_tokens, 0) - max(cache_creation_tokens, 0), 0)`
-	normalizedRead := compatCache + ` + max(cache_read_tokens, 0)`
-	result, err := tx.Exec(`update usage_events set
-		normalized_cache_read_tokens = ` + normalizedRead + `,
-		normalized_cache_creation_tokens = max(cache_creation_tokens, 0),
-		normalized_uncached_input_tokens = case
-			when cache_input_mode = 'separate_from_input' then max(input_tokens, 0)
-			else max(input_tokens - (` + normalizedRead + `) - max(cache_creation_tokens, 0), 0)
-		end,
-		normalized_total_input_tokens = case
-			when cache_input_mode = 'separate_from_input' then max(input_tokens, 0) + (` + normalizedRead + `) + max(cache_creation_tokens, 0)
-			else max(input_tokens, 0)
-		end
-	where normalized_uncached_input_tokens is null
-		or normalized_total_input_tokens is null
-		or normalized_cache_read_tokens is null
-		or normalized_cache_creation_tokens is null`)
-	if err != nil {
-		return err
-	}
-	if affected, _ := result.RowsAffected(); affected > 0 {
-		for _, statement := range []string{
-			`delete from usage_account_model_rollups`,
-			`delete from usage_dashboard_hourly_rollups`,
-			`update usage_rollup_checkpoints set last_event_id = 0, updated_at_ms = 0, last_error = null`,
-		} {
-			if _, err := tx.Exec(statement); err != nil {
-				return err
-			}
-		}
-	}
-	return tx.Commit()
+	return nil
 }
 
 func ensureModelPriceColumns(db *sql.DB) error {

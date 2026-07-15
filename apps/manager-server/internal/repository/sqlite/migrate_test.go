@@ -6,6 +6,99 @@ import (
 	"testing"
 )
 
+func TestUsageDataMigrationInitialStateMatchesExistingUsageData(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "usage-data-migration.sqlite")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("open empty sqlite: %v", err)
+	}
+	var status string
+	if err := db.QueryRow(`select status from usage_data_migrations where name = 'usage_cache_accounting_v2'`).Scan(&status); err != nil {
+		t.Fatalf("read empty migration state: %v", err)
+	}
+	if status != "completed" {
+		t.Fatalf("empty migration status = %q, want completed", status)
+	}
+	if _, err := db.Exec(`insert into usage_events (
+		event_hash, timestamp_ms, timestamp, model, input_tokens, created_at_ms
+	) values ('legacy', 1, '1', 'gpt-test', 1, 1)`); err != nil {
+		t.Fatalf("insert legacy event: %v", err)
+	}
+	if _, err := db.Exec(`drop table usage_data_migrations`); err != nil {
+		t.Fatalf("drop migration table: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close sqlite: %v", err)
+	}
+
+	db, err = Open(path)
+	if err != nil {
+		t.Fatalf("reopen legacy sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := db.QueryRow(`select status from usage_data_migrations where name = 'usage_cache_accounting_v2'`).Scan(&status); err != nil {
+		t.Fatalf("read legacy migration state: %v", err)
+	}
+	if status != "discovering" {
+		t.Fatalf("legacy migration status = %q, want discovering", status)
+	}
+	columns := migrationTableColumns(t, db, "usage_cache_accounting_v2_changes")
+	for _, column := range []string{
+		"event_id",
+		"cache_input_mode",
+		"normalized_uncached_input_tokens",
+		"normalized_total_input_tokens",
+		"normalized_cache_read_tokens",
+		"normalized_cache_creation_tokens",
+		"total_tokens",
+	} {
+		if !columns[column] {
+			t.Fatalf("staging columns = %#v, missing %s", columns, column)
+		}
+	}
+}
+
+func TestUsageDataMigrationUpgradeAddsChangedRowsAndPreservesV1(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "usage-data-migration-upgrade.sqlite")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	for _, statement := range []string{
+		`drop table usage_data_migrations`,
+		`create table usage_data_migrations (name text primary key, status text not null, last_event_id integer not null default 0, target_event_id integer not null default 0, processed_rows integer not null default 0, started_at_ms integer, updated_at_ms integer not null default 0, finished_at_ms integer, last_error text)`,
+		`insert into usage_data_migrations (name, status) values ('usage_cache_accounting_v1', 'completed')`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			_ = db.Close()
+			t.Fatalf("setup legacy sqlite: %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close legacy sqlite: %v", err)
+	}
+
+	db, err = Open(path)
+	if err != nil {
+		t.Fatalf("upgrade sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	columns := migrationTableColumns(t, db, "usage_data_migrations")
+	if !columns["changed_rows"] {
+		t.Fatalf("migration columns = %#v, missing changed_rows", columns)
+	}
+	var v1Status, v2Status string
+	if err := db.QueryRow(`select status from usage_data_migrations where name = 'usage_cache_accounting_v1'`).Scan(&v1Status); err != nil {
+		t.Fatalf("read v1 status: %v", err)
+	}
+	if err := db.QueryRow(`select status from usage_data_migrations where name = 'usage_cache_accounting_v2'`).Scan(&v2Status); err != nil {
+		t.Fatalf("read v2 status: %v", err)
+	}
+	if v1Status != "completed" || v2Status != "completed" {
+		t.Fatalf("migration statuses = v1:%q v2:%q", v1Status, v2Status)
+	}
+}
+
 func TestCodexInspectionAutoRecoverySchema(t *testing.T) {
 	db, err := Open(filepath.Join(t.TempDir(), "codex-inspection.sqlite"))
 	if err != nil {
@@ -22,6 +115,61 @@ func TestCodexInspectionAutoRecoverySchema(t *testing.T) {
 		if !ownershipColumns[column] {
 			t.Fatalf("ownership columns = %#v, missing %s", ownershipColumns, column)
 		}
+	}
+	accountActionColumns := migrationTableColumns(t, db, "account_action_candidates")
+	for _, column := range []string{"reason_code", "auto_disable_eligible", "auto_disabled_at_ms"} {
+		if !accountActionColumns[column] {
+			t.Fatalf("account action columns = %#v, missing %s", accountActionColumns, column)
+		}
+	}
+	cooldownColumns := migrationTableColumns(t, db, "quota_cooldowns")
+	for _, column := range []string{"reason_code", "window_kind"} {
+		if !cooldownColumns[column] {
+			t.Fatalf("quota cooldown columns = %#v, missing %s", cooldownColumns, column)
+		}
+	}
+}
+
+func TestEnsureAutomationColumnsAddsDecisionMetadata(t *testing.T) {
+	db, err := sql.Open("sqlite", dataSourceName(filepath.Join(t.TempDir(), "legacy-automation.sqlite")))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if _, err := db.Exec(`create table account_action_candidates (
+		id integer primary key,
+		status text,
+		auth_file_name text,
+		action_type text,
+		auth_index text
+	)`); err != nil {
+		t.Fatalf("create account action table: %v", err)
+	}
+	if _, err := db.Exec(`create table quota_cooldowns (id integer primary key)`); err != nil {
+		t.Fatalf("create quota cooldown table: %v", err)
+	}
+	if err := ensureAccountActionCandidateColumns(db); err != nil {
+		t.Fatalf("migrate account action columns: %v", err)
+	}
+	if err := ensureQuotaCooldownColumns(db); err != nil {
+		t.Fatalf("migrate quota cooldown columns: %v", err)
+	}
+	for _, column := range []string{"reason_code", "auto_disable_eligible", "auto_disabled_at_ms"} {
+		if !migrationTableColumns(t, db, "account_action_candidates")[column] {
+			t.Fatalf("missing account action column %s", column)
+		}
+	}
+	for _, column := range []string{"reason_code", "window_kind"} {
+		if !migrationTableColumns(t, db, "quota_cooldowns")[column] {
+			t.Fatalf("missing quota cooldown column %s", column)
+		}
+	}
+	if _, err := db.Exec(`insert into account_action_candidates (
+		id, status, auth_file_name, action_type, auth_index, reason_code, auto_disable_eligible
+	) values
+		(1, 'pending', 'xai.json', 'review', '1', 'credential_permission_denied', 1),
+		(2, 'pending', 'xai.json', 'review', '1', 'authentication_review', 0)`); err != nil {
+		t.Fatalf("insert distinct pending reason codes: %v", err)
 	}
 }
 
@@ -104,7 +252,170 @@ func TestEnsureUsageRollupLongContextColumnsRollsBackAndRetries(t *testing.T) {
 	assertTableCount(t, db, "usage_rollup_checkpoints", 0)
 }
 
-func TestEnsureUsageEventSnapshotColumnsRollsBackAndRetries(t *testing.T) {
+func TestDashboardHourlyRollupFormatUpgradeRebuildsOnce(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dashboard-rollup-format.sqlite")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	for _, statement := range []string{
+		`insert into usage_events (event_hash, timestamp_ms, timestamp, model, created_at_ms)
+		values ('preserved-event', 1, '1', '-', 1)`,
+		`insert into usage_dashboard_hourly_rollups (
+			bucket_ms, model, billing_model, service_tier, updated_at_ms
+		) values (0, '-', '-', '', 1)`,
+		`insert into usage_rollup_checkpoints (name, last_event_id, updated_at_ms)
+		values ('dashboard_hourly', 1, 1), ('account_history', 1, 1)`,
+		`delete from settings where key = 'usage_dashboard_hourly_format_version'`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			_ = db.Close()
+			t.Fatalf("setup legacy rollup: %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close legacy sqlite: %v", err)
+	}
+
+	db, err = Open(path)
+	if err != nil {
+		t.Fatalf("upgrade sqlite: %v", err)
+	}
+	assertTableCount(t, db, "usage_events", 1)
+	assertTableCount(t, db, "usage_dashboard_hourly_rollups", 0)
+	var dashboardCheckpoints, accountCheckpoints int
+	if err := db.QueryRow(`select count(*) from usage_rollup_checkpoints where name = 'dashboard_hourly'`).Scan(&dashboardCheckpoints); err != nil {
+		t.Fatalf("read dashboard checkpoint count: %v", err)
+	}
+	if err := db.QueryRow(`select count(*) from usage_rollup_checkpoints where name = 'account_history'`).Scan(&accountCheckpoints); err != nil {
+		t.Fatalf("read account checkpoint count: %v", err)
+	}
+	if dashboardCheckpoints != 0 || accountCheckpoints != 1 {
+		t.Fatalf("checkpoint counts = dashboard:%d account:%d", dashboardCheckpoints, accountCheckpoints)
+	}
+	var version string
+	if err := db.QueryRow(`select value from settings where key = ?`, dashboardHourlyRollupFormatVersionKey).Scan(&version); err != nil {
+		t.Fatalf("read rollup format version: %v", err)
+	}
+	if version != dashboardHourlyRollupFormatVersion {
+		t.Fatalf("rollup format version = %q, want %q", version, dashboardHourlyRollupFormatVersion)
+	}
+	if _, err := db.Exec(`insert into usage_dashboard_hourly_rollups (
+		bucket_ms, model, billing_model, service_tier, updated_at_ms
+	) values (0, '-', '-', '', 2)`); err != nil {
+		_ = db.Close()
+		t.Fatalf("insert rebuilt rollup: %v", err)
+	}
+	if _, err := db.Exec(`insert into usage_rollup_checkpoints (name, last_event_id, updated_at_ms)
+		values ('dashboard_hourly', 1, 2)`); err != nil {
+		_ = db.Close()
+		t.Fatalf("insert rebuilt checkpoint: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close upgraded sqlite: %v", err)
+	}
+
+	db, err = Open(path)
+	if err != nil {
+		t.Fatalf("reopen upgraded sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	assertTableCount(t, db, "usage_dashboard_hourly_rollups", 1)
+	if err := db.QueryRow(`select count(*) from usage_rollup_checkpoints where name = 'dashboard_hourly'`).Scan(&dashboardCheckpoints); err != nil {
+		t.Fatalf("read preserved dashboard checkpoint: %v", err)
+	}
+	if dashboardCheckpoints != 1 {
+		t.Fatalf("dashboard checkpoint count after idempotent reopen = %d, want 1", dashboardCheckpoints)
+	}
+}
+
+func TestDashboardHourlyRollupFormatUpgradeRollsBackAndRetries(t *testing.T) {
+	db, err := sql.Open("sqlite", dataSourceName(filepath.Join(t.TempDir(), "dashboard-rollup-format-retry.sqlite")))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	for _, statement := range []string{
+		`create table settings (key text primary key, value text not null, updated_at_ms integer not null)`,
+		`create table usage_dashboard_hourly_rollups (id integer primary key)`,
+		`create table usage_rollup_checkpoints (name text primary key)`,
+		`insert into usage_dashboard_hourly_rollups (id) values (1)`,
+		`insert into usage_rollup_checkpoints (name) values ('dashboard_hourly'), ('account_history')`,
+		`create trigger reject_dashboard_rollup_delete before delete on usage_dashboard_hourly_rollups
+		begin select raise(abort, 'blocked'); end`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatalf("setup migration fixture: %v", err)
+		}
+	}
+
+	if err := ensureDashboardHourlyRollupFormatVersion(db); err == nil {
+		t.Fatal("format migration error = nil, want trigger failure")
+	}
+	assertTableCount(t, db, "usage_dashboard_hourly_rollups", 1)
+	assertTableCount(t, db, "usage_rollup_checkpoints", 2)
+	var settingCount int
+	if err := db.QueryRow(`select count(*) from settings where key = ?`, dashboardHourlyRollupFormatVersionKey).Scan(&settingCount); err != nil {
+		t.Fatalf("read format setting count: %v", err)
+	}
+	if settingCount != 0 {
+		t.Fatalf("format setting count after rollback = %d, want 0", settingCount)
+	}
+
+	if _, err := db.Exec(`drop trigger reject_dashboard_rollup_delete`); err != nil {
+		t.Fatalf("drop failure trigger: %v", err)
+	}
+	if err := ensureDashboardHourlyRollupFormatVersion(db); err != nil {
+		t.Fatalf("retry format migration: %v", err)
+	}
+	assertTableCount(t, db, "usage_dashboard_hourly_rollups", 0)
+	var dashboardCheckpoints, accountCheckpoints int
+	if err := db.QueryRow(`select count(*) from usage_rollup_checkpoints where name = 'dashboard_hourly'`).Scan(&dashboardCheckpoints); err != nil {
+		t.Fatalf("read dashboard checkpoint count: %v", err)
+	}
+	if err := db.QueryRow(`select count(*) from usage_rollup_checkpoints where name = 'account_history'`).Scan(&accountCheckpoints); err != nil {
+		t.Fatalf("read account checkpoint count: %v", err)
+	}
+	if dashboardCheckpoints != 0 || accountCheckpoints != 1 {
+		t.Fatalf("checkpoint counts after retry = dashboard:%d account:%d", dashboardCheckpoints, accountCheckpoints)
+	}
+}
+
+func TestDashboardHourlyRollupFormatUpgradeRejectsUnknownVersionWithoutMutation(t *testing.T) {
+	db, err := sql.Open("sqlite", dataSourceName(filepath.Join(t.TempDir(), "dashboard-rollup-format-unknown.sqlite")))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	for _, statement := range []string{
+		`create table settings (key text primary key, value text not null, updated_at_ms integer not null)`,
+		`create table usage_dashboard_hourly_rollups (id integer primary key)`,
+		`create table usage_rollup_checkpoints (name text primary key)`,
+		`insert into settings (key, value, updated_at_ms)
+		values ('usage_dashboard_hourly_format_version', 'future', 1)`,
+		`insert into usage_dashboard_hourly_rollups (id) values (1)`,
+		`insert into usage_rollup_checkpoints (name) values ('dashboard_hourly'), ('account_history')`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatalf("setup unknown format fixture: %v", err)
+		}
+	}
+
+	if err := ensureDashboardHourlyRollupFormatVersion(db); err == nil {
+		t.Fatal("format migration error = nil, want unsupported version failure")
+	}
+	assertTableCount(t, db, "usage_dashboard_hourly_rollups", 1)
+	assertTableCount(t, db, "usage_rollup_checkpoints", 2)
+	var version string
+	if err := db.QueryRow(`select value from settings where key = ?`, dashboardHourlyRollupFormatVersionKey).Scan(&version); err != nil {
+		t.Fatalf("read preserved format version: %v", err)
+	}
+	if version != "future" {
+		t.Fatalf("format version after rejection = %q, want future", version)
+	}
+}
+
+func TestEnsureUsageEventSnapshotColumnsOnlyMigratesSchema(t *testing.T) {
 	db, err := sql.Open("sqlite", dataSourceName(filepath.Join(t.TempDir(), "usage-event-migration.sqlite")))
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
@@ -134,7 +445,7 @@ func TestEnsureUsageEventSnapshotColumnsRollsBackAndRetries(t *testing.T) {
 		`insert into usage_dashboard_hourly_rollups (id) values (1)`,
 		`insert into usage_rollup_checkpoints (name, last_event_id, updated_at_ms, last_error)
 		values ('account_history', 1, 1, 'old')`,
-		`create trigger reject_dashboard_rollup_delete before delete on usage_dashboard_hourly_rollups
+		`create trigger reject_usage_event_update before update on usage_events
 		begin select raise(abort, 'blocked'); end`,
 	} {
 		if _, err := db.Exec(statement); err != nil {
@@ -142,56 +453,21 @@ func TestEnsureUsageEventSnapshotColumnsRollsBackAndRetries(t *testing.T) {
 		}
 	}
 
-	if err := ensureUsageEventSnapshotColumns(db); err == nil {
-		t.Fatal("migration error = nil, want trigger failure")
+	if err := ensureUsageEventSnapshotColumns(db); err != nil {
+		t.Fatalf("migrate usage event schema: %v", err)
 	}
 	columns := migrationTableColumns(t, db, "usage_events")
-	if columns["cache_input_mode"] || columns["normalized_total_input_tokens"] {
-		t.Fatalf("usage event columns committed after failed migration: %#v", columns)
+	if !columns["cache_input_mode"] || !columns["normalized_total_input_tokens"] {
+		t.Fatalf("usage event schema columns = %#v", columns)
 	}
 	assertTableCount(t, db, "usage_account_model_rollups", 1)
 	assertTableCount(t, db, "usage_dashboard_hourly_rollups", 1)
-
-	if _, err := db.Exec(`drop trigger reject_dashboard_rollup_delete`); err != nil {
-		t.Fatalf("drop failure trigger: %v", err)
+	var normalizedTotal sql.NullInt64
+	if err := db.QueryRow(`select normalized_total_input_tokens from usage_events where id = 1`).Scan(&normalizedTotal); err != nil {
+		t.Fatalf("read partially migrated usage event: %v", err)
 	}
-	if err := ensureUsageEventSnapshotColumns(db); err != nil {
-		t.Fatalf("retry migration: %v", err)
-	}
-	columns = migrationTableColumns(t, db, "usage_events")
-	for _, column := range []string{
-		"request_service_tier",
-		"response_service_tier",
-		"cache_input_mode",
-		"normalized_uncached_input_tokens",
-		"normalized_total_input_tokens",
-		"normalized_cache_read_tokens",
-		"normalized_cache_creation_tokens",
-	} {
-		if !columns[column] {
-			t.Fatalf("usage_events missing column %s after retry: %#v", column, columns)
-		}
-	}
-	var mode string
-	var uncachedInput, totalInput, cacheRead, cacheCreation int64
-	if err := db.QueryRow(`select cache_input_mode, normalized_uncached_input_tokens,
-		normalized_total_input_tokens, normalized_cache_read_tokens, normalized_cache_creation_tokens
-		from usage_events where id = 1`).Scan(&mode, &uncachedInput, &totalInput, &cacheRead, &cacheCreation); err != nil {
-		t.Fatalf("read migrated usage event: %v", err)
-	}
-	if mode != "separate_from_input" || uncachedInput != 100 || totalInput != 400 || cacheRead != 300 || cacheCreation != 0 {
-		t.Fatalf("normalized usage = %q/%d/%d/%d/%d", mode, uncachedInput, totalInput, cacheRead, cacheCreation)
-	}
-	assertTableCount(t, db, "usage_account_model_rollups", 0)
-	assertTableCount(t, db, "usage_dashboard_hourly_rollups", 0)
-	var lastEventID, updatedAt int64
-	var lastError sql.NullString
-	if err := db.QueryRow(`select last_event_id, updated_at_ms, last_error
-		from usage_rollup_checkpoints where name = 'account_history'`).Scan(&lastEventID, &updatedAt, &lastError); err != nil {
-		t.Fatalf("read reset checkpoint: %v", err)
-	}
-	if lastEventID != 0 || updatedAt != 0 || lastError.Valid {
-		t.Fatalf("checkpoint = %d/%d/%v", lastEventID, updatedAt, lastError)
+	if normalizedTotal.Valid {
+		t.Fatalf("schema migration unexpectedly backfilled normalized total: %d", normalizedTotal.Int64)
 	}
 }
 

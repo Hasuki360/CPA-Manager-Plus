@@ -171,6 +171,8 @@ export interface QuotaCooldownInfo {
   authIndex?: string;
   provider?: string;
   owner?: string;
+  reasonCode?: string;
+  windowKind?: 'five_hour' | 'weekly' | 'monthly' | 'rolling_24h' | 'unknown' | string;
   recoverAtMs: number;
   disabledAtMs?: number;
   createdAtMs?: number;
@@ -434,6 +436,11 @@ export interface CodexInspectionActionsResponse {
   detail: CodexInspectionRunDetail;
 }
 
+export interface CodexInspectionActionOverride {
+  resultId: number;
+  action: 'delete';
+}
+
 export interface ModelPricesResponse {
   prices: Record<string, ModelPrice>;
 }
@@ -506,7 +513,10 @@ export interface AccountActionCandidate {
   accountSnapshot?: string;
   accountIdSnapshot?: string;
   authLabel?: string;
+  reasonCode?: string;
   reason: string;
+  autoDisableEligible?: boolean;
+  autoDisabledAtMs?: number;
   evidence?: unknown;
   lastError?: string;
   firstSeenAtMs: number;
@@ -1554,9 +1564,11 @@ const getDemoPatchedAccountProcessingPolicy = (
 };
 
 const getDemoCodexInspectionActionsResponse = (
-  resultIds: number[]
+  resultIds: number[],
+  actionOverrides: CodexInspectionActionOverride[] = []
 ): CodexInspectionActionsResponse => {
   const detail = getDemoCodexInspectionRun();
+  const overrideByID = new Map(actionOverrides.map((item) => [item.resultId, item.action]));
   const selected = resultIds.length
     ? detail.results.filter((result) => resultIds.includes(result.id))
     : detail.results;
@@ -1566,7 +1578,7 @@ const getDemoCodexInspectionActionsResponse = (
       accountKey: result.accountKey,
       fileName: result.fileName,
       displayAccount: result.displayAccount,
-      action: result.action,
+      action: overrideByID.get(result.id) ?? result.action,
       status: 'done',
       success: true,
     })),
@@ -1738,16 +1750,17 @@ export const usageServiceApi = {
     base: string,
     managementKey: string | undefined,
     runId: number,
-    resultIds: number[]
+    resultIds: number[],
+    actionOverrides: CodexInspectionActionOverride[] = []
   ): Promise<CodexInspectionActionsResponse> => {
     if (__DEMO_SITE__ && isDemoMode()) {
-      return getDemoCodexInspectionActionsResponse(resultIds);
+      return getDemoCodexInspectionActionsResponse(resultIds, actionOverrides);
     }
 
     return withUsageServiceError(async () => {
       const response = await axios.post<CodexInspectionActionsResponse>(
         buildUrl(base, `/v0/management/codex-inspection/runs/${runId}/actions`),
-        { resultIds },
+        { resultIds, actionOverrides },
         {
           timeout: CODEX_INSPECTION_RUN_TIMEOUT_MS,
           headers: authHeaders(managementKey),

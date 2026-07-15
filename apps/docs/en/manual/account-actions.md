@@ -6,15 +6,28 @@ If you need the failed request itself, start with [Monitoring](./monitoring.md).
 
 ## When Candidates Appear
 
-When Monitoring captures revoked tokens, invalid OAuth, auth-file failures, or similar signals, CPAMP can add the account to the candidate queue.
+When Monitoring captures revoked tokens, invalid OAuth, auth-file failures, or similar signals, CPAMP can add the account to the candidate queue. Realtime request responses and Codex Inspection use the same credential-failure policy so the same error does not produce conflicting actions.
 
 The queue is controlled by `USAGE_ACCOUNT_ACTIONS_ENABLED` or the Configuration switch. Automatic disable also requires `USAGE_ACCOUNT_ACTIONS_AUTO_DISABLE`, and depends on the queue being enabled.
+
+## Automation Boundaries
+
+CPAMP never auto-disables an account from the HTTP status alone. `401` and `403` are inputs, but the error code, response body, and safe response headers must provide a sufficiently explicit credential signal:
+
+- Explicit invalid, expired, or revoked credentials, such as `invalid_token`, `Invalid or expired credentials`, or `no auth context`: suggest reauthorization and allow auto-disable.
+- An xAI response that explicitly rejects the current credential for the chat endpoint with exact credential or permission guidance; `X-Should-Retry: false` strengthens the signal: suggest review and allow auto-disable.
+- Region restrictions, model permissions, or ambiguous `permission-denied`: review only, without auto-disable.
+- An explicitly deactivated account or workspace: suggest deleting the stale auth file and allow auto-disable while it awaits handling.
+
+Do not treat every `401/403` as an auto-disable rule. Codex and xAI are both classified by response semantics, not status code alone.
 
 ## Fields
 
 - **Account**: account identity resolved from request events, auth files, or `auth_index`.
 - **Auth file**: related file name.
-- **Suggested action**: enable, resolve, ignore, or delete auth file.
+- **Suggested action**: reauthorize, review, or delete a stale auth file.
+- **Reason code**: stable machine classification for invalid credentials, permission review, deactivation, and related cases.
+- **Auto-disable state**: whether the candidate is eligible for auto-disable and whether CPAMP already disabled it.
 - **Reason**: CPAMP's summary of why the candidate exists.
 - **First seen / last seen**: whether the issue is persistent.
 - **Hits**: how often the signal appeared.
@@ -42,3 +55,4 @@ Before deleting, confirm that the same auth file is not used by another model or
 
 Use this queue for recurring auth-class problems. It is not meant for one-off network errors, upstream 5xx, or missing model names. If unsure, ignore or observe first; do not delete immediately.
 
+Recovery follows an ownership rule: quota cooldown restores only credentials it disabled; inspection restores only inspection-owned disables; auth-failure disables are not restored by either worker and require reauthorization or manual handling.

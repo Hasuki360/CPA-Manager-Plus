@@ -20,6 +20,7 @@ import (
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/model"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/cpa"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/cpaauthfiles"
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/credentialpolicy"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/managerconfig"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/store"
 )
@@ -42,6 +43,7 @@ var (
 	ErrRunNotCompleted            = errors.New("codex inspection run is not completed")
 	ErrActionIDsRequired          = errors.New("codex inspection action result ids are required")
 	ErrNoActionableResults        = errors.New("codex inspection has no actionable results")
+	ErrInvalidActionOverride      = errors.New("codex inspection action override is invalid")
 	errCPAAPICallResponseTooLarge = errors.New("CPA api-call response too large")
 )
 
@@ -66,7 +68,13 @@ type RunDetail struct {
 }
 
 type ExecuteActionsRequest struct {
-	ResultIDs []int64 `json:"resultIds"`
+	ResultIDs       []int64                `json:"resultIds"`
+	ActionOverrides []ManualActionOverride `json:"actionOverrides,omitempty"`
+}
+
+type ManualActionOverride struct {
+	ResultID int64  `json:"resultId"`
+	Action   string `json:"action"`
 }
 
 type ActionOutcome struct {
@@ -121,14 +129,6 @@ type fileActionGroup struct {
 	Action   string
 	Mixed    bool
 }
-
-type unauthorizedReason string
-
-const (
-	unauthorizedReasonUnknown     unauthorizedReason = "unknown"
-	unauthorizedReasonExpired     unauthorizedReason = "expired"
-	unauthorizedReasonInvalidated unauthorizedReason = "invalidated"
-)
 
 const (
 	fileActionDuplicateReason = "CPA 认证文件动作按文件执行，该文件已由另一条结果处理"
@@ -367,7 +367,11 @@ func (s *Service) ExecuteManualActions(ctx context.Context, runID int64, req Exe
 		return ExecuteActionsResult{}, ErrActionIDsRequired
 	}
 
-	items, preflightOutcomes := selectManualActionItems(detail.Results, selected)
+	manualResults, err := applyManualActionOverrides(detail.Results, selected, req.ActionOverrides)
+	if err != nil {
+		return ExecuteActionsResult{}, err
+	}
+	items, preflightOutcomes := selectManualActionItems(manualResults, selected)
 	if len(items) == 0 && len(preflightOutcomes) == 0 {
 		return ExecuteActionsResult{}, ErrNoActionableResults
 	}
@@ -425,6 +429,49 @@ func (s *Service) ExecuteManualActions(ctx context.Context, runID int64, req Exe
 		return ExecuteActionsResult{}, err
 	}
 	return ExecuteActionsResult{Outcomes: outcomes, Detail: nextDetail}, nil
+}
+
+func applyManualActionOverrides(
+	results []model.CodexInspectionResult,
+	selected map[int64]struct{},
+	overrides []ManualActionOverride,
+) ([]model.CodexInspectionResult, error) {
+	if len(overrides) == 0 {
+		return results, nil
+	}
+	overrideByID := make(map[int64]string, len(overrides))
+	for _, override := range overrides {
+		action := strings.ToLower(strings.TrimSpace(override.Action))
+		if override.ResultID <= 0 || action != "delete" {
+			return nil, ErrInvalidActionOverride
+		}
+		if _, ok := selected[override.ResultID]; !ok {
+			return nil, ErrInvalidActionOverride
+		}
+		if existing, ok := overrideByID[override.ResultID]; ok && existing != action {
+			return nil, ErrInvalidActionOverride
+		}
+		overrideByID[override.ResultID] = action
+	}
+
+	out := make([]model.CodexInspectionResult, len(results))
+	copy(out, results)
+	matched := make(map[int64]struct{}, len(overrideByID))
+	for index := range out {
+		action, ok := overrideByID[out[index].ID]
+		if !ok {
+			continue
+		}
+		if out[index].Action != "reauth" || action != "delete" {
+			return nil, ErrInvalidActionOverride
+		}
+		out[index].Action = "delete"
+		matched[out[index].ID] = struct{}{}
+	}
+	if len(matched) != len(overrideByID) {
+		return nil, ErrInvalidActionOverride
+	}
+	return out, nil
 }
 
 func (s *Service) ResolveConfig(ctx context.Context) (model.ManagerCodexInspectionConfig, bool, error) {
@@ -569,6 +616,9 @@ func (s *Service) inspectSingleAccount(
 	item account,
 	logger runLogger,
 ) model.CodexInspectionResult {
+	if item.Provider == "xai" {
+		return s.inspectSingleXAIAccount(ctx, setup, settings, item, logger)
+	}
 	base := resultFromAccount(item)
 	if item.AuthIndex == "" {
 		base.Action = "keep"
@@ -946,6 +996,7 @@ func (s *Service) executeAction(ctx context.Context, setup store.Setup, item mod
 		}
 		if err := s.store.UpsertCodexInspectionDisableOwnership(ctx, model.CodexInspectionDisableOwnership{
 			FileName:     item.FileName,
+			Provider:     item.Provider,
 			AuthIndex:    item.AuthIndex,
 			AccountID:    item.AccountID,
 			DisabledAtMS: time.Now().UnixMilli(),
@@ -1185,15 +1236,28 @@ func resolveLegacyProbeAction(item account, statusCode int, bodyText string, use
 }
 
 func resolveUnauthorizedProbeAction(bodyText string, usedPercent *float64) inspectionDecision {
-	switch classifyUnauthorizedReason(bodyText) {
-	case unauthorizedReasonExpired:
+	decision, ok := credentialpolicy.EvaluateFailure(credentialpolicy.FailureSignal{
+		Provider:   "codex",
+		StatusCode: http.StatusUnauthorized,
+		Summary:    bodyText,
+	})
+	if !ok {
+		return inspectionDecision{
+			Action:       "reauth",
+			ActionReason: "接口返回 401，认证失败，建议重新登录账号",
+			UsedPercent:  usedPercent,
+			IsQuota:      false,
+		}
+	}
+	switch decision.ReasonCode {
+	case credentialpolicy.ReasonInvalidCredentials:
 		return inspectionDecision{
 			Action:       "reauth",
 			ActionReason: "接口返回 401，登录已过期，建议重新登录账号",
 			UsedPercent:  usedPercent,
 			IsQuota:      false,
 		}
-	case unauthorizedReasonInvalidated:
+	case credentialpolicy.ReasonTokenRevoked:
 		return inspectionDecision{
 			Action:       "reauth",
 			ActionReason: "接口返回 401，认证令牌已失效，建议重新登录账号",
@@ -1207,22 +1271,6 @@ func resolveUnauthorizedProbeAction(bodyText string, usedPercent *float64) inspe
 			UsedPercent:  usedPercent,
 			IsQuota:      false,
 		}
-	}
-}
-
-func classifyUnauthorizedReason(bodyText string) unauthorizedReason {
-	normalized := strings.ToLower(strings.TrimSpace(bodyText))
-	switch {
-	case strings.Contains(normalized, "provided authentication token is expired") ||
-		strings.Contains(normalized, "authentication token is expired") ||
-		strings.Contains(normalized, "token is expired"):
-		return unauthorizedReasonExpired
-	case strings.Contains(normalized, "authentication token has been invalidated") ||
-		strings.Contains(normalized, "token has been invalidated") ||
-		strings.Contains(normalized, "token is invalidated"):
-		return unauthorizedReasonInvalidated
-	default:
-		return unauthorizedReasonUnknown
 	}
 }
 
@@ -1321,10 +1369,17 @@ func (s *Service) applyDisableOwnership(ctx context.Context, accounts []account,
 		return
 	}
 	for _, item := range items {
+		provider := normalizeInspectionProvider(item.Provider)
+		if provider == "" {
+			provider = "codex"
+		}
 		matched := false
 		disabled := false
 		for _, candidate := range accounts {
 			if candidate.FileName != item.FileName {
+				continue
+			}
+			if normalizeInspectionProvider(candidate.Provider) != provider {
 				continue
 			}
 			if item.AuthIndex != "" && candidate.AuthIndex != item.AuthIndex {
@@ -1341,7 +1396,7 @@ func (s *Service) applyDisableOwnership(ctx context.Context, accounts []account,
 			continue
 		}
 		for index := range accounts {
-			if accounts[index].FileName == item.FileName {
+			if accounts[index].FileName == item.FileName && normalizeInspectionProvider(accounts[index].Provider) == provider {
 				accounts[index].AutoRecoverOwned = true
 			}
 		}
@@ -1475,10 +1530,22 @@ func matchCurrentAccount(candidates []account, result model.CodexInspectionResul
 	}
 	authIndex := strings.TrimSpace(result.AuthIndex)
 	accountID := strings.TrimSpace(result.AccountID)
+	provider := normalizeInspectionProvider(result.Provider)
+	if provider == "" {
+		provider = "codex"
+	}
 	if authIndex == "" && accountID == "" {
-		return candidates[0], true
+		for _, candidate := range candidates {
+			if normalizeInspectionProvider(candidate.Provider) == provider {
+				return candidate, true
+			}
+		}
+		return account{}, false
 	}
 	for _, candidate := range candidates {
+		if normalizeInspectionProvider(candidate.Provider) != provider {
+			continue
+		}
 		if authIndex != "" && candidate.AuthIndex != authIndex {
 			continue
 		}
@@ -1536,6 +1603,10 @@ func applyActionOutcomes(results []model.CodexInspectionResult, outcomes []Actio
 			continue
 		}
 		status := model.NormalizeCodexInspectionActionStatus(outcome.Status, out[i].Action)
+		currentStatus := model.NormalizeCodexInspectionActionStatus(out[i].ActionStatus, out[i].Action)
+		if currentStatus == model.CodexInspectionActionStatusSuccess && status == model.CodexInspectionActionStatusSkipped {
+			continue
+		}
 		if status == model.CodexInspectionActionStatusPending {
 			if outcome.Success {
 				status = model.CodexInspectionActionStatusSuccess
@@ -1670,7 +1741,7 @@ func countAccounts(items []account, disabled bool) int {
 func toAccount(file authFile) account {
 	fileName := firstNonEmpty(readString(file, "name"), readString(file, "id"), normalizeAuthIndex(file["auth_index"]), normalizeAuthIndex(file["authIndex"]), "unknown-auth-file")
 	authIndex := firstNonEmpty(normalizeAuthIndex(file["auth_index"]), normalizeAuthIndex(file["authIndex"]), normalizeAuthIndex(file["auth-index"]))
-	provider := strings.ToLower(firstNonEmpty(readString(file, "provider"), readString(file, "type")))
+	provider := normalizeInspectionProvider(firstNonEmpty(readString(file, "provider"), readString(file, "type")))
 	displayAccount := firstNonEmpty(
 		readString(file, "account"),
 		readString(file, "email"),
@@ -1692,6 +1763,17 @@ func toAccount(file authFile) account {
 		Status:         readString(file, "status"),
 		State:          readString(file, "state"),
 		File:           file,
+	}
+}
+
+func normalizeInspectionProvider(value string) string {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	normalized = strings.ReplaceAll(normalized, "_", "-")
+	switch normalized {
+	case "x-ai", "grok":
+		return "xai"
+	default:
+		return normalized
 	}
 }
 

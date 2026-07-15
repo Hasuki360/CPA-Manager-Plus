@@ -89,12 +89,23 @@ func (r *repository) InsertBatch(ctx context.Context, events []model.UsageEvent)
 
 	result := model.InsertResult{}
 	for _, event := range events {
-		accounting := usage.NormalizeCacheAccounting(event.CacheInputMode, event.Provider, event.ExecutorType, event.ResolvedModel, event.InputTokens, event.CachedTokens, event.CacheTokens, event.CacheReadTokens, event.CacheCreationTokens)
+		accounting := usage.NormalizeCacheAccounting(usage.CacheInputContext{
+			ExplicitMode:     event.CacheInputMode,
+			ExecutorType:     event.ExecutorType,
+			Provider:         event.Provider,
+			ProviderSnapshot: event.AuthProviderSnapshot,
+			ResolvedModel:    event.ResolvedModel,
+			RequestedModel:   event.RequestedModel,
+			DisplayModel:     event.Model,
+		}, event.InputTokens, event.CachedTokens, event.CacheTokens, event.CacheReadTokens, event.CacheCreationTokens)
 		event.CacheInputMode = accounting.Mode
 		event.NormalizedUncachedInputTokens = accounting.UncachedInputTokens
 		event.NormalizedTotalInputTokens = accounting.TotalInputTokens
 		event.NormalizedCacheReadTokens = accounting.CacheReadTokens
 		event.NormalizedCacheCreationTokens = accounting.CacheCreationTokens
+		if event.TotalTokens <= 0 {
+			event.TotalTokens = accounting.TotalInputTokens + max(event.OutputTokens, int64(0)) + max(event.ReasoningTokens, int64(0))
+		}
 		if event.RequestServiceTier == "" {
 			event.RequestServiceTier = event.ServiceTier
 		}
@@ -200,7 +211,7 @@ func (r *repository) ListRecent(ctx context.Context, limit int) ([]model.UsageEv
 		normalized_uncached_input_tokens, normalized_total_input_tokens, normalized_cache_read_tokens, normalized_cache_creation_tokens, total_tokens,
 		latency_ms, ttft_ms, failed, fail_status_code, fail_summary,
 		coalesce(response_metadata_json, ''), header_quota_recover_at_ms, header_quota_used_percent, coalesce(header_quota_plan_type, ''), coalesce(header_error_kind, ''), coalesce(header_error_code, ''), coalesce(header_trace_id, ''),
-		created_at_ms
+		coalesce(raw_json, ''), created_at_ms
 		from usage_events
 		order by timestamp_ms desc, id desc
 		limit ?`, limit)
@@ -213,7 +224,7 @@ func (r *repository) ListRecent(ctx context.Context, limit int) ([]model.UsageEv
 	for rows.Next() {
 		var event model.UsageEvent
 		var requestID, provider, executorType, endpoint, method, path, authType, authIndex, source, sourceHash, apiKeyHash, accountSnapshot, authLabelSnapshot, authFileSnapshot, authProviderSnapshot, authProjectIDSnapshot, requestedModel, resolvedModel, reasoningEffort, serviceTier, requestServiceTier, responseServiceTier, cacheInputMode, failSummary sql.NullString
-		var responseMetadataJSON, quotaPlanType, errorKind, errorCode, traceID string
+		var responseMetadataJSON, quotaPlanType, errorKind, errorCode, traceID, rawJSON string
 		var authSnapshotAt sql.NullInt64
 		var latency, ttft sql.NullInt64
 		var failStatusCode sql.NullInt64
@@ -274,6 +285,7 @@ func (r *repository) ListRecent(ctx context.Context, limit int) ([]model.UsageEv
 			&errorKind,
 			&errorCode,
 			&traceID,
+			&rawJSON,
 			&event.CreatedAtMS,
 		); err != nil {
 			return nil, err
@@ -300,8 +312,16 @@ func (r *repository) ListRecent(ctx context.Context, limit int) ([]model.UsageEv
 		event.ServiceTier = serviceTier.String
 		event.RequestServiceTier = requestServiceTier.String
 		event.ResponseServiceTier = responseServiceTier.String
-		event.CacheInputMode = cacheInputMode.String
-		accounting := usage.NormalizeCacheAccounting(event.CacheInputMode, event.Provider, event.ExecutorType, event.ResolvedModel, event.InputTokens, event.CachedTokens, event.CacheTokens, event.CacheReadTokens, event.CacheCreationTokens)
+		hints := usage.RawCacheAccountingHintsFromJSON(rawJSON)
+		accounting := usage.NormalizeCacheAccounting(usage.CacheInputContext{
+			ExplicitMode:     hints.ExplicitMode,
+			ExecutorType:     event.ExecutorType,
+			Provider:         event.Provider,
+			ProviderSnapshot: event.AuthProviderSnapshot,
+			ResolvedModel:    event.ResolvedModel,
+			RequestedModel:   event.RequestedModel,
+			DisplayModel:     event.Model,
+		}, event.InputTokens, event.CachedTokens, event.CacheTokens, event.CacheReadTokens, event.CacheCreationTokens)
 		event.CacheInputMode = accounting.Mode
 		event.NormalizedUncachedInputTokens = accounting.UncachedInputTokens
 		event.NormalizedTotalInputTokens = accounting.TotalInputTokens

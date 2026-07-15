@@ -87,7 +87,7 @@ func TestParseImportPayloadLegacyUsageExport(t *testing.T) {
 	}
 
 	second := result.Events[1]
-	if second.TotalTokens != 26 || !second.Failed || second.AuthIndex != "auth-2" {
+	if second.TotalTokens != 18 || !second.Failed || second.AuthIndex != "auth-2" {
 		t.Fatalf("second event = %#v", second)
 	}
 
@@ -97,6 +97,64 @@ func TestParseImportPayloadLegacyUsageExport(t *testing.T) {
 	}
 	if again.Events[0].EventHash != first.EventHash || again.Events[1].EventHash != second.EventHash {
 		t.Fatalf("legacy event hashes are not stable")
+	}
+}
+
+func TestImportCacheAccountingUsesStructuredSemantics(t *testing.T) {
+	tests := []struct {
+		name        string
+		payload     string
+		wantMode    string
+		wantInput   int64
+		wantTotal   int64
+		wantUncache int64
+	}{
+		{
+			name:     "openai compat executor beats claude alias",
+			payload:  `{"event_hash":"openai-compat","timestamp_ms":1,"timestamp":"2026-07-15T00:00:00Z","executor_type":"OpenAICompatExecutor","model":"claude-sonnet","tokens":{"input_tokens":100,"cache_read_tokens":20,"cache_creation_tokens":10}}`,
+			wantMode: CacheInputModeIncluded, wantInput: 100, wantTotal: 100, wantUncache: 70,
+		},
+		{
+			name:     "claude executor beats grok alias",
+			payload:  `{"eventHash":"claude-grok","timestampMs":1,"timestamp":"2026-07-15T00:00:00Z","executorType":"ClaudeExecutor","model":"grok-4","tokens":{"inputTokens":100,"cacheReadTokens":20,"cacheCreationTokens":10}}`,
+			wantMode: CacheInputModeSeparate, wantInput: 130, wantTotal: 130, wantUncache: 100,
+		},
+		{
+			name:     "usage object and moonshot provider are included",
+			payload:  `{"event_hash":"moonshot","timestamp_ms":1,"timestamp":"2026-07-15T00:00:00Z","provider":"moonshot","model":"claude-alias","usage":{"input_tokens":100,"cache_read_tokens":20,"cache_creation_tokens":10}}`,
+			wantMode: CacheInputModeIncluded, wantInput: 100, wantTotal: 100, wantUncache: 70,
+		},
+		{
+			name:     "nested explicit mode and total are preserved",
+			payload:  `{"event_hash":"explicit","timestamp_ms":1,"timestamp":"2026-07-15T00:00:00Z","executor_type":"XAIExecutor","model":"grok-4","tokens":{"input_tokens":100,"cache_read_tokens":20,"cache_creation_tokens":10,"cache_input_mode":"separate_from_input","total_tokens":777}}`,
+			wantMode: CacheInputModeSeparate, wantInput: 130, wantTotal: 777, wantUncache: 100,
+		},
+		{
+			name:     "explicit total from preserved raw json is retained",
+			payload:  `{"event_hash":"raw-explicit","timestamp_ms":1,"timestamp":"2026-07-15T00:00:00Z","executor_type":"XAIExecutor","model":"grok-4","tokens":{"input_tokens":100,"cache_read_tokens":20},"raw_json":"{\"tokens\":{\"total_tokens\":888}}"}`,
+			wantMode: CacheInputModeIncluded, wantInput: 100, wantTotal: 888, wantUncache: 80,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := ParseImportPayload([]byte(tt.payload))
+			if err != nil {
+				t.Fatalf("parse import: %v", err)
+			}
+			if len(result.Events) != 1 {
+				t.Fatalf("events = %#v", result.Events)
+			}
+			event := result.Events[0]
+			if event.CacheInputMode != tt.wantMode || event.NormalizedTotalInputTokens != tt.wantInput || event.NormalizedUncachedInputTokens != tt.wantUncache || event.TotalTokens != tt.wantTotal {
+				t.Fatalf("event = %#v", event)
+			}
+			if tt.wantTotal == 777 {
+				hints := RawCacheAccountingHintsFromJSON(event.RawJSON)
+				if hints.ExplicitMode != CacheInputModeSeparate || !hints.HasExplicitTotal || hints.ExplicitTotal != 777 {
+					t.Fatalf("preserved hints = %#v raw=%s", hints, event.RawJSON)
+				}
+			}
+		})
 	}
 }
 
