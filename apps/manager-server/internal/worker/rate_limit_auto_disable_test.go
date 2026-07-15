@@ -264,7 +264,7 @@ func TestXAIResetMatchesSharedFixture(t *testing.T) {
 	}
 }
 
-func TestQuotaAutoDisableCandidateAcceptsXAIAuth401(t *testing.T) {
+func TestQuotaAutoDisableCandidateRejectsXAIAuth401(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	for _, provider := range []string{"xai", "x-ai", "grok"} {
 		t.Run(provider, func(t *testing.T) {
@@ -279,35 +279,10 @@ func TestQuotaAutoDisableCandidateAcceptsXAIAuth401(t *testing.T) {
 				AccountSnapshot:  "user@x.ai",
 				Provider:         provider,
 			}
-			candidate, ok := quotaAutoDisableCandidateFromEvent(event, "http://cpa", "key", now)
-			if !ok {
-				t.Fatal("xAI/Grok 401 candidate not detected")
-			}
-			if candidate.Provider != "xai" {
-				t.Fatalf("provider = %q, want xai", candidate.Provider)
-			}
-			if candidate.Owner != model.QuotaCooldownOwnerXAIAuth401 {
-				t.Fatalf("owner = %q, want %q", candidate.Owner, model.QuotaCooldownOwnerXAIAuth401)
-			}
-			if candidate.FileName != "xai-auth.json" {
-				t.Fatalf("file = %q", candidate.FileName)
+			if _, ok := quotaAutoDisableCandidateFromEvent(event, "http://cpa", "key", now); ok {
+				t.Fatal("xAI/Grok 401 must not enter provider quota cooldown")
 			}
 		})
-	}
-}
-
-func TestQuotaAutoDisableCandidateRejectsNonXAIAuth401(t *testing.T) {
-	now := time.Unix(1_700_000_000, 0)
-	event := usage.Event{
-		EventHash:        "evt-codex-401",
-		Failed:           true,
-		FailStatusCode:   http.StatusUnauthorized,
-		FailSummary:      "token_revoked",
-		AuthFileSnapshot: "codex-auth.json",
-		Provider:         "codex",
-	}
-	if _, ok := quotaAutoDisableCandidateFromEvent(event, "http://cpa", "key", now); ok {
-		t.Fatal("non-xAI 401 must not enter provider quota auto-disable")
 	}
 }
 

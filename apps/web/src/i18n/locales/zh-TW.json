@@ -188,9 +188,7 @@
     "logs": "記錄檢視",
     "logs_short": "記錄",
     "system_info": "系統資訊",
-    "system_info_short": "系統",
-    "grok_inspection": "Grok 账号巡检",
-    "grok_inspection_short": "Grok 巡检"
+    "system_info_short": "系統"
   },
   "account_actions": {
     "eyebrow": "帳號異常",
@@ -3592,17 +3590,15 @@
       "不會恢復使用者手動停用的登入檔案"
     ],
     "providerQuotaCooldown_title": "Provider 額度冷卻自動化",
-    "providerQuotaCooldown_summary": "真實 Codex / xAI 請求回傳明確額度耗盡，或 xAI/Grok 回傳 401 後，自動停用對應憑證；額度類到期會恢復，401 不會自動恢復。",
+    "providerQuotaCooldown_summary": "真實 Codex 或 xAI 請求回傳明確額度耗盡訊號後，暫時停用對應憑證，並在恢復時間後重新啟用。",
     "providerQuotaCooldown_toggle": "啟用 Provider 額度冷卻",
-    "providerQuotaCooldown_description": "此策略消費真實請求監控事件，不會主動探測 Provider。匹配明確額度耗盡或 xAI/Grok 401 後，會暫時停用對應憑證。",
+    "providerQuotaCooldown_description": "此策略消費真實請求監控事件，不會主動探測 Provider。匹配明確額度耗盡訊號後，會暫時停用對應憑證並自動恢復。",
     "providerQuotaCooldown_behavior": [
       "處理 Codex usage-limit 和 xAI 免費額度耗盡",
-      "處理 xAI/Grok HTTP 401（token 失效）並自動停用",
-      "只處理精確匹配的額度耗盡錯誤或 xAI/Grok 401",
-      "額度類必須有明確或官方說明的恢復視窗",
+      "只處理精確匹配的額度耗盡錯誤",
+      "必須有明確或官方說明的恢復視窗",
       "會暫時停用登入檔案",
-      "額度重置時間後自動恢復",
-      "xAI/Grok 401 只停用，不自動恢復",
+      "重置時間後自動恢復",
       "只恢復 CPAMP 自動停用的帳號",
       "不會恢復使用者手動停用的登入檔案"
     ],

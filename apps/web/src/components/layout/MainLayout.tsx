@@ -605,12 +605,6 @@ export function MainLayout({ routeBase = '', demoMode = false }: MainLayoutProps
         shortLabel: navShortLabel('nav.codex_inspection', t('nav.codex_inspection')),
         icon: sidebarIcons.codexInspection,
       },
-      {
-        path: '/grok-inspection',
-        label: t('nav.grok_inspection', { defaultValue: 'Grok 账号巡检' }),
-        shortLabel: navShortLabel('nav.grok_inspection', t('nav.grok_inspection', { defaultValue: 'Grok 巡检' })),
-        icon: sidebarIcons.codexInspection,
-      },
     ],
     operationNavItems,
     pluginResourceNavItems,

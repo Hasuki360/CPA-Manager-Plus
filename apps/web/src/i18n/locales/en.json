@@ -188,9 +188,7 @@
     "logs": "Logs Viewer",
     "logs_short": "Logs",
     "system_info": "System Info",
-    "system_info_short": "System",
-    "grok_inspection": "Grok Account Inspection",
-    "grok_inspection_short": "Grok Inspection"
+    "system_info_short": "System"
   },
   "account_actions": {
     "eyebrow": "Account issues",
@@ -3614,17 +3612,15 @@
     "group_extensions_title": "Extensions and Charity Policies",
     "group_extensions_description": "Hasuki custom policies for external availability, cooldowns, and channel recovery.",
     "providerQuotaCooldown_title": "Provider Quota Cooldown Automation",
-    "providerQuotaCooldown_summary": "Temporarily pauses matching credentials after real Codex/xAI quota-exhaustion signals, or xAI/Grok HTTP 401 failures. Quota cases auto-recover; 401 does not.",
+    "providerQuotaCooldown_summary": "Temporarily pauses matching credentials after real Codex or xAI requests return explicit quota-exhaustion signals, then restores them after the recovery time.",
     "providerQuotaCooldown_toggle": "Enable provider quota cooldown",
-    "providerQuotaCooldown_description": "This policy consumes real request-monitoring events; it does not actively probe providers. After an exact quota-exhaustion signal or xAI/Grok 401, it pauses the matching credential.",
+    "providerQuotaCooldown_description": "This policy consumes real request-monitoring events; it does not actively probe providers. After an exact quota-exhaustion signal, it temporarily pauses the matching credential and restores it automatically.",
     "providerQuotaCooldown_behavior": [
       "Handles Codex usage-limit and xAI included free-usage exhaustion",
-      "Handles xAI/Grok HTTP 401 (invalid/expired token) with auto-disable",
-      "Handles only exact quota-exhausted errors or xAI/Grok 401",
-      "Quota cases require a known or documented recovery window",
+      "Handles only exact quota-exhausted errors",
+      "Requires a known or documented recovery window",
       "Temporarily pauses the login file",
-      "Auto-recovers after the quota reset time",
-      "xAI/Grok 401 only disables; no auto-recovery",
+      "Auto-recovers after the reset time",
       "Restores only accounts paused by CPAMP",
       "Does not restore login files you disabled manually"
     ],
