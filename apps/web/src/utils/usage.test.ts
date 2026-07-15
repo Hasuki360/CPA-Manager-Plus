@@ -11,9 +11,12 @@ import {
   extractTotalTokens,
   formatCompactNumber,
   getServiceTierMultiplier,
+  inferCacheInputMode,
+  normalizeCacheAccounting,
   normalizeUsageSourceId,
 } from './usage';
 import { maskSensitiveText } from './format';
+import cacheInputAccountingFixtures from './cacheInputAccounting.fixtures.json';
 
 describe('formatCompactNumber', () => {
   it('keeps large values compact as data grows beyond millions', () => {
@@ -354,6 +357,194 @@ describe('usage token helpers', () => {
         },
       })
     ).toBe(154);
+  });
+});
+
+describe('cache input accounting semantics', () => {
+  it.each(cacheInputAccountingFixtures)('matches shared fixture: $name', (fixture) => {
+    const accounting = normalizeCacheAccounting({
+      context: fixture.context,
+      inputTokens: fixture.tokens.input,
+      cachedTokens: fixture.tokens.cached,
+      cacheTokens: fixture.tokens.cache,
+      cacheReadTokens: fixture.tokens.read,
+      cacheCreationTokens: fixture.tokens.creation,
+    });
+
+    expect(accounting).toMatchObject({
+      mode: fixture.expected.mode,
+      uncachedInputTokens: fixture.expected.uncached,
+      totalInputTokens: fixture.expected.totalInput,
+      cacheCreationTokens: fixture.expected.cacheCreation,
+    });
+    expect(accounting.legacyRead + accounting.cacheReadTokens).toBe(
+      fixture.expected.cacheRead
+    );
+  });
+
+  it.each([
+    {
+      name: 'OpenAICompat executor beats Claude alias',
+      context: { executorType: 'OpenAICompatExecutor', resolvedModel: 'claude-sonnet-4' },
+      mode: 'included_in_input',
+    },
+    {
+      name: 'Claude executor beats Grok alias',
+      context: { executorType: 'ClaudeExecutor', resolvedModel: 'grok-4' },
+      mode: 'separate_from_input',
+    },
+    {
+      name: 'XAI executor beats Claude alias',
+      context: { executorType: 'XAIWebsocketsExecutor', displayModel: 'claude-alias' },
+      mode: 'included_in_input',
+    },
+    {
+      name: 'provider snapshot beats model',
+      context: { providerSnapshot: 'moonshot', resolvedModel: 'claude-sonnet' },
+      mode: 'included_in_input',
+    },
+    {
+      name: 'resolved model beats requested model',
+      context: { resolvedModel: 'claude-sonnet', requestedModel: 'gpt-5' },
+      mode: 'separate_from_input',
+    },
+  ])('$name', ({ context, mode }) => {
+    expect(inferCacheInputMode(context, 20, 10)).toBe(mode);
+  });
+
+  it('keeps a valid explicit mode above executor classification', () => {
+    expect(
+      inferCacheInputMode(
+        { explicitMode: 'separate_from_input', executorType: 'XAIExecutor' },
+        20,
+        0
+      )
+    ).toBe('separate_from_input');
+  });
+
+  it('normalizes included and separate totals with the mirrored Go formulas', () => {
+    expect(
+      normalizeCacheAccounting({
+        context: { executorType: 'XAIExecutor' },
+        inputTokens: 100,
+        cachedTokens: 0,
+        cacheTokens: 0,
+        cacheReadTokens: 20,
+        cacheCreationTokens: 10,
+      })
+    ).toMatchObject({
+      mode: 'included_in_input',
+      uncachedInputTokens: 70,
+      totalInputTokens: 100,
+    });
+    expect(
+      normalizeCacheAccounting({
+        context: { executorType: 'ClaudeExecutor' },
+        inputTokens: 100,
+        cachedTokens: 0,
+        cacheTokens: 0,
+        cacheReadTokens: 20,
+        cacheCreationTokens: 10,
+      })
+    ).toMatchObject({
+      mode: 'separate_from_input',
+      uncachedInputTokens: 100,
+      totalInputTokens: 130,
+    });
+  });
+
+  it.each([
+    {
+      name: 'xAI included input',
+      model: 'grok-4',
+      detail: { executor_type: 'XAIExecutor' },
+      totalInput: 100,
+    },
+    {
+      name: 'Kimi provider included input',
+      model: 'claude-alias',
+      detail: { provider: 'moonshot' },
+      totalInput: 100,
+    },
+    {
+      name: 'Claude executor separate input',
+      model: 'grok-alias',
+      detail: { executor_type: 'ClaudeExecutor' },
+      totalInput: 130,
+    },
+    {
+      name: 'nested explicit mode',
+      model: 'grok-4',
+      detail: {},
+      tokenMode: 'separate_from_input',
+      totalInput: 130,
+    },
+  ])('$name is applied by readTokens', ({ model, detail, tokenMode, totalInput }) => {
+    const usageData = {
+      apis: {
+        'POST /v1/chat/completions': {
+          models: {
+            [model]: {
+              details: [
+                {
+                  timestamp: '2026-07-15T00:00:00Z',
+                  source: 'account',
+                  auth_index: 'auth-1',
+                  ...detail,
+                  tokens: {
+                    input_tokens: 100,
+                    cache_read_tokens: 20,
+                    cache_creation_tokens: 10,
+                    cache_input_mode: tokenMode,
+                  },
+                  failed: false,
+                },
+              ],
+            },
+          },
+        },
+      },
+    };
+    const [normalized] = collectUsageDetails(usageData);
+
+    expect(normalized.tokens.input_tokens).toBe(totalInput);
+    expect(normalized.tokens.total_tokens).toBe(totalInput);
+  });
+
+  it('prices xAI cache without double-counting included input', () => {
+    const usageData = {
+      apis: {
+        'POST /v1/chat/completions': {
+          models: {
+            'grok-4': {
+              details: [
+                {
+                  timestamp: '2026-07-15T00:00:00Z',
+                  source: 'account',
+                  auth_index: 'auth-1',
+                  executor_type: 'XAIExecutor',
+                  tokens: { input_tokens: 100, cache_read_tokens: 40 },
+                  failed: false,
+                },
+              ],
+            },
+          },
+        },
+      },
+    };
+    const [detail] = collectUsageDetails(usageData);
+    const cost = calculateCost(detail, {
+      'grok-4': { prompt: 1, completion: 2, cache: 0.1, cacheRead: 0.1 },
+    });
+
+    expect(detail.tokens.input_tokens).toBe(100);
+    expect(calculateCacheHitRate({
+      inputTokens: detail.tokens.input_tokens,
+      cachedTokens: detail.tokens.cached_tokens,
+      cacheReadTokens: detail.tokens.cache_read_tokens,
+      cacheCreationTokens: detail.tokens.cache_creation_tokens,
+    })).toBeCloseTo(0.4);
+    expect(cost).toBeCloseTo(0.000064);
   });
 });
 
