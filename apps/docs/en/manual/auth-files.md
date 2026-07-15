@@ -10,7 +10,7 @@ Use [OAuth Login](./oauth.md) to add new OAuth accounts. This page is for mainte
 - **`auth_index`**: the stable account index. Usage, quota, inspection, and account actions all depend on it.
 - **Enabled state**: manually disabled accounts are not restored automatically.
 - **Note, priority, and project ID**: use them to separate account purpose and routing preference.
-- **Quota and health hints**: cooldown, reauth needed, quota windows, or recently observed response headers.
+- **Quota and health hints**: cooldown, reauth required, manual review, auto-disable, quota windows, or recently observed response headers.
 
 In multi-account setups, stable `auth_index` values are mandatory. Without them, history, quota, inspection, and actions are hard to connect to the right account.
 
@@ -20,7 +20,7 @@ In multi-account setups, stable `auth_index` values are mandatory. Without them,
 - Paste JSON or upload auth files.
 - Download, edit, disable, restore, or delete auth files.
 - Use search, sort, page size, and display mode to find accounts.
-- Filter by Codex status, plan type, or problem-only view.
+- Filter by Codex status, plan type, problem-only view, or healthy-only view. Account-action candidates and quota cooldowns participate in health classification.
 - Batch edit priority, notes, project ID, or enabled state.
 - View supported models to decide whether an account should handle a target model.
 - Open prefix proxy settings and copy client-facing proxy URLs.
@@ -46,6 +46,8 @@ When you directly upload an official sub2api account export, CPAMP detects and c
 - **Codex state is abnormal**: open [Codex Inspection](./codex-inspection.md) for suggested actions.
 - **Requests fail while the account looks fine**: open [Monitoring](./monitoring.md) and read the failure summary and actual model.
 - **Account Action Queue has a candidate**: open [Account Action Queue](./account-actions.md) and decide whether to ignore, resolve, enable, or delete.
+
+Bulk delete in problem-only view uses a safe subset. Cooldowns, reauth candidates, and review-only candidates are excluded. Only explicit delete candidates, or auth files with their own deletable problem state, are included.
 
 ## Security Notes
 

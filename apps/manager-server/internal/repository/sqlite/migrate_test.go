@@ -23,6 +23,61 @@ func TestCodexInspectionAutoRecoverySchema(t *testing.T) {
 			t.Fatalf("ownership columns = %#v, missing %s", ownershipColumns, column)
 		}
 	}
+	accountActionColumns := migrationTableColumns(t, db, "account_action_candidates")
+	for _, column := range []string{"reason_code", "auto_disable_eligible", "auto_disabled_at_ms"} {
+		if !accountActionColumns[column] {
+			t.Fatalf("account action columns = %#v, missing %s", accountActionColumns, column)
+		}
+	}
+	cooldownColumns := migrationTableColumns(t, db, "quota_cooldowns")
+	for _, column := range []string{"reason_code", "window_kind"} {
+		if !cooldownColumns[column] {
+			t.Fatalf("quota cooldown columns = %#v, missing %s", cooldownColumns, column)
+		}
+	}
+}
+
+func TestEnsureAutomationColumnsAddsDecisionMetadata(t *testing.T) {
+	db, err := sql.Open("sqlite", dataSourceName(filepath.Join(t.TempDir(), "legacy-automation.sqlite")))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if _, err := db.Exec(`create table account_action_candidates (
+		id integer primary key,
+		status text,
+		auth_file_name text,
+		action_type text,
+		auth_index text
+	)`); err != nil {
+		t.Fatalf("create account action table: %v", err)
+	}
+	if _, err := db.Exec(`create table quota_cooldowns (id integer primary key)`); err != nil {
+		t.Fatalf("create quota cooldown table: %v", err)
+	}
+	if err := ensureAccountActionCandidateColumns(db); err != nil {
+		t.Fatalf("migrate account action columns: %v", err)
+	}
+	if err := ensureQuotaCooldownColumns(db); err != nil {
+		t.Fatalf("migrate quota cooldown columns: %v", err)
+	}
+	for _, column := range []string{"reason_code", "auto_disable_eligible", "auto_disabled_at_ms"} {
+		if !migrationTableColumns(t, db, "account_action_candidates")[column] {
+			t.Fatalf("missing account action column %s", column)
+		}
+	}
+	for _, column := range []string{"reason_code", "window_kind"} {
+		if !migrationTableColumns(t, db, "quota_cooldowns")[column] {
+			t.Fatalf("missing quota cooldown column %s", column)
+		}
+	}
+	if _, err := db.Exec(`insert into account_action_candidates (
+		id, status, auth_file_name, action_type, auth_index, reason_code, auto_disable_eligible
+	) values
+		(1, 'pending', 'xai.json', 'review', '1', 'credential_permission_denied', 1),
+		(2, 'pending', 'xai.json', 'review', '1', 'authentication_review', 0)`); err != nil {
+		t.Fatalf("insert distinct pending reason codes: %v", err)
+	}
 }
 
 func TestEnsureCodexInspectionResultColumnsAddsAutoRecoveryEligibility(t *testing.T) {

@@ -36,11 +36,14 @@ Different providers return different data. Unknown means CPAMP did not get enoug
 
 When quota cooldown is enabled and a supported account reaches a strict quota signal, CPAMP can temporarily disable the related auth file and recover it after the reset time. Supported signals currently include Codex `usage_limit_reached` with an explicit reset and xAI `subscription:free-usage-exhausted`, which uses the documented rolling 24-hour recovery window.
 
+Cooldown records include a reason code and window kind. Current window kinds are `five_hour`, `weekly`, `monthly`, `rolling_24h`, and `unknown`. For example, if a Codex five-hour limit is exhausted while the weekly limit remains available, only the five-hour window controls the cooldown. After recovery, the credential can re-enter CPA scheduling without waiting for the weekly window.
+
 Notes:
 
 - Enable it with `USAGE_QUOTA_COOLDOWN_ENABLED` or the Configuration switch.
 - Auto-restore depends on CPAMP continuing to run.
-- Manually disabled accounts are not restored automatically.
+- While the CPAMP cooldown is active, the credential is disabled in CPA and is not selected for new requests.
+- Quota cooldown restores only credentials disabled by that cooldown record. Manual, inspection-owned, or auth-failure disables are not overridden.
 - Unstable `auth_index` values can prevent accurate account binding.
 
 Quota cooldown is for clear quota exhaustion. It is not a good tool for expired login, upstream bans, or configuration errors. Use [Account Action Queue](./account-actions.md) or [OAuth Login](./oauth.md) for those.
@@ -54,4 +57,3 @@ If an account looks usable but requests fail:
 3. Check Auth Files for manual disabled state or cooldown.
 4. Check whether the account action queue has pending candidates.
 5. If the page has no quota data, confirm whether that provider supports active quota lookup or only passive header observation.
-

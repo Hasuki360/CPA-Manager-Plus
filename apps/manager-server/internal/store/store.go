@@ -225,6 +225,10 @@ func (s *Store) RecordAccountActionCandidateFailure(ctx context.Context, id int6
 	return s.AccountActions.RecordFailure(ctx, id, reason)
 }
 
+func (s *Store) MarkAccountActionCandidateAutoDisabled(ctx context.Context, id int64, disabledAtMS int64) error {
+	return s.AccountActions.MarkAutoDisabled(ctx, id, disabledAtMS)
+}
+
 func (s *Store) CreateCodexInspectionRun(ctx context.Context, run CodexInspectionRun) (CodexInspectionRun, error) {
 	return s.CodexInspections.CreateRun(ctx, run)
 }

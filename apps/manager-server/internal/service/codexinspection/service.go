@@ -20,6 +20,7 @@ import (
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/model"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/cpa"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/cpaauthfiles"
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/credentialpolicy"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/managerconfig"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/store"
 )
@@ -121,14 +122,6 @@ type fileActionGroup struct {
 	Action   string
 	Mixed    bool
 }
-
-type unauthorizedReason string
-
-const (
-	unauthorizedReasonUnknown     unauthorizedReason = "unknown"
-	unauthorizedReasonExpired     unauthorizedReason = "expired"
-	unauthorizedReasonInvalidated unauthorizedReason = "invalidated"
-)
 
 const (
 	fileActionDuplicateReason = "CPA 认证文件动作按文件执行，该文件已由另一条结果处理"
@@ -1185,15 +1178,28 @@ func resolveLegacyProbeAction(item account, statusCode int, bodyText string, use
 }
 
 func resolveUnauthorizedProbeAction(bodyText string, usedPercent *float64) inspectionDecision {
-	switch classifyUnauthorizedReason(bodyText) {
-	case unauthorizedReasonExpired:
+	decision, ok := credentialpolicy.EvaluateFailure(credentialpolicy.FailureSignal{
+		Provider:   "codex",
+		StatusCode: http.StatusUnauthorized,
+		Summary:    bodyText,
+	})
+	if !ok {
+		return inspectionDecision{
+			Action:       "reauth",
+			ActionReason: "接口返回 401，认证失败，建议重新登录账号",
+			UsedPercent:  usedPercent,
+			IsQuota:      false,
+		}
+	}
+	switch decision.ReasonCode {
+	case credentialpolicy.ReasonInvalidCredentials:
 		return inspectionDecision{
 			Action:       "reauth",
 			ActionReason: "接口返回 401，登录已过期，建议重新登录账号",
 			UsedPercent:  usedPercent,
 			IsQuota:      false,
 		}
-	case unauthorizedReasonInvalidated:
+	case credentialpolicy.ReasonTokenRevoked:
 		return inspectionDecision{
 			Action:       "reauth",
 			ActionReason: "接口返回 401，认证令牌已失效，建议重新登录账号",
@@ -1207,22 +1213,6 @@ func resolveUnauthorizedProbeAction(bodyText string, usedPercent *float64) inspe
 			UsedPercent:  usedPercent,
 			IsQuota:      false,
 		}
-	}
-}
-
-func classifyUnauthorizedReason(bodyText string) unauthorizedReason {
-	normalized := strings.ToLower(strings.TrimSpace(bodyText))
-	switch {
-	case strings.Contains(normalized, "provided authentication token is expired") ||
-		strings.Contains(normalized, "authentication token is expired") ||
-		strings.Contains(normalized, "token is expired"):
-		return unauthorizedReasonExpired
-	case strings.Contains(normalized, "authentication token has been invalidated") ||
-		strings.Contains(normalized, "token has been invalidated") ||
-		strings.Contains(normalized, "token is invalidated"):
-		return unauthorizedReasonInvalidated
-	default:
-		return unauthorizedReasonUnknown
 	}
 }
 

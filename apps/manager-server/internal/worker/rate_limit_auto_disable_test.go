@@ -41,6 +41,9 @@ func TestQuotaAutoDisableCandidateRequiresStrictCodexUsageLimit(t *testing.T) {
 	if got := candidate.ResetAt.Unix(); got != 1_700_000_060 {
 		t.Fatalf("reset unix = %d", got)
 	}
+	if candidate.ReasonCode != quotaReasonCodexUsageLimit || candidate.WindowKind != quotaWindowUnknown {
+		t.Fatalf("candidate metadata = %#v", candidate)
+	}
 
 	cases := []struct {
 		name   string
@@ -119,6 +122,9 @@ func TestQuotaAutoDisableCandidateAcceptsXAIIncludedFreeUsageExhausted(t *testin
 	}
 	if got, want := candidate.ResetAt, now.Add(24*time.Hour); !got.Equal(want) {
 		t.Fatalf("reset time = %s, want %s", got, want)
+	}
+	if candidate.ReasonCode != quotaReasonXAIFreeUsage || candidate.WindowKind != quotaWindowRolling24H {
+		t.Fatalf("candidate metadata = %#v", candidate)
 	}
 }
 
@@ -231,6 +237,9 @@ func TestQuotaAutoDisableCandidateUsesReachedWindowResetWithoutReachedType(t *te
 	}
 	if got := candidate.ResetAt.Unix(); got != now.Add(5*time.Hour).Unix() {
 		t.Fatalf("reset unix = %d", got)
+	}
+	if candidate.WindowKind != "five_hour" {
+		t.Fatalf("window kind = %q, want five_hour", candidate.WindowKind)
 	}
 }
 
@@ -446,7 +455,7 @@ func TestRateLimitAutoDisableWorkerXAIEventDisablesAndRecoversEndToEnd(t *testin
 	if err != nil {
 		t.Fatalf("list active cooldowns: %v", err)
 	}
-	if len(active) != 1 || active[0].Owner != model.QuotaCooldownOwnerXAIFreeUsage || active[0].Provider != "xai" {
+	if len(active) != 1 || active[0].Owner != model.QuotaCooldownOwnerXAIFreeUsage || active[0].Provider != "xai" || active[0].ReasonCode != quotaReasonXAIFreeUsage || active[0].WindowKind != quotaWindowRolling24H {
 		t.Fatalf("xAI cooldown = %#v", active)
 	}
 

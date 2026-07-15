@@ -25,6 +25,10 @@ const (
 	quotaAutoDisableActionTimeout = 30 * time.Second
 	quotaCooldownDueLimit         = 100
 	xaiFreeUsageCooldown          = 24 * time.Hour
+	quotaReasonCodexUsageLimit    = "codex_usage_limit_reached"
+	quotaReasonXAIFreeUsage       = "xai_free_usage_exhausted"
+	quotaWindowRolling24H         = "rolling_24h"
+	quotaWindowUnknown            = "unknown"
 )
 
 // RateLimitAutoDisableWorker reacts to request-monitoring events in near real time.
@@ -51,6 +55,8 @@ type quotaAutoDisableCandidate struct {
 	AuthIndex      string
 	DisplayAccount string
 	Provider       string
+	ReasonCode     string
+	WindowKind     string
 	ResetAt        time.Time
 	EventHash      string
 	Reason         string
@@ -208,6 +214,8 @@ func (w *RateLimitAutoDisableWorker) handleCandidate(ctx context.Context, candid
 		AuthIndex:        resolvedAuthIndex,
 		AccountSnapshot:  candidate.DisplayAccount,
 		Provider:         strings.ToLower(strings.TrimSpace(candidate.Provider)),
+		ReasonCode:       candidate.ReasonCode,
+		WindowKind:       candidate.WindowKind,
 		RecoverAtMS:      candidate.ResetAt.UnixMilli(),
 		Owner:            owner,
 		EventHash:        candidate.EventHash,
@@ -251,6 +259,8 @@ func (w *RateLimitAutoDisableWorker) extendExistingCooldown(ctx context.Context,
 		AuthIndex:        firstNonEmpty(candidate.AuthIndex, existing.AuthIndex, current.AuthIndex),
 		AccountSnapshot:  firstNonEmpty(candidate.DisplayAccount, existing.AccountSnapshot),
 		Provider:         strings.ToLower(strings.TrimSpace(firstNonEmpty(candidate.Provider, existing.Provider))),
+		ReasonCode:       firstNonEmpty(candidate.ReasonCode, existing.ReasonCode),
+		WindowKind:       firstNonEmpty(candidate.WindowKind, existing.WindowKind),
 		RecoverAtMS:      candidate.ResetAt.UnixMilli(),
 		Owner:            owner,
 		EventHash:        candidate.EventHash,
@@ -340,6 +350,8 @@ func quotaAutoDisableCandidateFromEvent(event usage.Event, baseURL string, manag
 			AuthIndex:      strings.TrimSpace(event.AuthIndex),
 			DisplayAccount: firstNonEmpty(event.AccountSnapshot, event.AuthLabelSnapshot, event.Source, fileName),
 			Provider:       "xai",
+			ReasonCode:     quotaReasonXAIFreeUsage,
+			WindowKind:     quotaWindowRolling24H,
 			ResetAt:        resetAt,
 			EventHash:      event.EventHash,
 			Reason:         event.FailSummary,
@@ -362,6 +374,8 @@ func quotaAutoDisableCandidateFromEvent(event usage.Event, baseURL string, manag
 		AuthIndex:      strings.TrimSpace(event.AuthIndex),
 		DisplayAccount: firstNonEmpty(event.AccountSnapshot, event.AuthLabelSnapshot, event.Source, fileName),
 		Provider:       "codex",
+		ReasonCode:     quotaReasonCodexUsageLimit,
+		WindowKind:     codexQuotaWindowKindFromEvent(event),
 		ResetAt:        resetAt,
 		EventHash:      event.EventHash,
 		Reason:         event.FailSummary,
@@ -523,8 +537,48 @@ func codexQuotaReachedResetAtMS(quota *usage.HeaderQuotaMetadata) int64 {
 		return quotaWindowResetAtMS(quota.Primary)
 	case "secondary":
 		return quotaWindowResetAtMS(quota.Secondary)
+	}
+	if strings.TrimSpace(quota.ReachedWindowKind) != "" && quota.RecoverAtMS > 0 {
+		return quota.RecoverAtMS
+	}
+	return codexQuotaFullWindowResetAtMS(quota)
+}
+
+func codexQuotaWindowKindFromEvent(event usage.Event) string {
+	metadata := event.ResponseMetadata
+	if metadata == nil && event.ResponseMetadataJSON != "" {
+		metadata = usage.ResponseHeaderMetadataFromJSON(event.ResponseMetadataJSON)
+	}
+	if metadata == nil || metadata.Quota == nil {
+		return quotaWindowUnknown
+	}
+	quota := metadata.Quota
+	if kind := strings.TrimSpace(quota.ReachedWindowKind); kind != "" {
+		return kind
+	}
+	switch strings.ToLower(strings.TrimSpace(quota.RateLimitReachedType)) {
+	case "primary":
+		return quotaWindowKind(quota.Primary)
+	case "secondary":
+		return quotaWindowKind(quota.Secondary)
+	}
+	return quotaWindowUnknown
+}
+
+func quotaWindowKind(window *usage.HeaderQuotaWindow) string {
+	if window == nil || window.WindowMinutes == nil {
+		return quotaWindowUnknown
+	}
+	minutes := *window.WindowMinutes
+	switch {
+	case minutes >= 299 && minutes <= 301:
+		return "five_hour"
+	case minutes >= 10_079 && minutes <= 10_081:
+		return "weekly"
+	case minutes >= 40_319 && minutes <= 44_641:
+		return "monthly"
 	default:
-		return codexQuotaFullWindowResetAtMS(quota)
+		return quotaWindowUnknown
 	}
 }
 

@@ -184,7 +184,10 @@ func Migrate(db *sql.DB) error {
 			account_snapshot text,
 			account_id_snapshot text,
 			auth_label text,
+			reason_code text,
 			reason text,
+			auto_disable_eligible integer not null default 0,
+			auto_disabled_at_ms integer,
 			evidence_json text,
 			last_error text,
 			first_seen_at_ms integer not null,
@@ -193,8 +196,6 @@ func Migrate(db *sql.DB) error {
 			created_at_ms integer not null,
 			updated_at_ms integer not null
 		)`,
-		`create unique index if not exists idx_account_action_candidates_pending_identity_action
-			on account_action_candidates(auth_file_name, action_type, coalesce(auth_index, ''), coalesce(account_id_snapshot, '')) where status = 'pending'`,
 		`drop index if exists idx_account_action_candidates_pending_file_action`,
 		`create index if not exists idx_account_action_candidates_status_seen
 			on account_action_candidates(status, last_seen_at_ms)`,
@@ -277,6 +278,8 @@ func Migrate(db *sql.DB) error {
 			auth_index text,
 			account_snapshot text,
 			provider text,
+			reason_code text,
+			window_kind text,
 			recover_at_ms integer not null,
 			owner text not null,
 			event_hash text,
@@ -308,10 +311,51 @@ func Migrate(db *sql.DB) error {
 	if err := ensureAccountActionCandidateColumns(db); err != nil {
 		return err
 	}
+	if err := ensureQuotaCooldownColumns(db); err != nil {
+		return err
+	}
 	if err := ensureUsageRollupLongContextColumns(db); err != nil {
 		return err
 	}
 	return ensureModelPriceColumns(db)
+}
+
+func ensureQuotaCooldownColumns(db *sql.DB) error {
+	rows, err := db.Query(`pragma table_info(quota_cooldowns)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	existing := map[string]struct{}{}
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull int
+		var defaultValue any
+		var pk int
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			return err
+		}
+		existing[name] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, column := range []struct {
+		name       string
+		definition string
+	}{
+		{name: "reason_code", definition: "text"},
+		{name: "window_kind", definition: "text"},
+	} {
+		if _, ok := existing[column.name]; ok {
+			continue
+		}
+		if _, err := db.Exec(`alter table quota_cooldowns add column ` + column.name + ` ` + column.definition); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func ensureUsageRollupLongContextColumns(db *sql.DB) error {
@@ -411,6 +455,9 @@ func ensureAccountActionCandidateColumns(db *sql.DB) error {
 	}{
 		{name: "account_id_snapshot", definition: "text"},
 		{name: "last_error", definition: "text"},
+		{name: "reason_code", definition: "text"},
+		{name: "auto_disable_eligible", definition: "integer not null default 0"},
+		{name: "auto_disabled_at_ms", definition: "integer"},
 	}
 	for _, column := range columns {
 		if _, ok := existing[column.name]; ok {
@@ -420,8 +467,11 @@ func ensureAccountActionCandidateColumns(db *sql.DB) error {
 			return err
 		}
 	}
-	if _, err := db.Exec(`create unique index if not exists idx_account_action_candidates_pending_identity_action
-		on account_action_candidates(auth_file_name, action_type, coalesce(auth_index, ''), coalesce(account_id_snapshot, '')) where status = 'pending'`); err != nil {
+	if _, err := db.Exec(`drop index if exists idx_account_action_candidates_pending_identity_action`); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`create unique index idx_account_action_candidates_pending_identity_action
+		on account_action_candidates(auth_file_name, action_type, coalesce(auth_index, ''), coalesce(account_id_snapshot, ''), coalesce(reason_code, '')) where status = 'pending'`); err != nil {
 		return err
 	}
 	_, err = db.Exec(`drop index if exists idx_account_action_candidates_pending_file_action`)
