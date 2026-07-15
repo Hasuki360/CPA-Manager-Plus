@@ -41,9 +41,10 @@ var antigravityQuotaCheckURLs = []string{
 // RateLimitAutoDisableWorker reacts to request-monitoring events in near real time.
 // It handles strict provider quota signals with a known recovery time: Codex 429
 // usage_limit_reached responses, Antigravity quota exhaustion, xAI free-usage-exhausted
-// responses, and Hasuki HTTP 500 AI-provider cooldowns. Disables are persisted with
-// CPAMP ownership, so recovery never relies solely on in-memory timers and never
-// re-enables pre-existing/manual disables.
+// responses, xAI/Grok 401 auth failures (disable only, no auto-recovery), and Hasuki
+// HTTP 500 AI-provider cooldowns. Disables are persisted with CPAMP ownership, so
+// recovery never relies solely on in-memory timers and never re-enables
+// pre-existing/manual disables (except xAI 401 which never auto-recovers).
 type RateLimitAutoDisableWorker struct {
 	store  *store.Store
 	client *http.Client
@@ -185,6 +186,11 @@ func (w *RateLimitAutoDisableWorker) handleCandidate(ctx context.Context, candid
 		w.handleAIProviderCandidate(ctx, candidate)
 		return
 	}
+	// Grok/xAI 401: auto-disable only. Token will not heal itself; no auto-enable.
+	if candidate.Owner == model.QuotaCooldownOwnerXAIAuth401 {
+		w.handleXAIAuth401Candidate(ctx, candidate)
+		return
+	}
 	if w == nil || w.store == nil || w.store.QuotaCooldowns == nil {
 		log.Printf("[quota-auto-disable] store unavailable, skip auth file %q", candidate.FileName)
 		return
@@ -284,6 +290,38 @@ func (w *RateLimitAutoDisableWorker) handleAIProviderCandidate(ctx context.Conte
 		return
 	}
 	log.Printf("[quota-auto-disable] HTTP 500 threshold reached for AI provider %q count=%d; channel closed until %s", candidate.ProviderBaseURL, candidate.TriggerCount, candidate.ResetAt.Format(time.RFC3339))
+}
+
+// handleXAIAuth401Candidate disables Grok/xAI auth files on clear 401 failures.
+// Unlike free-usage cooldown, it does not schedule auto-enable because expired
+// tokens do not recover themselves; the operator must re-login and re-enable.
+func (w *RateLimitAutoDisableWorker) handleXAIAuth401Candidate(ctx context.Context, candidate quotaAutoDisableCandidate) {
+	if w == nil {
+		return
+	}
+	if candidate.FileName == "" || candidate.BaseURL == "" || candidate.ManagementKey == "" {
+		return
+	}
+	current, ok, err := w.currentAuthFile(ctx, candidate.BaseURL, candidate.ManagementKey, candidate.FileName, candidate.AuthIndex)
+	if err != nil {
+		log.Printf("[quota-auto-disable] failed to verify xAI auth file %q before 401 disable: %v", candidate.FileName, err)
+		return
+	}
+	if !ok {
+		log.Printf("[quota-auto-disable] xAI auth file %q authIndex=%q not found/mismatched, skip 401 disable", candidate.FileName, candidate.AuthIndex)
+		return
+	}
+	if current.Disabled {
+		log.Printf("[quota-auto-disable] xAI auth file %q already disabled; skip 401 auto disable", candidate.FileName)
+		return
+	}
+	resolvedAuthIndex := firstNonEmpty(candidate.AuthIndex, current.AuthIndex)
+	log.Printf("[quota-auto-disable] xAI/Grok 401 for auth file %q account=%q, disabling (no auto-recovery)", candidate.FileName, candidate.DisplayAccount)
+	if err := w.patchAuthFile(ctx, candidate.BaseURL, candidate.ManagementKey, candidate.FileName, resolvedAuthIndex, true); err != nil {
+		log.Printf("[quota-auto-disable] failed to disable xAI auth file %q after 401: %v", candidate.FileName, err)
+		return
+	}
+	log.Printf("[quota-auto-disable] disabled xAI auth file %q after 401; no auto-enable scheduled", candidate.FileName)
 }
 
 func (w *RateLimitAutoDisableWorker) extendExistingCooldown(ctx context.Context, candidate quotaAutoDisableCandidate, current authFile) bool {
@@ -612,6 +650,28 @@ func (w *RateLimitAutoDisableWorker) quotaAutoDisableCandidateFromEvent(ctx cont
 			HTTPStatusCode: event.FailStatusCode,
 		}, true
 	}
+	// Grok/xAI 401 / token invalid: auto-disable only (no recovery window).
+	if isXAIAuth401Event(event) {
+		if fileName == "" {
+			log.Printf("[quota-auto-disable] xAI/Grok 401 event %q has no auth file snapshot, skip auto disable", event.EventHash)
+			return quotaAutoDisableCandidate{}, false
+		}
+		return quotaAutoDisableCandidate{
+			BaseURL:        baseURL,
+			ManagementKey:  managementKey,
+			FileName:       fileName,
+			AuthIndex:      strings.TrimSpace(event.AuthIndex),
+			DisplayAccount: firstNonEmpty(event.AccountSnapshot, event.AuthLabelSnapshot, event.Source, fileName),
+			Provider:       "xai",
+			// Placeholder future time so shared candidate plumbing stays valid;
+			// handleXAIAuth401Candidate never schedules recovery.
+			ResetAt:        now.Add(365 * 24 * time.Hour),
+			EventHash:      event.EventHash,
+			Reason:         firstNonEmpty(event.FailSummary, "xAI/Grok authentication failed (HTTP 401)"),
+			Owner:          model.QuotaCooldownOwnerXAIAuth401,
+			HTTPStatusCode: event.FailStatusCode,
+		}, true
+	}
 	if fileName == "" {
 		if event.Failed && event.FailStatusCode == http.StatusTooManyRequests {
 			log.Printf("[quota-auto-disable] %s 429 event %q has no auth file snapshot, skip account quota cooldown", provider, event.EventHash)
@@ -899,6 +959,31 @@ func xaiFreeUsageResetTimeFromEvent(event usage.Event, now time.Time) (time.Time
 		}
 	}
 	return time.Time{}, false
+}
+
+// isXAIAuth401Event matches Grok/xAI authentication failures that should permanently
+// (until manual re-enable) pause the auth file. Free-usage exhaustion is handled
+// separately and must not fall into this branch.
+func isXAIAuth401Event(event usage.Event) bool {
+	if !event.Failed || event.FailStatusCode != http.StatusUnauthorized {
+		return false
+	}
+	provider := normalizeQuotaProvider(firstNonEmpty(event.Provider, event.AuthProviderSnapshot))
+	if provider != "xai" {
+		return false
+	}
+	// Explicit account death still goes through auth-issue delete flow; skip here.
+	blob := strings.ToLower(strings.Join([]string{
+		event.FailSummary,
+		event.HeaderErrorCode,
+		event.HeaderErrorKind,
+		event.FailBody,
+	}, "\n"))
+	if strings.Contains(blob, "account_deactivated") || strings.Contains(blob, "deactivated_workspace") {
+		return false
+	}
+	// For xAI/Grok, a plain HTTP 401 is enough to auto-disable.
+	return true
 }
 
 func xaiFreeUsageCode(value any) bool {
@@ -1314,6 +1399,13 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// quotaAutoDisableCandidateFromEvent is a thin test helper that mirrors the worker
+// path for pure event classification without HTTP-dependent Antigravity/HTTP500 probes.
+func quotaAutoDisableCandidateFromEvent(event usage.Event, baseURL string, managementKey string, now time.Time) (quotaAutoDisableCandidate, bool) {
+	w := &RateLimitAutoDisableWorker{}
+	return w.quotaAutoDisableCandidateFromEvent(context.Background(), event, collectorpkg.RuntimeConfig{}, baseURL, managementKey, now)
 }
 
 // NormalizeBaseURL is exported for legacy tests.
