@@ -2872,7 +2872,7 @@ export const getDemoApiCallResult = (payload: DemoApiCallPayload = {}) => {
                 percent: 42,
                 resets_at: new Date(now() + 5 * day).toISOString(),
                 scope: { model: { displayName: 'Demo Model B' } },
-                is_active: true,
+                is_active: false,
               },
             ],
           }

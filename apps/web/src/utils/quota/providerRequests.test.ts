@@ -597,6 +597,92 @@ describe('fetchClaudeQuota', () => {
     ]);
   });
 
+  it('keeps inactive scoped weekly limits visible and prefers an active duplicate', async () => {
+    const dormantResetAt = '2026-07-08T10:00:00Z';
+    const activeResetAt = '2026-07-10T10:00:00Z';
+    mocks.request
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: {
+          limits: [
+            {
+              kind: 'weekly_scoped',
+              group: 'weekly',
+              percent: 35,
+              resets_at: dormantResetAt,
+              scope: { model: { id: 'model-dormant', display_name: 'Dormant model' } },
+              is_active: false,
+            },
+            {
+              kind: 'weekly_scoped',
+              group: 'weekly',
+              percent: 10,
+              resets_at: '2026-07-09T10:00:00Z',
+              scope: { model: { id: 'model-shared', display_name: 'Shared inactive' } },
+              is_active: false,
+            },
+            {
+              kind: 'weekly_scoped',
+              group: 'weekly',
+              percent: 80,
+              resets_at: activeResetAt,
+              scope: { model: { id: 'model-shared', display_name: 'Shared active' } },
+              is_active: true,
+            },
+            {
+              kind: 'weekly_scoped',
+              group: 'weekly',
+              percent: 15,
+              resets_at: '2026-07-09T12:00:00Z',
+              scope: { model: { id: 'model-unknown', display_name: 'Unknown inactive' } },
+              is_active: false,
+            },
+            {
+              kind: 'weekly_scoped',
+              group: 'weekly',
+              percent: 55,
+              resets_at: '2026-07-10T12:00:00Z',
+              scope: { model: { id: 'model-unknown', display_name: 'Unknown preferred' } },
+            },
+          ],
+        },
+      })
+      .mockRejectedValueOnce(new Error('profile unavailable'));
+
+    const result = await fetchClaudeQuota(
+      {
+        name: 'claude.json',
+        type: 'claude',
+        authIndex: 'claude-1',
+      },
+      t
+    );
+
+    expect(result.windows).toEqual([
+      {
+        id: 'weekly-scoped-id-model-dormant',
+        label: 'Dormant model',
+        usedPercent: 35,
+        resetLabel: formatQuotaResetTime(dormantResetAt),
+      },
+      {
+        id: 'weekly-scoped-id-model-shared',
+        label: 'Shared active',
+        usedPercent: 80,
+        resetLabel: formatQuotaResetTime(activeResetAt),
+      },
+      {
+        id: 'weekly-scoped-id-model-unknown',
+        label: 'Unknown preferred',
+        usedPercent: 55,
+        resetLabel: formatQuotaResetTime('2026-07-10T12:00:00Z'),
+      },
+    ]);
+  });
+
   it('ignores unscoped duplicates, unrelated kinds, and malformed scoped limits', async () => {
     mocks.request
       .mockResolvedValueOnce({
@@ -666,8 +752,8 @@ describe('fetchClaudeQuota', () => {
             {
               kind: 'weekly_scoped',
               group: 'weekly',
-              percent: 25,
-              resets_at: '2026-07-08T10:00:00Z',
+              percent: null,
+              resets_at: 'not-a-date',
               scope: { model: { display_name: 'Inactive' } },
               is_active: false,
             },

@@ -544,6 +544,7 @@ const encodeClaudeWindowIdPart = (value: string): string => {
 };
 
 type ClaudeScopedWeeklyWindowEntry = {
+  activityRank: number;
   identityKey: string;
   sortLabel: string;
   window: ClaudeQuotaWindow;
@@ -581,7 +582,6 @@ const buildClaudeScopedWeeklyWindows = (payload: ClaudeUsagePayload): ClaudeQuot
   for (const rawLimit of payload.limits) {
     try {
       if (!isRecord(rawLimit) || !isClaudeWeeklyScopedLimit(rawLimit)) continue;
-      if (normalizeFlagValue(rawLimit.is_active ?? rawLimit.isActive) === false) continue;
 
       const scope = isRecord(rawLimit.scope) ? rawLimit.scope : null;
       const model = isRecord(scope?.model) ? scope.model : null;
@@ -599,12 +599,16 @@ const buildClaudeScopedWeeklyWindows = (payload: ClaudeUsagePayload): ClaudeQuot
           : null;
       const labelKey = normalizeClaudeIdentityText(label).toLowerCase();
       const identityKey = modelId ? `id:${modelId}` : `label:${labelKey}`;
-      if (windowsByModel.has(identityKey)) continue;
+      const activeFlag = normalizeFlagValue(rawLimit.is_active ?? rawLimit.isActive);
+      const activityRank = activeFlag === true ? 2 : activeFlag === undefined ? 1 : 0;
+      const existing = windowsByModel.get(identityKey);
+      if (existing && existing.activityRank >= activityRank) continue;
 
       const idPart = modelId
         ? `id-${encodeClaudeWindowIdPart(modelId)}`
         : encodeClaudeWindowIdPart(labelKey);
       windowsByModel.set(identityKey, {
+        activityRank,
         identityKey,
         sortLabel: labelKey,
         window: {
