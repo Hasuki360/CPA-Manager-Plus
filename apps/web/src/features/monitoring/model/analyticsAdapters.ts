@@ -703,6 +703,7 @@ export const buildApiKeyRowsFromAnalytics = (
         apiKeyHash,
         apiKeyLabel: isUnknown ? '' : apiKeyLabel,
         apiKeyMasked: isUnknown ? '' : apiKeyMasked,
+        apiKeyCopyValue: isUnknown ? undefined : apiKeyDisplay?.copyValue,
         isUnknown,
         authLabels: uniqueReadableValues([
           ...authMetas.map((meta) => meta.label),

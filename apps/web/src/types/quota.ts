@@ -227,6 +227,19 @@ export interface ClaudeExtraUsage {
   utilization: number | null;
 }
 
+export interface ClaudeUsageLimit {
+  kind?: unknown;
+  group?: unknown;
+  percent?: unknown;
+  resets_at?: unknown;
+  resetsAt?: unknown;
+  reset_at?: unknown;
+  resetAt?: unknown;
+  scope?: unknown;
+  is_active?: unknown;
+  isActive?: unknown;
+}
+
 export interface ClaudeUsagePayload {
   five_hour?: ClaudeUsageWindow | null;
   seven_day?: ClaudeUsageWindow | null;
@@ -235,6 +248,7 @@ export interface ClaudeUsagePayload {
   seven_day_sonnet?: ClaudeUsageWindow | null;
   seven_day_cowork?: ClaudeUsageWindow | null;
   iguana_necktie?: ClaudeUsageWindow | null;
+  limits?: ClaudeUsageLimit[] | null;
   extra_usage?: ClaudeExtraUsage | null;
 }
 

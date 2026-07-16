@@ -1,6 +1,10 @@
 import { formatApiKeyHashLabel } from './base';
 import { calculateCacheHitRateFromTotals, getCacheHitTotals } from '@/utils/usage';
-import { sanitizeApiKeyDisplayText, shouldPreferApiKeyAlias } from './apiKeys';
+import {
+  sanitizeApiKeyDisplayText,
+  shouldPreferApiKeyAlias,
+  type ApiKeyDisplayInfo,
+} from './apiKeys';
 import {
   buildMonitoringAccountFilterValue,
   parseMonitoringAccountFilterValue,
@@ -490,7 +494,10 @@ export const buildAccountRows = (rows: MonitoringEventRow[]): MonitoringAccountR
     );
 };
 
-export const buildApiKeyRows = (rows: MonitoringEventRow[]): MonitoringApiKeyRow[] => {
+export const buildApiKeyRows = (
+  rows: MonitoringEventRow[],
+  apiKeyDisplayMap?: ReadonlyMap<string, ApiKeyDisplayInfo>
+): MonitoringApiKeyRow[] => {
   const grouped = new Map<
     string,
     {
@@ -498,6 +505,7 @@ export const buildApiKeyRows = (rows: MonitoringEventRow[]): MonitoringApiKeyRow
       apiKeyHash: string;
       apiKeyLabel: string;
       apiKeyMasked: string;
+      apiKeyCopyValue?: string;
       isUnknown: boolean;
       authLabels: Set<string>;
       sourceLabels: Set<string>;
@@ -549,6 +557,9 @@ export const buildApiKeyRows = (rows: MonitoringEventRow[]): MonitoringApiKeyRow
       apiKeyHash: row.apiKeyHash,
       apiKeyLabel: sanitizeApiKeyDisplayText(row.apiKeyLabel),
       apiKeyMasked: sanitizeApiKeyDisplayText(row.apiKeyMasked),
+      apiKeyCopyValue: row.apiKeyHash
+        ? apiKeyDisplayMap?.get(row.apiKeyHash.toLowerCase())?.copyValue
+        : undefined,
       isUnknown: !hasKnownApiKey,
       authLabels: new Set<string>(),
       sourceLabels: new Set<string>(),
@@ -571,6 +582,11 @@ export const buildApiKeyRows = (rows: MonitoringEventRow[]): MonitoringApiKeyRow
 
     if (!existing.apiKeyHash && row.apiKeyHash) {
       existing.apiKeyHash = row.apiKeyHash;
+    }
+    if (!existing.apiKeyCopyValue && existing.apiKeyHash) {
+      existing.apiKeyCopyValue = apiKeyDisplayMap?.get(
+        existing.apiKeyHash.toLowerCase()
+      )?.copyValue;
     }
     if (!existing.apiKeyMasked && row.apiKeyMasked) {
       existing.apiKeyMasked = sanitizeApiKeyDisplayText(row.apiKeyMasked);
@@ -639,6 +655,7 @@ export const buildApiKeyRows = (rows: MonitoringEventRow[]): MonitoringApiKeyRow
       apiKeyHash: item.apiKeyHash,
       apiKeyLabel: item.apiKeyLabel || item.apiKeyMasked || formatApiKeyHashLabel(item.apiKeyHash),
       apiKeyMasked: item.apiKeyMasked || item.apiKeyLabel || formatApiKeyHashLabel(item.apiKeyHash),
+      apiKeyCopyValue: item.apiKeyCopyValue,
       isUnknown: item.isUnknown,
       authLabels: Array.from(item.authLabels).filter(Boolean).sort(),
       sourceLabels: Array.from(item.sourceLabels).filter(Boolean).sort(),

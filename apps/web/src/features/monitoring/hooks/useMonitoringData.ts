@@ -757,7 +757,7 @@ export function useMonitoringData({
             channelByAuthIndex,
             apiKeyDisplayMap
           )
-        : buildApiKeyRows(filteredRows),
+        : buildApiKeyRows(filteredRows, apiKeyDisplayMap),
     [
       apiKeyDisplayMap,
       currentAnalyticsData,
@@ -771,13 +771,13 @@ export function useMonitoringData({
   const fallbackFilterOptions = useMemo<MonitoringFilterOptions>(
     () => ({
       accountRows: buildAccountRows(rangeFilteredRows),
-      apiKeyRows: buildApiKeyRows(rangeFilteredRows),
+      apiKeyRows: buildApiKeyRows(rangeFilteredRows, apiKeyDisplayMap),
       providers: uniqueOptionValues(rangeFilteredRows.map((row) => row.provider)),
       models: uniqueOptionValues(rangeFilteredRows.map((row) => row.model)),
       channels: uniqueOptionValues(rangeFilteredRows.map((row) => row.channel)),
       headerTraceIds: uniqueOptionValues(rangeFilteredRows.map((row) => row.headerTraceId)),
     }),
-    [rangeFilteredRows]
+    [apiKeyDisplayMap, rangeFilteredRows]
   );
   const analyticsFilterOptions = currentAnalyticsData?.filter_options;
   const filterOptions = useMemo(

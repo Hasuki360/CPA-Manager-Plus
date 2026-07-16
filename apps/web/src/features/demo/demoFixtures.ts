@@ -2802,6 +2802,7 @@ export const getDemoConfigYaml = () =>
 
 export const getDemoApiCallResult = (payload: DemoApiCallPayload = {}) => {
   const requestUrl = String(payload.url || '');
+  const authIndex = String(payload.authIndex || '');
   let body: unknown = { data: demoProviderModels.map((model) => ({ id: model.name })) };
 
   if (requestUrl.includes('/wham/usage')) {
@@ -2854,15 +2855,71 @@ export const getDemoApiCallResult = (payload: DemoApiCallPayload = {}) => {
       ],
     };
   } else if (requestUrl.includes('anthropic.com/api/oauth/profile')) {
-    body = { email: 'research@example.com', organization_name: 'Research Team' };
+    body =
+      authIndex === 'claude-team-01'
+        ? { account: { has_claude_max: true } }
+        : authIndex === 'claude-research-02'
+          ? { account: { has_claude_pro: true } }
+          : { email: 'research@example.com', organization_name: 'Research Team' };
   } else if (requestUrl.includes('anthropic.com/api/oauth/usage')) {
-    body = {
-      plan_type: 'pro',
-      usage: {
-        five_hour: { utilization: 0.44, resets_at: new Date(now() + 2 * hour).toISOString() },
-        seven_day: { utilization: 0.31, resets_at: new Date(now() + 3 * day).toISOString() },
-      },
+    const fiveHour = {
+      utilization: authIndex === 'claude-team-01' ? 44 : 18,
+      resets_at: new Date(now() + 2 * hour).toISOString(),
     };
+    const sevenDay = {
+      utilization: authIndex === 'claude-team-01' ? 31 : 22,
+      resets_at: new Date(now() + 3 * day).toISOString(),
+    };
+    body =
+      authIndex === 'claude-team-01'
+        ? {
+            limits: [
+              {
+                kind: 'session',
+                group: 'session',
+                percent: fiveHour.utilization,
+                resets_at: fiveHour.resets_at,
+                scope: null,
+                is_active: true,
+              },
+              {
+                kind: 'weekly_all',
+                group: 'weekly',
+                percent: sevenDay.utilization,
+                resets_at: sevenDay.resets_at,
+                scope: null,
+                is_active: true,
+              },
+              {
+                kind: 'weekly_scoped',
+                group: 'weekly',
+                percent: 78,
+                resets_at: new Date(now() + 4 * day).toISOString(),
+                scope: { model: { display_name: 'Demo Model A' } },
+                is_active: true,
+              },
+              {
+                kind: 'model_scoped',
+                group: 'weekly',
+                percent: 12,
+                resets_at: new Date(now() + 4 * day).toISOString(),
+                scope: { model: { displayName: 'Demo Model B' } },
+                is_active: false,
+              },
+              {
+                kind: 'model_scoped',
+                group: 'weekly',
+                percent: 42,
+                resets_at: new Date(now() + 5 * day).toISOString(),
+                scope: { model: { displayName: 'Demo Model B' } },
+                is_active: false,
+              },
+            ],
+          }
+        : {
+            five_hour: fiveHour,
+            seven_day: sevenDay,
+          };
   } else if (requestUrl.includes('api.kimi.com')) {
     body = {
       items: [

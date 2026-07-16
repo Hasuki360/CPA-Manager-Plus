@@ -26,11 +26,14 @@ import {
   ANTIGRAVITY_AVAILABLE_MODELS_URLS,
   ANTIGRAVITY_QUOTA_SUMMARY_URLS,
   ANTIGRAVITY_USER_AGENT,
+  CLAUDE_PROFILE_URL,
+  CLAUDE_USAGE_URL,
   CODEX_RATE_LIMIT_RESET_CREDITS_URL,
   CODEX_USAGE_URL,
   XAI_BILLING_MONTHLY_URL,
   XAI_BILLING_WEEKLY_URL,
 } from './constants';
+import { formatQuotaResetTime } from './formatters';
 import {
   buildXaiBillingSummary,
   fetchXaiQuota,
@@ -197,7 +200,8 @@ describe('fetchCodexQuota', () => {
 });
 
 describe('fetchClaudeQuota', () => {
-  it('keeps usage quota data when profile lookup fails', async () => {
+  it('adds model-scoped weekly limits from the existing usage request', async () => {
+    const resetAt = '2026-07-08T21:00:00+00:00';
     mocks.request
       .mockResolvedValueOnce({
         statusCode: 200,
@@ -209,6 +213,1276 @@ describe('fetchClaudeQuota', () => {
             utilization: 12,
             resets_at: '2026-07-01T10:00:00Z',
           },
+          seven_day: {
+            utilization: 34,
+            resets_at: '2026-07-07T10:00:00Z',
+          },
+          iguana_necktie: {
+            utilization: 56,
+            resets_at: '2026-07-09T10:00:00Z',
+          },
+          limits: [
+            {
+              kind: 'weekly_scoped',
+              group: 'weekly',
+              percent: 100,
+              resets_at: resetAt,
+              scope: {
+                model: {
+                  id: null,
+                  display_name: 'Fable 5 Max',
+                },
+              },
+              is_active: true,
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: {},
+      });
+
+    const result = await fetchClaudeQuota(
+      {
+        name: 'claude.json',
+        type: 'claude',
+        authIndex: 'claude-1',
+      },
+      t
+    );
+
+    expect(mocks.request).toHaveBeenCalledTimes(2);
+    expect(mocks.request.mock.calls.map(([request]) => request.url)).toEqual([
+      CLAUDE_USAGE_URL,
+      CLAUDE_PROFILE_URL,
+    ]);
+    expect(result.windows.map((window) => window.id)).toEqual([
+      'five-hour',
+      'seven-day',
+      'weekly-scoped-fable%205%20max',
+      'iguana-necktie',
+    ]);
+    expect(result.windows[2]).toEqual({
+      id: 'weekly-scoped-fable%205%20max',
+      label: 'Fable 5 Max',
+      usedPercent: 100,
+      resetLabel: formatQuotaResetTime(resetAt),
+    });
+    expect(result.windows[3]).toMatchObject({
+      id: 'iguana-necktie',
+      labelKey: 'claude_quota.iguana_necktie',
+    });
+  });
+
+  it('restores base windows from a limits-only response before scoped weekly rows', async () => {
+    const sessionResetAt = '2026-07-01T10:00:00Z';
+    const weeklyResetAt = '2026-07-07T10:00:00Z';
+    const scopedResetAt = '2026-07-08T21:00:00+00:00';
+    mocks.request
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: {
+          limits: [
+            {
+              kind: 'session',
+              group: 'session',
+              percent: '18',
+              resets_at: sessionResetAt,
+              is_active: true,
+            },
+            {
+              kind: 'weekly_all',
+              group: 'weekly',
+              percent: 125,
+              resetsAt: weeklyResetAt,
+              scope: null,
+              isActive: true,
+            },
+            {
+              kind: 'weekly_scoped',
+              group: 'weekly',
+              percent: 42,
+              reset_at: scopedResetAt,
+              scope: { model: { display_name: 'Fable 5 Max' } },
+              is_active: true,
+            },
+          ],
+        },
+      })
+      .mockRejectedValueOnce(new Error('profile unavailable'));
+
+    const result = await fetchClaudeQuota(
+      {
+        name: 'claude.json',
+        type: 'claude',
+        authIndex: 'claude-1',
+      },
+      t
+    );
+
+    expect(result.windows).toEqual([
+      {
+        id: 'five-hour',
+        label: 'claude_quota.five_hour',
+        labelKey: 'claude_quota.five_hour',
+        usedPercent: 18,
+        resetLabel: formatQuotaResetTime(sessionResetAt),
+      },
+      {
+        id: 'seven-day',
+        label: 'claude_quota.seven_day',
+        labelKey: 'claude_quota.seven_day',
+        usedPercent: 125,
+        resetLabel: formatQuotaResetTime(weeklyResetAt),
+      },
+      {
+        id: 'weekly-scoped-fable%205%20max',
+        label: 'Fable 5 Max',
+        usedPercent: 42,
+        resetLabel: formatQuotaResetTime(scopedResetAt),
+      },
+    ]);
+  });
+
+  it('fills only a missing base window and keeps top-level values authoritative', async () => {
+    const topLevelResetAt = '2026-07-01T10:00:00Z';
+    const fallbackResetAt = '2026-07-07T10:00:00Z';
+    mocks.request
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: {
+          five_hour: {
+            utilization: 9,
+            resets_at: topLevelResetAt,
+          },
+          limits: [
+            {
+              kind: 'session',
+              group: 'session',
+              percent: 99,
+              resets_at: '2026-07-02T10:00:00Z',
+              scope: null,
+            },
+            {
+              kind: 'weekly',
+              group: 'weekly',
+              percent: 41,
+              resets_at: fallbackResetAt,
+            },
+            {
+              kind: 'weekly_all',
+              group: 'weekly',
+              percent: 88,
+              resets_at: '2026-07-08T10:00:00Z',
+              scope: null,
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: {},
+      });
+
+    const result = await fetchClaudeQuota(
+      {
+        name: 'claude.json',
+        type: 'claude',
+        authIndex: 'claude-1',
+      },
+      t
+    );
+
+    expect(result.windows).toEqual([
+      {
+        id: 'five-hour',
+        label: 'claude_quota.five_hour',
+        labelKey: 'claude_quota.five_hour',
+        usedPercent: 9,
+        resetLabel: formatQuotaResetTime(topLevelResetAt),
+      },
+      {
+        id: 'seven-day',
+        label: 'claude_quota.seven_day',
+        labelKey: 'claude_quota.seven_day',
+        usedPercent: 88,
+        resetLabel: formatQuotaResetTime('2026-07-08T10:00:00Z'),
+      },
+    ]);
+  });
+
+  it('uses valid limits fallbacks when top-level windows contain no displayable data', async () => {
+    const sessionResetAt = '2026-07-01T10:00:00Z';
+    const weeklyResetAt = '2026-07-07T10:00:00Z';
+    mocks.request
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: {
+          five_hour: {
+            utilization: 'bad',
+            resets_at: 'not-a-date',
+          },
+          seven_day: {
+            utilization: null,
+            resets_at: '',
+          },
+          limits: [
+            {
+              kind: 'session',
+              group: 'session',
+              percent: 17,
+              resets_at: sessionResetAt,
+              scope: null,
+            },
+            {
+              kind: 'weekly_all',
+              group: 'weekly',
+              percent: 29,
+              resets_at: weeklyResetAt,
+              scope: null,
+            },
+          ],
+        },
+      })
+      .mockRejectedValueOnce(new Error('profile unavailable'));
+
+    const result = await fetchClaudeQuota(
+      {
+        name: 'claude.json',
+        type: 'claude',
+        authIndex: 'claude-1',
+      },
+      t
+    );
+
+    expect(result.windows).toEqual([
+      {
+        id: 'five-hour',
+        label: 'claude_quota.five_hour',
+        labelKey: 'claude_quota.five_hour',
+        usedPercent: 17,
+        resetLabel: formatQuotaResetTime(sessionResetAt),
+      },
+      {
+        id: 'seven-day',
+        label: 'claude_quota.seven_day',
+        labelKey: 'claude_quota.seven_day',
+        usedPercent: 29,
+        resetLabel: formatQuotaResetTime(weeklyResetAt),
+      },
+    ]);
+  });
+
+  it('selects complete current base candidates and prefers weekly_all independent of order', async () => {
+    const sessionResetAt = '2026-07-02T10:00:00Z';
+    const weeklyResetAt = '2026-07-08T10:00:00Z';
+    const createUsageBody = (weeklyLimits: Array<Record<string, unknown>>) => ({
+      limits: [
+        {
+          kind: 'session',
+          group: 'session',
+          percent: null,
+          resets_at: sessionResetAt,
+          scope: null,
+          is_active: true,
+        },
+        {
+          kind: 'session',
+          group: 'session',
+          percent: 90,
+          resets_at: '2026-07-01T12:00:00Z',
+          scope: null,
+          is_active: true,
+        },
+        {
+          kind: 'session',
+          group: 'session',
+          percent: 20,
+          resets_at: sessionResetAt,
+          scope: null,
+          is_active: true,
+        },
+        ...weeklyLimits,
+      ],
+    });
+    const weekly = {
+      kind: 'weekly',
+      group: 'weekly',
+      percent: 30,
+      resets_at: weeklyResetAt,
+      scope: null,
+      is_active: true,
+    };
+    const weeklyAll = {
+      kind: 'weekly_all',
+      group: 'weekly',
+      percent: 40,
+      resets_at: weeklyResetAt,
+      scope: null,
+      is_active: true,
+    };
+
+    mocks.request
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: createUsageBody([weekly, weeklyAll]),
+      })
+      .mockRejectedValueOnce(new Error('profile unavailable'))
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: createUsageBody([weeklyAll, weekly]),
+      })
+      .mockRejectedValueOnce(new Error('profile unavailable'));
+
+    const first = await fetchClaudeQuota(
+      { name: 'claude-a.json', type: 'claude', authIndex: 'claude-a' },
+      t
+    );
+    const reversed = await fetchClaudeQuota(
+      { name: 'claude-b.json', type: 'claude', authIndex: 'claude-b' },
+      t
+    );
+
+    const expectedWindows = [
+      {
+        id: 'five-hour',
+        label: 'claude_quota.five_hour',
+        labelKey: 'claude_quota.five_hour',
+        usedPercent: 20,
+        resetLabel: formatQuotaResetTime(sessionResetAt),
+      },
+      {
+        id: 'seven-day',
+        label: 'claude_quota.seven_day',
+        labelKey: 'claude_quota.seven_day',
+        usedPercent: 40,
+        resetLabel: formatQuotaResetTime(weeklyResetAt),
+      },
+    ];
+    expect(first.windows).toEqual(expectedWindows);
+    expect(reversed.windows).toEqual(expectedWindows);
+  });
+
+  it('orders base candidates by freshness, completeness, then kind precedence', async () => {
+    const currentSessionResetAt = '2026-07-02T10:00:00Z';
+    const weeklyResetAt = '2026-07-08T10:00:00Z';
+    mocks.request
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: {
+          limits: [
+            {
+              kind: 'session',
+              group: 'session',
+              percent: 90,
+              resets_at: '2026-07-01T10:00:00Z',
+              scope: null,
+              is_active: true,
+            },
+            {
+              kind: 'session',
+              group: 'session',
+              percent: null,
+              resets_at: currentSessionResetAt,
+              scope: null,
+              is_active: true,
+            },
+            {
+              kind: 'weekly_all',
+              group: 'weekly',
+              percent: null,
+              resets_at: weeklyResetAt,
+              scope: null,
+              is_active: true,
+            },
+            {
+              kind: 'weekly',
+              group: 'weekly',
+              percent: 30,
+              resets_at: weeklyResetAt,
+              scope: null,
+              is_active: true,
+            },
+          ],
+        },
+      })
+      .mockRejectedValueOnce(new Error('profile unavailable'));
+
+    const result = await fetchClaudeQuota(
+      { name: 'claude.json', type: 'claude', authIndex: 'claude-1' },
+      t
+    );
+
+    expect(result.windows).toEqual([
+      {
+        id: 'five-hour',
+        label: 'claude_quota.five_hour',
+        labelKey: 'claude_quota.five_hour',
+        usedPercent: null,
+        resetLabel: formatQuotaResetTime(currentSessionResetAt),
+      },
+      {
+        id: 'seven-day',
+        label: 'claude_quota.seven_day',
+        labelKey: 'claude_quota.seven_day',
+        usedPercent: 30,
+        resetLabel: formatQuotaResetTime(weeklyResetAt),
+      },
+    ]);
+  });
+
+  it('skips unsafe base fallback candidates without losing valid scoped limits', async () => {
+    const scopedResetAt = '2026-07-08T21:00:00+00:00';
+    mocks.request
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: {
+          limits: [
+            {
+              kind: 'session',
+              group: 'session',
+              percent: 10,
+              resets_at: '2026-07-01T10:00:00Z',
+              scope: { model: { display_name: 'Scoped session' } },
+            },
+            {
+              kind: 'session',
+              group: 'session',
+              percent: 20,
+              resets_at: '2026-07-01T10:00:00Z',
+              is_active: false,
+            },
+            {
+              kind: 'weekly_all',
+              group: 'weekly',
+              percent: null,
+              resets_at: 'not-a-date',
+              scope: null,
+            },
+            {
+              kind: 'monthly',
+              group: 'monthly',
+              percent: 30,
+              resets_at: '2026-08-01T10:00:00Z',
+              scope: null,
+            },
+            {
+              kind: 'weekly_scoped',
+              group: 'weekly',
+              percent: 42,
+              resets_at: scopedResetAt,
+              scope: { model: { display_name: 'Healthy scoped model' } },
+            },
+          ],
+        },
+      })
+      .mockRejectedValueOnce(new Error('profile unavailable'));
+
+    const result = await fetchClaudeQuota(
+      {
+        name: 'claude.json',
+        type: 'claude',
+        authIndex: 'claude-1',
+      },
+      t
+    );
+
+    expect(result.windows).toEqual([
+      {
+        id: 'weekly-scoped-healthy%20scoped%20model',
+        label: 'Healthy scoped model',
+        usedPercent: 42,
+        resetLabel: formatQuotaResetTime(scopedResetAt),
+      },
+    ]);
+  });
+
+  it('preserves over-limit scoped percentages for the renderer to clamp', async () => {
+    mocks.request
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: {
+          limits: [
+            {
+              kind: 'weekly_scoped',
+              group: 'weekly',
+              percent: 125,
+              scope: { model: { display_name: 'Over Limit' } },
+            },
+          ],
+        },
+      })
+      .mockRejectedValueOnce(new Error('profile unavailable'));
+
+    const result = await fetchClaudeQuota(
+      {
+        name: 'claude.json',
+        type: 'claude',
+        authIndex: 'claude-1',
+      },
+      t
+    );
+
+    expect(result.windows).toEqual([
+      {
+        id: 'weekly-scoped-over%20limit',
+        label: 'Over Limit',
+        usedPercent: 125,
+        resetLabel: '-',
+      },
+    ]);
+  });
+
+  it('keeps inactive scoped weekly limits visible and prefers an active duplicate', async () => {
+    const dormantResetAt = '2026-07-08T10:00:00Z';
+    const activeResetAt = '2026-07-10T10:00:00Z';
+    mocks.request
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: {
+          limits: [
+            {
+              kind: 'weekly_scoped',
+              group: 'weekly',
+              percent: 35,
+              resets_at: dormantResetAt,
+              scope: { model: { id: 'model-dormant', display_name: 'Dormant model' } },
+              is_active: false,
+            },
+            {
+              kind: 'weekly_scoped',
+              group: 'weekly',
+              percent: 95,
+              resets_at: activeResetAt,
+              scope: { model: { id: 'model-shared', display_name: 'Shared inactive' } },
+              is_active: false,
+            },
+            {
+              kind: 'weekly_scoped',
+              group: 'weekly',
+              percent: 20,
+              resets_at: activeResetAt,
+              scope: { model: { id: 'model-shared', display_name: 'Shared active' } },
+              is_active: true,
+            },
+            {
+              kind: 'weekly_scoped',
+              group: 'weekly',
+              percent: 95,
+              resets_at: '2026-07-10T12:00:00Z',
+              scope: { model: { id: 'model-unknown', display_name: 'Unknown inactive' } },
+              is_active: false,
+            },
+            {
+              kind: 'weekly_scoped',
+              group: 'weekly',
+              percent: 20,
+              resets_at: '2026-07-10T12:00:00Z',
+              scope: { model: { id: 'model-unknown', display_name: 'Unknown preferred' } },
+            },
+          ],
+        },
+      })
+      .mockRejectedValueOnce(new Error('profile unavailable'));
+
+    const result = await fetchClaudeQuota(
+      {
+        name: 'claude.json',
+        type: 'claude',
+        authIndex: 'claude-1',
+      },
+      t
+    );
+
+    expect(result.windows).toEqual([
+      {
+        id: 'weekly-scoped-id-model-dormant',
+        label: 'Dormant model',
+        usedPercent: 35,
+        resetLabel: formatQuotaResetTime(dormantResetAt),
+      },
+      {
+        id: 'weekly-scoped-id-model-shared',
+        label: 'Shared active',
+        usedPercent: 20,
+        resetLabel: formatQuotaResetTime(activeResetAt),
+      },
+      {
+        id: 'weekly-scoped-id-model-unknown',
+        label: 'Unknown preferred',
+        usedPercent: 20,
+        resetLabel: formatQuotaResetTime('2026-07-10T12:00:00Z'),
+      },
+    ]);
+  });
+
+  it('prefers the current reset period before activity and usage for scoped duplicates', async () => {
+    const percentResetAt = '2026-07-09T10:00:00Z';
+    const newerResetAt = '2026-07-10T10:00:00Z';
+    mocks.request
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: {
+          limits: [
+            {
+              kind: 'weekly_scoped',
+              group: 'weekly',
+              percent: 10,
+              resets_at: percentResetAt,
+              scope: { model: { id: 'model-percent', display_name: 'Old percent' } },
+              is_active: false,
+            },
+            {
+              kind: 'weekly_scoped',
+              group: 'weekly',
+              percent: 80,
+              resets_at: percentResetAt,
+              scope: { model: { id: 'model-percent', display_name: 'Fresh percent' } },
+              is_active: false,
+            },
+            {
+              kind: 'weekly_scoped',
+              group: 'weekly',
+              percent: 50,
+              resets_at: '2026-07-08T12:00:00Z',
+              scope: { model: { id: 'model-reset', display_name: 'Old reset' } },
+              is_active: true,
+            },
+            {
+              kind: 'weekly_scoped',
+              group: 'weekly',
+              percent: 50,
+              resets_at: newerResetAt,
+              scope: { model: { id: 'model-reset', display_name: 'Fresh reset' } },
+              is_active: true,
+            },
+            {
+              kind: 'weekly_scoped',
+              group: 'weekly',
+              percent: 90,
+              resets_at: '2026-07-08T14:00:00Z',
+              scope: { model: { id: 'model-conservative', display_name: 'Higher usage' } },
+              is_active: true,
+            },
+            {
+              kind: 'weekly_scoped',
+              group: 'weekly',
+              percent: 20,
+              resets_at: '2026-07-11T14:00:00Z',
+              scope: { model: { id: 'model-conservative', display_name: 'Later reset' } },
+              is_active: false,
+            },
+          ],
+        },
+      })
+      .mockRejectedValueOnce(new Error('profile unavailable'));
+
+    const result = await fetchClaudeQuota(
+      {
+        name: 'claude.json',
+        type: 'claude',
+        authIndex: 'claude-1',
+      },
+      t
+    );
+
+    expect(result.windows).toEqual([
+      {
+        id: 'weekly-scoped-id-model-percent',
+        label: 'Fresh percent',
+        usedPercent: 80,
+        resetLabel: formatQuotaResetTime(percentResetAt),
+      },
+      {
+        id: 'weekly-scoped-id-model-reset',
+        label: 'Fresh reset',
+        usedPercent: 50,
+        resetLabel: formatQuotaResetTime(newerResetAt),
+      },
+      {
+        id: 'weekly-scoped-id-model-conservative',
+        label: 'Later reset',
+        usedPercent: 20,
+        resetLabel: formatQuotaResetTime('2026-07-11T14:00:00Z'),
+      },
+    ]);
+  });
+
+  it('prefers an active percent-only scoped candidate over an inactive reset-only candidate in both orders', async () => {
+    const resetAt = '2026-07-10T10:00:00Z';
+    const activePercentOnly = {
+      kind: 'weekly_scoped',
+      group: 'weekly',
+      percent: 35,
+      scope: { model: { id: 'model-partial', display_name: 'Active partial' } },
+      is_active: true,
+    };
+    const inactiveResetOnly = {
+      kind: 'weekly_scoped',
+      group: 'weekly',
+      percent: null,
+      resets_at: resetAt,
+      scope: { model: { id: 'model-partial', display_name: 'Inactive partial' } },
+      is_active: false,
+    };
+
+    mocks.request
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: { limits: [activePercentOnly, inactiveResetOnly] },
+      })
+      .mockRejectedValueOnce(new Error('profile unavailable'))
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: { limits: [inactiveResetOnly, activePercentOnly] },
+      })
+      .mockRejectedValueOnce(new Error('profile unavailable'));
+
+    const first = await fetchClaudeQuota(
+      { name: 'claude-a.json', type: 'claude', authIndex: 'claude-a' },
+      t
+    );
+    const reversed = await fetchClaudeQuota(
+      { name: 'claude-b.json', type: 'claude', authIndex: 'claude-b' },
+      t
+    );
+
+    const expected = [
+      {
+        id: 'weekly-scoped-id-model-partial',
+        label: 'Active partial',
+        usedPercent: 35,
+        resetLabel: '-',
+      },
+    ];
+    expect(first.windows).toEqual(expected);
+    expect(reversed.windows).toEqual(expected);
+  });
+
+  it('ignores unscoped duplicates, unrelated kinds, and malformed scoped limits', async () => {
+    mocks.request
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: {
+          five_hour: {
+            utilization: 12,
+            resets_at: '2026-07-01T10:00:00Z',
+          },
+          seven_day: {
+            utilization: 34,
+            resets_at: '2026-07-07T10:00:00Z',
+          },
+          limits: [
+            {
+              kind: 'session',
+              group: 'session',
+              percent: 12,
+              resets_at: '2026-07-01T10:00:00Z',
+              scope: null,
+            },
+            {
+              kind: 'weekly',
+              group: 'weekly',
+              percent: 34,
+              resets_at: '2026-07-07T10:00:00Z',
+              scope: null,
+            },
+            {
+              kind: 'weekly_all',
+              group: 'weekly',
+              percent: 35,
+              resets_at: '2026-07-08T10:00:00Z',
+              scope: null,
+            },
+            {
+              kind: 'weekly_scoped',
+              group: 'weekly',
+              percent: 50,
+              resets_at: '2026-07-08T10:00:00Z',
+              scope: { model: { display_name: '   ' } },
+            },
+            {
+              kind: 'monthly_scoped',
+              group: 'monthly',
+              percent: 50,
+              resets_at: '2026-08-01T10:00:00Z',
+              scope: { model: { display_name: 'Unrelated' } },
+            },
+            {
+              kind: 'weekly_scoped',
+              group: 'weekly',
+              percent: null,
+              resets_at: 'not-a-date',
+              scope: { model: { display_name: 'Broken' } },
+            },
+            {
+              kind: 'weekly_scoped',
+              group: 'weekly',
+              percent: 25,
+              resets_at: '2026-07-08T10:00:00Z',
+              scope: { model: { display_name: 123 } },
+            },
+            {
+              kind: 'weekly_scoped',
+              group: 'weekly',
+              percent: null,
+              resets_at: 'not-a-date',
+              scope: { model: { display_name: 'Inactive' } },
+              is_active: false,
+            },
+            {
+              kind: 'weekly_scoped',
+              group: 'weekly',
+              percent: 25,
+              resets_at: '2026-07-08T10:00:00Z',
+              scope: null,
+            },
+            {
+              kind: 'weekly_scoped',
+              group: 'weekly',
+              percent: 25,
+              resets_at: '2026-07-08T10:00:00Z',
+              scope: 'invalid',
+            },
+            {
+              kind: 'weekly_scoped',
+              group: 'weekly',
+              percent: 25,
+              resets_at: '2026-07-08T10:00:00Z',
+              scope: { model: null },
+            },
+            null,
+          ],
+        },
+      })
+      .mockRejectedValueOnce(new Error('profile unavailable'));
+
+    const result = await fetchClaudeQuota(
+      {
+        name: 'claude.json',
+        type: 'claude',
+        authIndex: 'claude-1',
+      },
+      t
+    );
+
+    expect(result.windows.map((window) => window.id)).toEqual(['five-hour', 'seven-day']);
+  });
+
+  it('sorts and deduplicates multiple model-scoped weekly limits', async () => {
+    mocks.request
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: {
+          five_hour: {
+            utilization: 10,
+            resets_at: '2026-07-01T10:00:00Z',
+          },
+          seven_day: {
+            utilization: 20,
+            resets_at: '2026-07-07T10:00:00Z',
+          },
+          seven_day_oauth_apps: {
+            utilization: 30,
+            resets_at: '2026-07-07T11:00:00Z',
+          },
+          limits: [
+            {
+              kind: 'modelScoped',
+              group: 'weekly',
+              percent: 70,
+              resetsAt: '2026-07-10T10:00:00Z',
+              scope: { model: { id: 'model-z', displayName: 'Zulu' } },
+            },
+            {
+              kind: 'weekly-scoped',
+              group: 'weekly',
+              percent: 40,
+              resets_at: '2026-07-08T10:00:00Z',
+              scope: { model: { id: 'model-a1', details: { display_name: 'Alpha' } } },
+            },
+            {
+              kind: 'weekly_scoped',
+              group: 'weekly',
+              percent: 50,
+              resets_at: '2026-07-09T10:00:00Z',
+              scope: { model: { id: 'model-a2', display_name: 'Alpha' } },
+            },
+            {
+              kind: 'weekly_scoped',
+              group: 'weekly',
+              percent: 90,
+              resets_at: '2026-07-11T10:00:00Z',
+              scope: { model: { id: 'model-z', display_name: 'Zulu renamed' } },
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: {},
+      });
+
+    const result = await fetchClaudeQuota(
+      {
+        name: 'claude.json',
+        type: 'claude',
+        authIndex: 'claude-1',
+      },
+      t
+    );
+
+    expect(result.windows.map((window) => [window.id, window.label, window.usedPercent])).toEqual([
+      ['five-hour', 'claude_quota.five_hour', 10],
+      ['seven-day', 'claude_quota.seven_day', 20],
+      ['weekly-scoped-id-model-a1', 'Alpha (model-a1)', 40],
+      ['weekly-scoped-id-model-a2', 'Alpha (model-a2)', 50],
+      ['weekly-scoped-id-model-z', 'Zulu renamed', 90],
+      ['seven-day-oauth-apps', 'claude_quota.seven_day_oauth_apps', 30],
+    ]);
+  });
+
+  it('deduplicates the same scoped model with and without an id in both orders', async () => {
+    const resetAt = '2026-07-10T10:00:00Z';
+    const withId = {
+      kind: 'weekly_scoped',
+      group: 'weekly',
+      percent: 40,
+      resets_at: resetAt,
+      scope: { model: { id: 'model-shared', display_name: 'Shared Model' } },
+      is_active: true,
+    };
+    const withoutId = {
+      kind: 'weekly_scoped',
+      group: 'weekly',
+      percent: 40,
+      resets_at: resetAt,
+      scope: { model: { id: null, display_name: 'Shared Model' } },
+      is_active: true,
+    };
+
+    mocks.request
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: { limits: [withoutId, withId] },
+      })
+      .mockRejectedValueOnce(new Error('profile unavailable'))
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: { limits: [withId, withoutId] },
+      })
+      .mockRejectedValueOnce(new Error('profile unavailable'));
+
+    const withoutIdFirst = await fetchClaudeQuota(
+      { name: 'claude-a.json', type: 'claude', authIndex: 'claude-a' },
+      t
+    );
+    const withIdFirst = await fetchClaudeQuota(
+      { name: 'claude-b.json', type: 'claude', authIndex: 'claude-b' },
+      t
+    );
+
+    const expectedWindows = [
+      {
+        id: 'weekly-scoped-id-model-shared',
+        label: 'Shared Model',
+        usedPercent: 40,
+        resetLabel: formatQuotaResetTime(resetAt),
+      },
+    ];
+    expect(withoutIdFirst.windows).toEqual(expectedWindows);
+    expect(withIdFirst.windows).toEqual(expectedWindows);
+  });
+
+  it('preserves non-equivalent label-only scoped data instead of dropping it', async () => {
+    const resetAt = '2026-07-10T10:00:00Z';
+    mocks.request
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: {
+          limits: [
+            {
+              kind: 'weekly_scoped',
+              group: 'weekly',
+              percent: 40,
+              resets_at: resetAt,
+              scope: { model: { id: 'model-shared', display_name: 'Shared Model' } },
+            },
+            {
+              kind: 'weekly_scoped',
+              group: 'weekly',
+              percent: 20,
+              resets_at: resetAt,
+              scope: { model: { display_name: 'Shared Model' } },
+            },
+          ],
+        },
+      })
+      .mockRejectedValueOnce(new Error('profile unavailable'));
+
+    const result = await fetchClaudeQuota(
+      { name: 'claude-1.json', type: 'claude', authIndex: 'claude-1' },
+      t
+    );
+
+    expect(result.windows.map((window) => [window.id, window.label, window.usedPercent])).toEqual([
+      ['weekly-scoped-id-model-shared', 'Shared Model (model-shared)', 40],
+      ['weekly-scoped-shared%20model', 'Shared Model', 20],
+    ]);
+  });
+
+  it('ignores unrelated nested display names but accepts model details display names', async () => {
+    mocks.request
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: {
+          limits: [
+            {
+              kind: 'weekly_scoped',
+              group: 'weekly',
+              percent: 10,
+              scope: { model: { metadata: { display_name: 'Ignored' } } },
+            },
+            {
+              kind: 'weekly_scoped',
+              group: 'weekly',
+              percent: 20,
+              scope: { model: { details: { display_name: 'Details model' } } },
+            },
+          ],
+        },
+      })
+      .mockRejectedValueOnce(new Error('profile unavailable'));
+
+    const result = await fetchClaudeQuota(
+      { name: 'claude-1.json', type: 'claude', authIndex: 'claude-1' },
+      t
+    );
+
+    expect(result.windows.map((window) => window.label)).toEqual(['Details model']);
+  });
+
+  it('keeps a label-only scoped entry separate when the label maps to multiple ids', async () => {
+    const resetAt = '2026-07-10T10:00:00Z';
+    mocks.request
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: {
+          limits: [
+            {
+              kind: 'weekly_scoped',
+              group: 'weekly',
+              percent: 40,
+              resets_at: resetAt,
+              scope: { model: { id: 'model-a', display_name: 'Shared Model' } },
+            },
+            {
+              kind: 'weekly_scoped',
+              group: 'weekly',
+              percent: 50,
+              resets_at: resetAt,
+              scope: { model: { id: 'model-b', display_name: 'Shared Model' } },
+            },
+            {
+              kind: 'weekly_scoped',
+              group: 'weekly',
+              percent: 60,
+              resets_at: '2026-07-11T10:00:00Z',
+              scope: { model: { id: null, display_name: 'Shared Model' } },
+            },
+          ],
+        },
+      })
+      .mockRejectedValueOnce(new Error('profile unavailable'));
+
+    const result = await fetchClaudeQuota(
+      { name: 'claude.json', type: 'claude', authIndex: 'claude-1' },
+      t
+    );
+
+    expect(result.windows.map((window) => [window.id, window.usedPercent])).toEqual([
+      ['weekly-scoped-id-model-a', 40],
+      ['weekly-scoped-id-model-b', 50],
+      ['weekly-scoped-shared%20model', 60],
+    ]);
+  });
+
+  it('isolates malformed Unicode labels instead of failing the whole refresh', async () => {
+    mocks.request
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: {
+          five_hour: {
+            utilization: 10,
+            resets_at: '2026-07-01T10:00:00Z',
+          },
+          limits: [
+            {
+              kind: 'weekly_scoped',
+              group: 'weekly',
+              percent: 25,
+              resets_at: '2026-07-08T10:00:00Z',
+              scope: { model: { display_name: '\ud800' } },
+            },
+            {
+              kind: 'weekly_scoped',
+              group: 'weekly',
+              percent: 50,
+              resets_at: '2026-07-09T10:00:00Z',
+              scope: { model: { display_name: 'Healthy' } },
+            },
+          ],
+        },
+      })
+      .mockRejectedValueOnce(new Error('profile unavailable'));
+
+    const result = await fetchClaudeQuota(
+      {
+        name: 'claude.json',
+        type: 'claude',
+        authIndex: 'claude-1',
+      },
+      t
+    );
+
+    expect(result.windows.map((window) => window.id)).toEqual([
+      'five-hour',
+      'weekly-scoped-healthy',
+      'weekly-scoped-utf16-d800',
+    ]);
+  });
+
+  it('preserves legacy Claude window output when limits are absent', async () => {
+    mocks.request
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: {
+          five_hour: {
+            utilization: 12,
+            resets_at: '2026-07-01T10:00:00Z',
+          },
+          seven_day: {
+            utilization: 34,
+            resets_at: '2026-07-07T10:00:00Z',
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: {},
+      });
+
+    const result = await fetchClaudeQuota(
+      {
+        name: 'claude.json',
+        type: 'claude',
+        authIndex: 'claude-1',
+      },
+      t
+    );
+
+    expect(result.windows.map((window) => window.id)).toEqual(['five-hour', 'seven-day']);
+    expect(result.windows.every((window) => window.labelKey)).toBe(true);
+  });
+
+  it('keeps usage quota data when profile lookup fails', async () => {
+    const scopedResetAt = '2026-07-08T21:00:00+00:00';
+    mocks.request
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: {
+          five_hour: {
+            utilization: 12,
+            resets_at: '2026-07-01T10:00:00Z',
+          },
+          limits: [
+            {
+              kind: 'weekly_scoped',
+              group: 'weekly',
+              percent: 100,
+              resets_at: scopedResetAt,
+              scope: { model: { display_name: 'Fable 5 Max' } },
+            },
+          ],
         },
       })
       .mockRejectedValueOnce(new Error('profile unavailable'));
@@ -223,10 +1497,16 @@ describe('fetchClaudeQuota', () => {
     );
 
     expect(result.planType).toBeNull();
-    expect(result.windows).toHaveLength(1);
+    expect(result.windows).toHaveLength(2);
     expect(result.windows[0]).toMatchObject({
       id: 'five-hour',
       usedPercent: 12,
+    });
+    expect(result.windows[1]).toEqual({
+      id: 'weekly-scoped-fable%205%20max',
+      label: 'Fable 5 Max',
+      usedPercent: 100,
+      resetLabel: formatQuotaResetTime(scopedResetAt),
     });
   });
 });

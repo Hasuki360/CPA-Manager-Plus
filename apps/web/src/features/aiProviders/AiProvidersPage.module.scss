@@ -1140,11 +1140,22 @@
 }
 
 .keyStatusTooltip {
-  bottom: calc(100% + 10px);
+  position: fixed;
+  transform: translateX(-50%);
   width: max-content;
-  max-width: min(280px, 42vw);
+  padding: 8px 10px;
+  overflow-y: auto;
+  background: var(--bg-primary, #fff);
+  border: 1px solid var(--border-subtle, #d8e5f2);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+  color: var(--text-primary);
+  font-size: 11px;
+  line-height: 1.5;
+  pointer-events: none;
   white-space: normal;
   text-align: left;
+  z-index: $z-dropdown;
 }
 
 .keyStatusTooltipText {
@@ -1251,5 +1262,4 @@
     background: rgba($error-color, 0.24);
     color: #f1b0a6;
   }
-
 }

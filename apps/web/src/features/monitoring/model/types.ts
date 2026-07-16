@@ -273,6 +273,7 @@ export type MonitoringApiKeyRow = {
   apiKeyHash: string;
   apiKeyLabel: string;
   apiKeyMasked: string;
+  apiKeyCopyValue?: string;
   isUnknown: boolean;
   authLabels: string[];
   sourceLabels: string[];

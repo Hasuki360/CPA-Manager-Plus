@@ -224,7 +224,12 @@ describe('analytics aggregate row adapters', () => {
       authFileMap,
       sourceInfoMap,
       channelByAuthIndex,
-      new Map([['client-key-hash', { label: 'Team Key', masked: 'sk********ey' }]])
+      new Map([
+        [
+          'client-key-hash',
+          { label: 'Team Key', masked: 'sk********ey', copyValue: 'sk-client-key-original' },
+        ],
+      ])
     );
 
     expect(rows).toHaveLength(1);
@@ -232,6 +237,7 @@ describe('analytics aggregate row adapters', () => {
       apiKeyHash: 'client-key-hash',
       apiKeyLabel: 'Team Key',
       apiKeyMasked: 'sk********ey',
+      apiKeyCopyValue: 'sk-client-key-original',
       totalCalls: 3,
       failureCalls: 1,
       totalTokens: 43,
@@ -285,6 +291,7 @@ describe('buildApiKeyDisplayMap', () => {
 
     expect(map.get(apiKeyHash)?.label).toBe('Team A');
     expect(map.get(apiKeyHash)?.masked).toMatch(/^sk/);
+    expect(map.get(apiKeyHash)?.copyValue).toBe(apiKey);
   });
 
   it('masks key-like aliases before display', () => {
@@ -303,32 +310,38 @@ describe('buildApiKeyDisplayMap', () => {
 
 describe('buildApiKeyRows', () => {
   it('groups usage by client api key and aggregates model spend', () => {
-    const rows = buildApiKeyRows([
-      createMonitoringEventRow({
-        id: 'row-1',
-        apiKeyHash: 'hash-a',
-        apiKeyLabel: 'Team A',
-        apiKeyMasked: 'sk********aa',
-        model: 'gpt-4.1',
-        totalTokens: 18,
-        totalCost: 0.12,
-      }),
-      createMonitoringEventRow({
-        id: 'row-2',
-        apiKeyHash: 'hash-a',
-        apiKeyLabel: 'Team A',
-        apiKeyMasked: 'sk********aa',
-        model: 'gpt-4.1',
-        failed: true,
-        totalTokens: 7,
-        totalCost: 0.03,
-      }),
-    ]);
+    const rows = buildApiKeyRows(
+      [
+        createMonitoringEventRow({
+          id: 'row-1',
+          apiKeyHash: 'hash-a',
+          apiKeyLabel: 'Team A',
+          apiKeyMasked: 'sk********aa',
+          model: 'gpt-4.1',
+          totalTokens: 18,
+          totalCost: 0.12,
+        }),
+        createMonitoringEventRow({
+          id: 'row-2',
+          apiKeyHash: 'hash-a',
+          apiKeyLabel: 'Team A',
+          apiKeyMasked: 'sk********aa',
+          model: 'gpt-4.1',
+          failed: true,
+          totalTokens: 7,
+          totalCost: 0.03,
+        }),
+      ],
+      new Map([
+        ['hash-a', { label: 'Team A', masked: 'sk********aa', copyValue: 'sk-original-aa' }],
+      ])
+    );
 
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
       apiKeyHash: 'hash-a',
       apiKeyLabel: 'Team A',
+      apiKeyCopyValue: 'sk-original-aa',
       totalCalls: 2,
       successCalls: 1,
       failureCalls: 1,

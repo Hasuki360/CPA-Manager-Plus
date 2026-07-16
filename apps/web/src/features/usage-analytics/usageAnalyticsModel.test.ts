@@ -709,7 +709,14 @@ describe('usage analytics adapters', () => {
 
   it('resolves API key aliases by hash across analytics views', () => {
     const displayMap = new Map([
-      ['abcdef1234567890', { label: 'Team Alpha Key', masked: 'sk-****7890' }],
+      [
+        'abcdef1234567890',
+        {
+          label: 'Team Alpha Key',
+          masked: 'sk-****7890',
+          copyValue: 'sk-team-alpha-original',
+        },
+      ],
     ]);
     const apiKeyRows = buildApiKeyRows(
       [
@@ -757,6 +764,7 @@ describe('usage analytics adapters', () => {
     expect(apiKeyRows[0]).toMatchObject({
       apiKeyHash: 'abcdef1234567890',
       label: 'Team Alpha Key',
+      apiKeyCopyValue: 'sk-team-alpha-original',
     });
     expect(
       buildUsageMatrix({
