@@ -30,7 +30,8 @@ import {
   IconTrendingUp,
   IconX,
 } from '@/components/ui/icons';
-import { useThemeStore } from '@/stores';
+import { useNotificationStore, useThemeStore } from '@/stores';
+import { copyToClipboard } from '@/utils/clipboard';
 import {
   buildUsageHeatmapChartData,
   buildModelKeyDistribution,
@@ -2300,6 +2301,7 @@ function UsageAnalyticsPageInner() {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
   const usage = useUsageAnalytics();
+  const showNotification = useNotificationStore((state) => state.showNotification);
   const chartTheme = useUsageChartTheme();
   const themedUsageMetrics = useMemo(() => getThemedUsageMetrics(chartTheme), [chartTheme]);
   const [selectedMetrics, setSelectedMetrics] =
@@ -2395,6 +2397,16 @@ function UsageAnalyticsPageInner() {
     rememberVisibleOptions();
     usage.setFilters(patch);
   };
+  const handleCopyApiKey = useCallback(
+    async (copyValue: string) => {
+      const copied = await copyToClipboard(copyValue);
+      showNotification(
+        t(copied ? 'notification.link_copied' : 'notification.copy_failed'),
+        copied ? 'success' : 'error'
+      );
+    },
+    [showNotification, t]
+  );
   const buildApiKeyMonitoringUrl = (apiKeyHash: string, status?: UsageAnalyticsStatus) =>
     usage.bounds
       ? buildMonitoringDetailUrl(
@@ -3190,6 +3202,9 @@ function UsageAnalyticsPageInner() {
                 type="apiKey"
                 selectedId={usage.selectedApiKey?.apiKeyHash}
                 onSelect={(row) => usage.setSelectedApiKeyHash(row.apiKeyHash || row.id)}
+                onCopyApiKey={(row) => {
+                  if (row.apiKeyCopyValue) void handleCopyApiKey(row.apiKeyCopyValue);
+                }}
               />
             </div>
             <div className={styles.panel}>
@@ -3638,11 +3653,13 @@ function RankTable({
   type,
   selectedId,
   onSelect,
+  onCopyApiKey,
 }: {
   rows: UsageRankRow[];
   type: 'model' | 'apiKey' | 'credential';
   selectedId?: string;
   onSelect: (row: UsageRankRow) => void;
+  onCopyApiKey?: (row: UsageRankRow) => void;
 }) {
   const { t } = useTranslation();
   const entityHeader =
@@ -3701,7 +3718,20 @@ function RankTable({
                       <IconModelCluster size={16} />
                     )}
                     {type === 'apiKey' ? getApiKeyRowDisplayLabel(row) : row.label}
-                    {type === 'apiKey' ? <IconCopy size={13} /> : null}
+                    {type === 'apiKey' && row.apiKeyCopyValue && onCopyApiKey ? (
+                      <button
+                        type="button"
+                        className={styles.entityCopyButton}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onCopyApiKey(row);
+                        }}
+                        title={t('common.copy')}
+                        aria-label={t('common.copy')}
+                      >
+                        <IconCopy size={13} />
+                      </button>
+                    ) : null}
                   </span>
                 </td>
                 <td>{compactNumber(row.requestCount)}</td>

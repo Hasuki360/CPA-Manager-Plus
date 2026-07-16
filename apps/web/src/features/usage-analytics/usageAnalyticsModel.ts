@@ -159,6 +159,7 @@ export type UsageRankRow = {
   label: string;
   model?: string;
   apiKeyHash?: string;
+  apiKeyCopyValue?: string;
   provider?: string;
   authFile?: string;
   authIndex?: string;
@@ -1411,6 +1412,7 @@ export const buildApiKeyRows = (
         id: hash || row.id || '-',
         label: resolveUsageApiKeyLabel(hash, apiKeyDisplayMap),
         apiKeyHash: hash,
+        apiKeyCopyValue: apiKeyDisplayMap?.get(hash)?.copyValue,
         provider: row.auth_provider_snapshot,
         authIndex: row.auth_indices?.[0],
         source: row.sources?.[0],

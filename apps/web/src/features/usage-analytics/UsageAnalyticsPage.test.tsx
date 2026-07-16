@@ -14,6 +14,7 @@ import { UsageAnalyticsPage } from './UsageAnalyticsPage';
 const { mocks } = vi.hoisted(() => ({
   mocks: {
     navigate: vi.fn(),
+    copyToClipboard: vi.fn(async () => true),
     usageState: null as unknown,
   },
 }));
@@ -38,6 +39,10 @@ vi.mock('react-i18next', () => ({
 
 vi.mock('./useUsageAnalytics', () => ({
   useUsageAnalytics: () => mocks.usageState,
+}));
+
+vi.mock('@/utils/clipboard', () => ({
+  copyToClipboard: mocks.copyToClipboard,
 }));
 
 const getText = (node: ReactTestInstance): string =>
@@ -122,6 +127,7 @@ const createUsageState = (overrides: Record<string, unknown> = {}) => {
     id: 'abcdef1234567890',
     label: 'sk-****7890',
     apiKeyHash: 'abcdef1234567890',
+    apiKeyCopyValue: 'sk-client-key-original',
     model: undefined,
     provider: 'codex',
     account: 'team-alpha',
@@ -485,6 +491,8 @@ const createUsageState = (overrides: Record<string, unknown> = {}) => {
 
 beforeEach(() => {
   mocks.navigate.mockReset();
+  mocks.copyToClipboard.mockReset();
+  mocks.copyToClipboard.mockResolvedValue(true);
   mocks.usageState = createUsageState();
 });
 
@@ -701,6 +709,26 @@ describe('UsageAnalyticsPage', () => {
     expect(text).toContain('sk-****7890');
     expect(text).not.toContain('abcdef1234567890');
     expect(text).not.toContain('usage_analytics.trend_pending_data');
+  });
+
+  it('copies the original API key without selecting the row', async () => {
+    const usageState = createUsageState({ activeTab: 'apiKeys' });
+    mocks.usageState = usageState;
+    const renderer = renderPage();
+    const copyButton = renderer.root
+      .findAllByType('button')
+      .find((node) => node.props['aria-label'] === 'common.copy');
+    if (!copyButton) throw new Error('API key copy button not found');
+    const event = { stopPropagation: vi.fn() };
+
+    act(() => {
+      copyButton.props.onClick(event);
+    });
+    await act(async () => Promise.resolve());
+
+    expect(event.stopPropagation).toHaveBeenCalledTimes(1);
+    expect(mocks.copyToClipboard).toHaveBeenCalledWith('sk-client-key-original');
+    expect(usageState.setSelectedApiKeyHash).not.toHaveBeenCalled();
   });
 
   it('renders the API Key tab with key-dimension cards, unit-economics columns, and anomaly drilldown', () => {
