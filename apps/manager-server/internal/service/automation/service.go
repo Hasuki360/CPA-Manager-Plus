@@ -45,6 +45,7 @@ type Status struct {
 	CharityModelMonitorIntervalMinutes int                               `json:"charityModelMonitorIntervalMinutes"`
 	CharityModelMonitorSites           []store.CharityModelMonitorSite    `json:"charityModelMonitorSites"`
 	CharityModelMonitorState           *store.CharityModelMonitorState    `json:"charityModelMonitorState,omitempty"`
+	HTTP500Cooldown                   Capability                        `json:"http500Cooldown"`
 	HTTP500CooldownWindowMinutes       int                               `json:"http500CooldownWindowMinutes"`
 	HTTP500CooldownThreshold           int                               `json:"http500CooldownThreshold"`
 	HTTP500CooldownDurationMinutes     int                               `json:"http500CooldownDurationMinutes"`
@@ -58,6 +59,7 @@ type UpdateRequest struct {
 	CharityModelMonitorEnabled         *bool                         `json:"charityModelMonitorEnabled,omitempty"`
 	CharityModelMonitorIntervalMinutes *int                          `json:"charityModelMonitorIntervalMinutes,omitempty"`
 	CharityModelMonitorSites           []store.CharityModelMonitorSite `json:"charityModelMonitorSites,omitempty"`
+	HTTP500CooldownEnabled             *bool                         `json:"http500CooldownEnabled,omitempty"`
 	HTTP500CooldownWindowMinutes       *int                          `json:"http500CooldownWindowMinutes,omitempty"`
 	HTTP500CooldownThreshold        *int  `json:"http500CooldownThreshold,omitempty"`
 	HTTP500CooldownDurationMinutes  *int  `json:"http500CooldownDurationMinutes,omitempty"`
@@ -155,6 +157,9 @@ func (s *Service) Update(ctx context.Context, req UpdateRequest) (Status, error)
 	if req.CharityModelMonitorSites != nil {
 		current.CharityModelMonitorSites = store.NormalizeCharityModelMonitorSites(req.CharityModelMonitorSites)
 	}
+	if req.HTTP500CooldownEnabled != nil {
+		current.HTTP500CooldownEnabled = boolPtr(*req.HTTP500CooldownEnabled)
+	}
 	if req.HTTP500CooldownWindowMinutes != nil {
 		current.HTTP500CooldownWindowMinutes = intPtr(store.NormalizeHTTP500CooldownWindowMinutes(*req.HTTP500CooldownWindowMinutes))
 	}
@@ -210,6 +215,7 @@ type RuntimeSettings struct {
 	CharityModelMonitorEnabled        bool
 	CharityModelMonitorIntervalMinutes int
 	CharityModelMonitorSites          []store.CharityModelMonitorSite
+	HTTP500CooldownEnabled            bool
 	HTTP500CooldownWindowMinutes      int
 	HTTP500CooldownThreshold          int
 	HTTP500CooldownDurationMinutes    int
@@ -313,6 +319,13 @@ func (s *Service) statusFromSettings(settings store.AutomationSettings) Status {
 			EnvKey:        "USAGE_CHARITY_MODEL_MONITOR_ENABLED",
 			ConfigFileKey: "charityModelMonitorEnabled",
 		},
+		HTTP500Cooldown: Capability{
+			Configured:    settings.HTTP500CooldownEnabled != nil,
+			Enabled:       http500EnabledFromSettings(settings),
+			Locked:        false,
+			Source:        http500EnabledSource(settings),
+			ConfigFileKey: "http500CooldownEnabled",
+		},
 	}
 }
 
@@ -326,6 +339,7 @@ func (s *Service) runtimeFromSettings(settings store.AutomationSettings) Runtime
 		CharityModelMonitorEnabled:        r.charityValue,
 		CharityModelMonitorIntervalMinutes: charityIntervalFromSettings(settings),
 		CharityModelMonitorSites:          store.NormalizeCharityModelMonitorSites(settings.CharityModelMonitorSites),
+		HTTP500CooldownEnabled:            http500EnabledFromSettings(settings),
 		HTTP500CooldownWindowMinutes:      http500WindowFromSettings(settings),
 		HTTP500CooldownThreshold:          http500ThresholdFromSettings(settings),
 		HTTP500CooldownDurationMinutes:    http500DurationFromSettings(settings),
@@ -396,4 +410,20 @@ func http500DurationFromSettings(settings store.AutomationSettings) int {
 		return store.NormalizeHTTP500CooldownDurationMinutes(0)
 	}
 	return store.NormalizeHTTP500CooldownDurationMinutes(*settings.HTTP500CooldownDurationMinutes)
+}
+
+// http500EnabledFromSettings defaults to true when unset, so existing deployments
+// keep the previous always-on behavior until an admin explicitly turns it off.
+func http500EnabledFromSettings(settings store.AutomationSettings) bool {
+	if settings.HTTP500CooldownEnabled == nil {
+		return true
+	}
+	return *settings.HTTP500CooldownEnabled
+}
+
+func http500EnabledSource(settings store.AutomationSettings) string {
+	if settings.HTTP500CooldownEnabled == nil {
+		return SourceStartup
+	}
+	return SourceDB
 }

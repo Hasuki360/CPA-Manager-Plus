@@ -149,6 +149,7 @@ func (h *automationUsageHandler) HandleUsageEvents(ctx context.Context, cfg coll
 }
 
 func runtimeConfigWithHTTP500Settings(cfg collectorpkg.RuntimeConfig, settings automationsvc.RuntimeSettings) collectorpkg.RuntimeConfig {
+	cfg.HTTP500CooldownEnabled = settings.HTTP500CooldownEnabled
 	cfg.HTTP500CooldownWindowMinutes = settings.HTTP500CooldownWindowMinutes
 	cfg.HTTP500CooldownThreshold = settings.HTTP500CooldownThreshold
 	cfg.HTTP500CooldownDurationMinutes = settings.HTTP500CooldownDurationMinutes
@@ -156,13 +157,15 @@ func runtimeConfigWithHTTP500Settings(cfg collectorpkg.RuntimeConfig, settings a
 }
 
 func filterQuotaCooldownEvents(events []usage.Event, settings automationsvc.RuntimeSettings) []usage.Event {
-	if len(events) == 0 || (!settings.QuotaCooldownEnabled && !settings.AntigravityQuotaCooldownEnabled) {
+	if len(events) == 0 || (!settings.QuotaCooldownEnabled && !settings.AntigravityQuotaCooldownEnabled && !settings.HTTP500CooldownEnabled) {
 		return nil
 	}
 	filtered := make([]usage.Event, 0, len(events))
 	for _, event := range events {
 		if event.Failed && event.FailStatusCode == http.StatusInternalServerError {
-			filtered = append(filtered, event)
+			if settings.HTTP500CooldownEnabled {
+				filtered = append(filtered, event)
+			}
 			continue
 		}
 		switch normalizedQuotaProvider(event) {

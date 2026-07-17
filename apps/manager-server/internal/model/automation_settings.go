@@ -28,6 +28,9 @@ type AutomationSettings struct {
 	CharityModelMonitorEnabled           *bool                     `json:"charityModelMonitorEnabled,omitempty"`
 	CharityModelMonitorIntervalMinutes   *int                      `json:"charityModelMonitorIntervalMinutes,omitempty"`
 	CharityModelMonitorSites             []CharityModelMonitorSite `json:"charityModelMonitorSites,omitempty"`
+	// HTTP500CooldownEnabled is independent of Codex/Antigravity quota cooldown.
+	// nil means "not configured" and defaults to true for backward compatibility.
+	HTTP500CooldownEnabled               *bool                     `json:"http500CooldownEnabled,omitempty"`
 	HTTP500CooldownWindowMinutes         *int                      `json:"http500CooldownWindowMinutes,omitempty"`
 	HTTP500CooldownThreshold             *int                      `json:"http500CooldownThreshold,omitempty"`
 	HTTP500CooldownDurationMinutes       *int                      `json:"http500CooldownDurationMinutes,omitempty"`

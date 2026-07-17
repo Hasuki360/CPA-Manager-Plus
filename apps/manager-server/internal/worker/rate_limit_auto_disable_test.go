@@ -965,6 +965,35 @@ func TestHTTP500AIProviderChannelClosesAndRecovers(t *testing.T) {
 	}
 }
 
+func TestHTTP500DisabledSkipsCandidate(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	worker := NewRateLimitAutoDisableWorker(st)
+	now := time.Unix(1_700_000_000, 0)
+	event := usage.Event{
+		EventHash:      "evt-http500-disabled",
+		Failed:         true,
+		FailStatusCode: http.StatusInternalServerError,
+		SourceHash:     "source-http500",
+		Provider:       "codex",
+	}
+	candidate, ok := worker.quotaAutoDisableCandidateFromEvent(
+		context.Background(),
+		event,
+		collectorpkg.RuntimeConfig{HTTP500CooldownEnabled: false},
+		"http://cpa",
+		"test-management-key",
+		now,
+	)
+	if ok {
+		t.Fatalf("expected HTTP 500 candidate to be skipped when disabled, got %#v", candidate)
+	}
+}
+
 func waitForWorkerTest(t *testing.T, condition func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)

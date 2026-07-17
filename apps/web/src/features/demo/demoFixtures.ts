@@ -2659,6 +2659,14 @@ export const getDemoAccountProcessingPolicy = (): AccountProcessingPolicy => ({
     envKey: 'USAGE_CHARITY_MODEL_MONITOR_ENABLED',
     configFileKey: 'charityModelMonitorEnabled',
   },
+  http500Cooldown: {
+    enabled: true,
+    configured: true,
+    source: 'db',
+    locked: false,
+    envKey: '',
+    configFileKey: 'http500CooldownEnabled',
+  },
   charityModelMonitorIntervalMinutes: 15,
   charityModelMonitorSites: [
     {
@@ -2675,6 +2683,9 @@ export const getDemoAccountProcessingPolicy = (): AccountProcessingPolicy => ({
       monitorClaude: true,
     },
   ],
+  http500CooldownWindowMinutes: 10,
+  http500CooldownThreshold: 3,
+  http500CooldownDurationMinutes: 10,
 });
 
 export const getDemoQuotaCooldowns = (): QuotaCooldownInfo[] => [

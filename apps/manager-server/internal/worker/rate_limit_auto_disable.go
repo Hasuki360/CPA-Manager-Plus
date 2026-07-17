@@ -577,6 +577,9 @@ func (w *RateLimitAutoDisableWorker) quotaAutoDisableCandidateFromEvent(ctx cont
 	provider := normalizeQuotaProvider(firstNonEmpty(event.Provider, event.AuthProviderSnapshot))
 	fileName := strings.TrimSpace(event.AuthFileSnapshot)
 	if event.Failed && event.FailStatusCode == http.StatusInternalServerError {
+		if !cfg.HTTP500CooldownEnabled {
+			return quotaAutoDisableCandidate{}, false
+		}
 		channel, ok := w.findAIProviderChannel(ctx, baseURL, managementKey, event)
 		if !ok {
 			log.Printf("[quota-auto-disable] HTTP 500 event %q cannot be matched to an AI provider channel, skip", event.EventHash)

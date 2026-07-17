@@ -39,6 +39,7 @@ type RuntimeConfig struct {
 	BatchSize                      int
 	PollInterval                   time.Duration
 	TLSSkipVerify                  bool
+	HTTP500CooldownEnabled         bool
 	HTTP500CooldownWindowMinutes   int
 	HTTP500CooldownThreshold       int
 	HTTP500CooldownDurationMinutes int

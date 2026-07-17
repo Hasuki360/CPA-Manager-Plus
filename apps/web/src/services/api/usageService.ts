@@ -160,6 +160,7 @@ export interface AccountProcessingPolicy {
   charityModelMonitorIntervalMinutes?: number;
   charityModelMonitorSites?: CharityModelMonitorSite[];
   charityModelMonitorState?: CharityModelMonitorState;
+  http500Cooldown?: AccountPolicyCapability;
   http500CooldownWindowMinutes?: number;
   http500CooldownThreshold?: number;
   http500CooldownDurationMinutes?: number;
@@ -173,6 +174,7 @@ export interface AccountProcessingPolicyPatch {
   charityModelMonitorEnabled?: boolean;
   charityModelMonitorIntervalMinutes?: number;
   charityModelMonitorSites?: CharityModelMonitorSite[];
+  http500CooldownEnabled?: boolean;
   http500CooldownWindowMinutes?: number;
   http500CooldownThreshold?: number;
   http500CooldownDurationMinutes?: number;
@@ -1494,6 +1496,19 @@ const getDemoPatchedAccountProcessingPolicy = (
     charityModelMonitor: {
       ...policy.charityModelMonitor,
       enabled: patch.charityModelMonitorEnabled ?? policy.charityModelMonitor.enabled,
+    },
+    http500Cooldown: {
+      ...(policy.http500Cooldown ?? {
+        enabled: true,
+        configured: false,
+        source: 'startup',
+        locked: false,
+        envKey: '',
+        configFileKey: 'http500CooldownEnabled',
+      }),
+      enabled: patch.http500CooldownEnabled ?? policy.http500Cooldown?.enabled ?? true,
+      configured: true,
+      source: 'db',
     },
   };
 };
