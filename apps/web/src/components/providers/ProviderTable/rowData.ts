@@ -90,14 +90,17 @@ function buildKeyConfigRow(
   kind: 'gemini' | 'interactions' | 'codex' | 'claude' | 'vertex',
   config: GeminiKeyConfig | ProviderKeyConfig,
   originalIndex: number,
-  usageByProvider: ProviderRecentUsageMap
+  usageByProvider: ProviderRecentUsageMap,
+  /** map key = `${originalIndex}` → display label */
+  displayNames: Map<string, string> = new Map(),
 ): ProviderRow {
   const modelNames = collectModelNames(config.models);
+  const displayName = displayNames.get(`${originalIndex}`) || maskApiKey(config.apiKey);
   return {
     key: `${kind}:${getProviderConfigKey(config, originalIndex)}`,
     kind,
     originalIndex,
-    label: maskApiKey(config.apiKey),
+    label: displayName,
     sortName: getKeyConfigSortName(config),
     baseUrl: config.baseUrl ?? '',
     priority: config.priority,
@@ -166,14 +169,57 @@ export function buildProviderRows({
   openai,
   usageByProvider,
 }: BuildProviderRowsInput): ProviderRow[] {
+  const keyConfigDisplayNames = buildKeyConfigDisplayNames(codex, claude, vertex, gemini, interactions);
   return [
-    ...gemini.map((config, index) => buildKeyConfigRow('gemini', config, index, usageByProvider)),
+    ...gemini.map((config, index) => buildKeyConfigRow('gemini', config, index, usageByProvider, keyConfigDisplayNames)),
     ...interactions.map((config, index) =>
-      buildKeyConfigRow('interactions', config, index, usageByProvider)
+      buildKeyConfigRow('interactions', config, index, usageByProvider, keyConfigDisplayNames)
     ),
-    ...codex.map((config, index) => buildKeyConfigRow('codex', config, index, usageByProvider)),
-    ...claude.map((config, index) => buildKeyConfigRow('claude', config, index, usageByProvider)),
-    ...vertex.map((config, index) => buildKeyConfigRow('vertex', config, index, usageByProvider)),
+    ...codex.map((config, index) => buildKeyConfigRow('codex', config, index, usageByProvider, keyConfigDisplayNames)),
+    ...claude.map((config, index) => buildKeyConfigRow('claude', config, index, usageByProvider, keyConfigDisplayNames)),
+    ...vertex.map((config, index) => buildKeyConfigRow('vertex', config, index, usageByProvider, keyConfigDisplayNames)),
     ...openai.map((provider, index) => buildOpenAIRow(provider, index, usageByProvider)),
   ];
+}
+
+/** map key = `${kind}:${originalIndex}` → display label */
+function buildKeyConfigDisplayNames(
+  ...groups: Array<Array<{ prefix?: string; name?: string; baseUrl?: string }>>
+): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const items of groups) {
+    if (!items.length) continue;
+    const hostCounts = new Map<string, number>();
+    items.forEach((item) => {
+      if (item.prefix?.trim()) return;
+      if (item.name?.trim()) return;
+      const host = extractHostFromUrl(item.baseUrl);
+      if (host) hostCounts.set(host, (hostCounts.get(host) || 0) + 1);
+    });
+    const ordinals = new Map<string, number>();
+    items.forEach((item, index) => {
+      const prefix = item.prefix?.trim();
+      if (prefix) { map.set(`${index}`, prefix); return; }
+      const name = item.name?.trim();
+      if (name) { map.set(`${index}`, name); return; }
+      const host = extractHostFromUrl(item.baseUrl);
+      if (!host) { map.set(`${index}`, ''); return; }
+      const count = hostCounts.get(host) || 0;
+      if (count <= 1) { map.set(`${index}`, host); return; }
+      const ordinal = (ordinals.get(host) || 0) + 1;
+      ordinals.set(host, ordinal);
+      map.set(`${index}`, `${host} #${ordinal}`);
+    });
+  }
+  return map;
+}
+
+function extractHostFromUrl(baseUrl: string | undefined): string {
+  const trimmed = String(baseUrl || '').trim();
+  if (!trimmed) return '';
+  try {
+    return new URL(trimmed).host || trimmed;
+  } catch {
+    return trimmed.replace(/^https?:\/\//i, '').split('/')[0] || trimmed;
+  }
 }
