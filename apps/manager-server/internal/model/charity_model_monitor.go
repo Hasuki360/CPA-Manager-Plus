@@ -41,7 +41,10 @@ type CharityModelMonitorProviderState struct {
 	CheckMode      string            `json:"checkMode,omitempty"`
 	CustomModels   []string          `json:"customModels,omitempty"`
 	MatchedModels  []string          `json:"matchedModels,omitempty"`
+	MissingModels  []string          `json:"missingModels,omitempty"`
+	ExcludedModels []string          `json:"excludedModels,omitempty"`
 	Reason         string            `json:"reason,omitempty"`
+	CheckedAt      string            `json:"checkedAt,omitempty"`
 }
 
 type CharityModelMonitorSiteState struct {
@@ -53,17 +56,31 @@ type CharityModelMonitorSiteState struct {
 	PricingVersion   string   `json:"pricingVersion,omitempty"`
 }
 
-type CharityModelMonitorState struct {
-	UpdatedAtMS             int64                                      `json:"updatedAtMs,omitempty"`
-	LastCheck               string                                     `json:"lastCheck,omitempty"`
-	LastTotalModels         int                                        `json:"lastTotalModels,omitempty"`
-	LastCodexCLIVersion     string                                     `json:"lastCodexCliVersion,omitempty"`
-	LastCodexVersionChecked int64                                      `json:"lastCodexVersionCheckedAtMs,omitempty"`
-	Seen                    []string                                   `json:"seen,omitempty"`
-	Sites                   map[string]CharityModelMonitorSiteState    `json:"sites,omitempty"`
-	LastProviderSync        []CharityModelMonitorProviderState         `json:"lastProviderSync,omitempty"`
-	LastProviderError       []string                                   `json:"lastProviderError,omitempty"`
+// CharityModelMonitorHistoryEntry keeps one check cycle for later audits / upgrades.
+type CharityModelMonitorHistoryEntry struct {
+	CheckedAt        string                            `json:"checkedAt"`
+	CodexCLIVersion  string                            `json:"codexCliVersion,omitempty"`
+	TotalModels      int                               `json:"totalModels,omitempty"`
+	ProviderResults  []CharityModelMonitorProviderState `json:"providerResults,omitempty"`
+	ProviderErrors   []string                          `json:"providerErrors,omitempty"`
 }
+
+type CharityModelMonitorState struct {
+	UpdatedAtMS             int64                                   `json:"updatedAtMs,omitempty"`
+	LastCheck               string                                  `json:"lastCheck,omitempty"`
+	LastTotalModels         int                                     `json:"lastTotalModels,omitempty"`
+	LastCodexCLIVersion     string                                  `json:"lastCodexCliVersion,omitempty"`
+	LastCodexVersionChecked int64                                   `json:"lastCodexVersionCheckedAtMs,omitempty"`
+	Seen                    []string                                `json:"seen,omitempty"`
+	Sites                   map[string]CharityModelMonitorSiteState `json:"sites,omitempty"`
+	LastProviderSync        []CharityModelMonitorProviderState      `json:"lastProviderSync,omitempty"`
+	LastProviderError       []string                                `json:"lastProviderError,omitempty"`
+	// History keeps recent check cycles so upgrades can inspect prior decisions
+	// without digging through rotated container logs.
+	History []CharityModelMonitorHistoryEntry `json:"history,omitempty"`
+}
+
+const MaxCharityModelMonitorHistory = 12
 
 func DefaultCharityModelMonitorSites() []CharityModelMonitorSite {
 	return []CharityModelMonitorSite{

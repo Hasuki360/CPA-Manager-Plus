@@ -1581,7 +1581,7 @@ export function AiProvidersPage() {
             <div>
               <h3>公益站模型监控与通道自愈</h3>
               <p>
-                从 AI 提供商读取 Codex / Claude 通道，优先按自定义模型检查；全部缺失自动关闭，任意恢复自动启动。
+                从 AI 提供商读取 Codex / Claude 通道，优先按自定义模型检查：有可用则保持通道开启并排除缺失模型，全部缺失才整通道关闭；恢复后自动拉回。
               </p>
             </div>
             <div className={styles.charityMonitorActions}>
@@ -1607,6 +1607,7 @@ export function AiProvidersPage() {
               <span>总开关：{charityEnabled ? '已开启' : '已关闭'}</span>
               <span>最近检测：{charityPolicy?.charityModelMonitorState?.lastCheck || '暂无'}</span>
               <span>Codex 版本：{charityPolicy?.charityModelMonitorState?.lastCodexCliVersion || '等待同步'}</span>
+              <span>历史轮次：{charityPolicy?.charityModelMonitorState?.history?.length ?? 0}</span>
             </div>
             <div className={styles.charityIntervalInline}>
               <label className={styles.charityIntervalInlineField}>
@@ -1677,10 +1678,27 @@ export function AiProvidersPage() {
                               ? `自定义模型 ${state.customModels?.length ?? 0} 个`
                               : `${row.kind === 'codex' ? 'gpt-*' : 'claude-*'}`}
                           </span>
-                          <span>命中：{state.matchedModels?.length ?? 0} 个</span>
+                          <span>可用：{state.matchedModels?.length ?? 0} 个</span>
+                          <span>缺失：{state.missingModels?.length ?? 0} 个</span>
+                          <span>已排除：{state.excludedModels?.length ?? 0} 个</span>
                           <span>动作：{state.reason || (state.changed ? '已同步' : '无变化')}</span>
                           {state.headersChanged ? <span>请求头已同步</span> : null}
                         </div>
+                        {state.matchedModels?.length ? (
+                          <p className={styles.charityProviderDetail}>
+                            可用模型：{state.matchedModels.join(', ')}
+                          </p>
+                        ) : null}
+                        {state.missingModels?.length ? (
+                          <p className={styles.charityProviderDetail}>
+                            缺失模型：{state.missingModels.join(', ')}
+                          </p>
+                        ) : null}
+                        {state.excludedModels?.length ? (
+                          <p className={styles.charityProviderDetail}>
+                            排除列表：{state.excludedModels.join(', ')}
+                          </p>
+                        ) : null}
                       </div>
                     ) : null}
                   </section>

@@ -110,13 +110,16 @@ func (w *CharityModelMonitorWorker) runOnce(ctx context.Context) {
 	if !ok || state.Sites == nil {
 		state.Sites = map[string]model.CharityModelMonitorSiteState{}
 	}
-	state.LastCheck = time.Now().Format(time.RFC3339)
+	checkedAt := time.Now().Format(time.RFC3339)
+	state.LastCheck = checkedAt
 	state.LastProviderError = nil
 
 	codexVersion := w.codexVersion(ctx, &state)
 	providerResults := make([]model.CharityModelMonitorProviderState, 0)
 	totalModels := 0
 	seen := map[string]struct{}{}
+	log.Printf("[charity-model-monitor] cycle start at=%s interval=%dm sites=%d codexCli=%s",
+		checkedAt, cfg.IntervalMinutes, len(cfg.Sites), codexVersion)
 	for _, site := range cfg.Sites {
 		if !site.Enabled {
 			continue
@@ -133,11 +136,24 @@ func (w *CharityModelMonitorWorker) runOnce(ctx context.Context) {
 		for _, name := range siteState.LastTargetModels {
 			seen[name] = struct{}{}
 		}
+		for i := range results {
+			results[i].CheckedAt = checkedAt
+			logCharityProviderDecision(results[i])
+		}
 		providerResults = append(providerResults, results...)
 	}
 	state.LastTotalModels = totalModels
 	state.Seen = sortedKeys(seen)
 	state.LastProviderSync = providerResults
+	state.History = appendCharityHistory(state.History, model.CharityModelMonitorHistoryEntry{
+		CheckedAt:       checkedAt,
+		CodexCLIVersion: codexVersion,
+		TotalModels:     totalModels,
+		ProviderResults: cloneProviderResults(providerResults),
+		ProviderErrors:  append([]string(nil), state.LastProviderError...),
+	})
+	log.Printf("[charity-model-monitor] cycle done at=%s providers=%d errors=%d history=%d",
+		checkedAt, len(providerResults), len(state.LastProviderError), len(state.History))
 	if _, err := w.store.SaveCharityModelMonitorState(ctx, state); err != nil {
 		log.Printf("[charity-model-monitor] save state: %v", err)
 	}
@@ -262,6 +278,61 @@ func sortedKeys(values map[string]struct{}) []string {
 	return result
 }
 
+func joinModelsForLog(values []string) string {
+	if len(values) == 0 {
+		return "-"
+	}
+	const maxItems = 8
+	if len(values) <= maxItems {
+		return strings.Join(values, ",")
+	}
+	return fmt.Sprintf("%s,...(+%d)", strings.Join(values[:maxItems], ","), len(values)-maxItems)
+}
+
+func logCharityProviderDecision(result model.CharityModelMonitorProviderState) {
+	enabled := "off"
+	if result.DesiredEnabled {
+		enabled = "on"
+	}
+	log.Printf(
+		"[charity-model-monitor] decision site=%s label=%s section=%s provider=%s mode=%s enabled=%s changed=%t switch=%t headers=%t custom=%d matched=%d missing=%d excluded=%d reason=%q matchedModels=%s missingModels=%s excludedModels=%s",
+		result.Site,
+		result.Label,
+		result.Section,
+		result.Provider,
+		result.CheckMode,
+		enabled,
+		result.Changed,
+		result.SwitchChanged,
+		result.HeadersChanged,
+		len(result.CustomModels),
+		len(result.MatchedModels),
+		len(result.MissingModels),
+		len(result.ExcludedModels),
+		result.Reason,
+		joinModelsForLog(result.MatchedModels),
+		joinModelsForLog(result.MissingModels),
+		joinModelsForLog(result.ExcludedModels),
+	)
+}
+
+func cloneProviderResults(results []model.CharityModelMonitorProviderState) []model.CharityModelMonitorProviderState {
+	if len(results) == 0 {
+		return nil
+	}
+	out := make([]model.CharityModelMonitorProviderState, len(results))
+	copy(out, results)
+	return out
+}
+
+func appendCharityHistory(history []model.CharityModelMonitorHistoryEntry, entry model.CharityModelMonitorHistoryEntry) []model.CharityModelMonitorHistoryEntry {
+	next := append(append([]model.CharityModelMonitorHistoryEntry(nil), history...), entry)
+	if len(next) <= model.MaxCharityModelMonitorHistory {
+		return next
+	}
+	return append([]model.CharityModelMonitorHistoryEntry(nil), next[len(next)-model.MaxCharityModelMonitorHistory:]...)
+}
+
 func providerCustomModels(entry map[string]any) []string {
 	modelsRaw, ok := entry["models"]
 	if !ok || modelsRaw == nil {
@@ -327,6 +398,84 @@ func intersectModels(wanted []string, available []string) []string {
 	return sortedKeys(matched)
 }
 
+func missingModels(wanted []string, available []string) []string {
+	availableSet := map[string]struct{}{}
+	for _, modelName := range available {
+		key := strings.ToLower(strings.TrimSpace(modelName))
+		if key != "" {
+			availableSet[key] = struct{}{}
+		}
+	}
+	missing := map[string]struct{}{}
+	for _, modelName := range wanted {
+		name := strings.TrimSpace(modelName)
+		if name == "" {
+			continue
+		}
+		key := strings.ToLower(name)
+		if _, ok := availableSet[key]; !ok {
+			missing[name] = struct{}{}
+		}
+	}
+	return sortedKeys(missing)
+}
+
+// setManagedModelExclusions rewrites excluded-models for custom-model channels.
+// Custom mode fully owns this list so add/remove of custom models cannot leave
+// ghost exclusions behind:
+// - fullyDisabled=true  => ["*"] only (whole channel off)
+// - fullyDisabled=false => exactly the currently missing managed models
+// managedModels is kept for call-site clarity / future use.
+func setManagedModelExclusions(entry map[string]any, fullyDisabled bool, excludeModels []string, managedModels []string) bool {
+	_ = managedModels
+	current := excludedModels(entry["excluded-models"])
+	before := strings.Join(current, "\x00")
+
+	next := make([]string, 0, len(excludeModels)+1)
+	if fullyDisabled {
+		next = append(next, charityMonitorDisableAllModelsRule)
+	} else {
+		for _, modelName := range excludeModels {
+			name := strings.TrimSpace(modelName)
+			if name == "" {
+				continue
+			}
+			next = append(next, name)
+		}
+	}
+
+	seen := map[string]struct{}{}
+	deduped := make([]string, 0, len(next))
+	for _, item := range next {
+		key := strings.ToLower(strings.TrimSpace(item))
+		if key == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		deduped = append(deduped, strings.TrimSpace(item))
+	}
+	sort.SliceStable(deduped, func(i, j int) bool {
+		// Keep "*" last so whole-channel disable is easy to spot.
+		if deduped[i] == charityMonitorDisableAllModelsRule {
+			return false
+		}
+		if deduped[j] == charityMonitorDisableAllModelsRule {
+			return true
+		}
+		return strings.ToLower(deduped[i]) < strings.ToLower(deduped[j])
+	})
+
+	if len(deduped) == 0 {
+		delete(entry, "excluded-models")
+	} else {
+		entry["excluded-models"] = deduped
+	}
+	return before != strings.Join(deduped, "\x00")
+}
+
 func (w *CharityModelMonitorWorker) syncProvider(ctx context.Context, cfg CharityModelMonitorConfig, configData map[string]any, site model.CharityModelMonitorSite, label string, section string, baseURL string, availableModels []string, desiredHeaders map[string]string, preserveSwitch bool) (model.CharityModelMonitorProviderState, error) {
 	section = strings.TrimSpace(section)
 	baseURL = strings.TrimSpace(baseURL)
@@ -356,23 +505,44 @@ func (w *CharityModelMonitorWorker) syncProvider(ctx context.Context, cfg Charit
 	checkMode := "pattern"
 	customModels := mergeCustomModels(matched)
 	matchedModels := availableModels
+	missing := []string(nil)
+	excludeModels := []string(nil)
+	managedModels := []string(nil)
 	enable := len(availableModels) > 0
 	if len(customModels) > 0 {
+		// Fine-grained mode: keep channel open when any custom model is available,
+		// and only exclude the missing ones. Full disable only when all are gone.
 		checkMode = "custom"
 		matchedModels = intersectModels(customModels, availableModels)
+		missing = missingModels(customModels, availableModels)
+		managedModels = customModels
 		enable = len(matchedModels) > 0
+		if enable {
+			excludeModels = missing
+		}
 	}
 	desiredDisabled := !enable
 	if preserveSwitch {
 		desiredDisabled = isDisabledByExcludedModels(matched[0].Entry)
 		matchedModels = nil
+		missing = nil
+		excludeModels = nil
+		managedModels = nil
 	}
 	switchChanged := false
 	headersChanged := false
+	finalExcluded := []string(nil)
 	for _, matchedEntry := range matched {
 		entry := matchedEntry.Entry
 		if !preserveSwitch {
-			switchChanged = setDisabledByExcludedModels(entry, desiredDisabled) || switchChanged
+			if checkMode == "custom" {
+				switchChanged = setManagedModelExclusions(entry, desiredDisabled, excludeModels, managedModels) || switchChanged
+			} else {
+				// Pattern mode is whole-channel only; fully rewrite so leftover
+				// per-model exclusions from a previous custom list cannot stick.
+				switchChanged = setManagedModelExclusions(entry, desiredDisabled, nil, nil) || switchChanged
+			}
+			finalExcluded = excludedModels(entry["excluded-models"])
 		}
 		headersChanged = syncProviderHeaders(entry, desiredHeaders) || headersChanged
 		delete(entry, "auth-index")
@@ -384,16 +554,19 @@ func (w *CharityModelMonitorWorker) syncProvider(ctx context.Context, cfg Charit
 		}
 	}
 	reason := "pattern matched"
-	if checkMode == "custom" {
-		if enable {
-			reason = "custom model matched"
-		} else {
-			reason = "all custom models missing"
-		}
-	} else if !enable && !preserveSwitch {
-		reason = "no matching model"
-	} else if preserveSwitch {
+	if preserveSwitch {
 		reason = "headers only"
+	} else if checkMode == "custom" {
+		switch {
+		case !enable:
+			reason = "all custom models missing"
+		case len(excludeModels) > 0:
+			reason = "partial custom models available; excluded missing"
+		default:
+			reason = "all custom models available"
+		}
+	} else if !enable {
+		reason = "no matching model"
 	}
 	return model.CharityModelMonitorProviderState{
 		Site:           site.Name,
@@ -408,6 +581,8 @@ func (w *CharityModelMonitorWorker) syncProvider(ctx context.Context, cfg Charit
 		CheckMode:      checkMode,
 		CustomModels:   customModels,
 		MatchedModels:  matchedModels,
+		MissingModels:  missing,
+		ExcludedModels: finalExcluded,
 		Reason:         reason,
 	}, nil
 }

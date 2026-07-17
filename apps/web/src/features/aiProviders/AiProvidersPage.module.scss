@@ -175,6 +175,14 @@
   }
 }
 
+.charityProviderDetail {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
 .charityProviderTitle {
   display: flex;
   align-items: center;

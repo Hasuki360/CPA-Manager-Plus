@@ -124,7 +124,18 @@ export interface CharityModelMonitorProviderState {
   checkMode?: string;
   customModels?: string[];
   matchedModels?: string[];
+  missingModels?: string[];
+  excludedModels?: string[];
   reason?: string;
+  checkedAt?: string;
+}
+
+export interface CharityModelMonitorHistoryEntry {
+  checkedAt: string;
+  codexCliVersion?: string;
+  totalModels?: number;
+  providerResults?: CharityModelMonitorProviderState[];
+  providerErrors?: string[];
 }
 
 export interface CharityModelMonitorState {
@@ -135,6 +146,7 @@ export interface CharityModelMonitorState {
   seen?: string[];
   lastProviderSync?: CharityModelMonitorProviderState[];
   lastProviderError?: string[];
+  history?: CharityModelMonitorHistoryEntry[];
 }
 
 export interface AccountProcessingPolicy {
