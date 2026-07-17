@@ -9,16 +9,61 @@ import (
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/model"
 )
 
-func TestMissingModels(t *testing.T) {
+func TestExtractCharityModelsIncludesNonGPT(t *testing.T) {
 	t.Parallel()
 
+	targets, gpt, claude := extractCharityModels(map[string]any{
+		"data": []any{
+			map[string]any{"model_name": "glm-5.2"},
+			map[string]any{"model_name": "deepseek-v4-flash"},
+			map[string]any{"model_name": "grok-4.5"},
+			map[string]any{"model_name": "gpt-5.6-sol"},
+			map[string]any{"model_name": "gpt-image-2"},
+			map[string]any{"model_name": "claude-sonnet-4"},
+		},
+	})
+	if containsString(targets, "gpt-image-2") {
+		t.Fatal("image models must be skipped")
+	}
+	for _, name := range []string{"glm-5.2", "deepseek-v4-flash", "grok-4.5", "gpt-5.6-sol", "claude-sonnet-4"} {
+		if !containsString(targets, name) {
+			t.Fatalf("targets missing %s: %#v", name, targets)
+		}
+	}
+	if !reflect.DeepEqual(gpt, []string{"gpt-5.6-sol"}) {
+		t.Fatalf("gpt = %#v", gpt)
+	}
+	if !reflect.DeepEqual(claude, []string{"claude-sonnet-4"}) {
+		t.Fatalf("claude = %#v", claude)
+	}
+}
+
+func TestFilterModelsByPrefix(t *testing.T) {
+	t.Parallel()
+	got := filterModelsByPrefix([]string{"gpt-5.6-sol", "glm-5.2", "GPT-5.4"}, "gpt-")
+	want := []string{"gpt-5.6-sol", "GPT-5.4"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("filterModelsByPrefix() = %#v, want %#v", got, want)
+	}
+}
+
+func TestMissingModelsAgainstFullCatalog(t *testing.T) {
+	t.Parallel()
+	// Custom Codex list can include non-gpt models when catalog is full pricing.
 	got := missingModels(
-		[]string{"gpt-5.4", "o4-mini", "gpt-5.3-codex"},
-		[]string{"GPT-5.4", "gpt-5.3-codex"},
+		[]string{"gpt-5.6-sol", "glm-5.2", "deepseek-v4-flash", "deepseek-v4-pro", "grok-4.5"},
+		[]string{"glm-5.2", "deepseek-v4-flash", "deepseek-v4-pro", "grok-4.5"},
 	)
-	want := []string{"o4-mini"}
+	want := []string{"gpt-5.6-sol"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("missingModels() = %#v, want %#v", got, want)
+	}
+	matched := intersectModels(
+		[]string{"gpt-5.6-sol", "glm-5.2", "deepseek-v4-flash", "deepseek-v4-pro", "grok-4.5"},
+		[]string{"glm-5.2", "deepseek-v4-flash", "deepseek-v4-pro", "grok-4.5"},
+	)
+	if len(matched) != 4 {
+		t.Fatalf("matched = %#v", matched)
 	}
 }
 

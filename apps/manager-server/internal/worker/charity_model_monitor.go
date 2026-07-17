@@ -183,14 +183,24 @@ func (w *CharityModelMonitorWorker) checkSite(ctx context.Context, cfg CharityMo
 	}
 	results := make([]model.CharityModelMonitorProviderState, 0, 2)
 	if site.CodexBaseURL != "" && (site.MonitorGPT || site.SyncCodexHeadersOnly) {
-		result, err := w.syncProvider(ctx, cfg, configData, site, "Codex", site.CodexProviderSection, site.CodexBaseURL, gptModels, codexProviderHeaders(codexVersion), site.SyncCodexHeadersOnly)
+		// Pass the full pricing catalog for Codex. Custom model lists may include
+		// glm/deepseek/grok; pattern mode still filters to gpt-* inside syncProvider.
+		codexAvailable := targets
+		if len(codexAvailable) == 0 {
+			codexAvailable = gptModels
+		}
+		result, err := w.syncProvider(ctx, cfg, configData, site, "Codex", site.CodexProviderSection, site.CodexBaseURL, codexAvailable, codexProviderHeaders(codexVersion), site.SyncCodexHeadersOnly)
 		if err != nil {
 			return state, results, err
 		}
 		results = append(results, result)
 	}
 	if site.ClaudeBaseURL != "" && site.MonitorClaude && !site.SyncCodexHeadersOnly {
-		result, err := w.syncProvider(ctx, cfg, configData, site, "Claude", site.ClaudeProviderSection, site.ClaudeBaseURL, claudeModels, nil, false)
+		claudeAvailable := targets
+		if len(claudeAvailable) == 0 {
+			claudeAvailable = claudeModels
+		}
+		result, err := w.syncProvider(ctx, cfg, configData, site, "Claude", site.ClaudeProviderSection, site.ClaudeBaseURL, claudeAvailable, nil, false)
 		if err != nil {
 			return state, results, err
 		}
@@ -257,16 +267,30 @@ func extractCharityModels(data map[string]any) ([]string, []string, []string) {
 		if name == "" || strings.Contains(lower, "image") {
 			continue
 		}
+		// Full catalog is used by custom-model mode so glm/deepseek/grok count.
+		targets[name] = struct{}{}
 		switch {
 		case strings.HasPrefix(lower, "gpt-"):
-			targets[name] = struct{}{}
 			gpt[name] = struct{}{}
 		case strings.HasPrefix(lower, "claude-"):
-			targets[name] = struct{}{}
 			claude[name] = struct{}{}
 		}
 	}
 	return sortedKeys(targets), sortedKeys(gpt), sortedKeys(claude)
+}
+
+func filterModelsByPrefix(models []string, prefix string) []string {
+	prefix = strings.ToLower(strings.TrimSpace(prefix))
+	if prefix == "" {
+		return append([]string(nil), models...)
+	}
+	result := make([]string, 0, len(models))
+	for _, modelName := range models {
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(modelName)), prefix) {
+			result = append(result, modelName)
+		}
+	}
+	return result
 }
 
 func sortedKeys(values map[string]struct{}) []string {
@@ -504,14 +528,22 @@ func (w *CharityModelMonitorWorker) syncProvider(ctx context.Context, cfg Charit
 	}
 	checkMode := "pattern"
 	customModels := mergeCustomModels(matched)
-	matchedModels := availableModels
+	// Pattern mode still only watches gpt-* / claude-*; custom mode uses the full catalog.
+	patternAvailable := availableModels
+	if strings.EqualFold(label, "Claude") || strings.Contains(strings.ToLower(section), "claude") {
+		patternAvailable = filterModelsByPrefix(availableModels, "claude-")
+	} else {
+		patternAvailable = filterModelsByPrefix(availableModels, "gpt-")
+	}
+	matchedModels := patternAvailable
 	missing := []string(nil)
 	excludeModels := []string(nil)
 	managedModels := []string(nil)
-	enable := len(availableModels) > 0
+	enable := len(patternAvailable) > 0
 	if len(customModels) > 0 {
 		// Fine-grained mode: keep channel open when any custom model is available,
 		// and only exclude the missing ones. Full disable only when all are gone.
+		// Compare against the full pricing catalog (not just gpt-*).
 		checkMode = "custom"
 		matchedModels = intersectModels(customModels, availableModels)
 		missing = missingModels(customModels, availableModels)
