@@ -9,6 +9,40 @@ import (
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/model"
 )
 
+func TestExtractModelStatusModels(t *testing.T) {
+	t.Parallel()
+
+	targets, gpt, claude := extractModelStatusModels(map[string]any{
+		"data": map[string]any{
+			"models": []any{
+				map[string]any{"model_name": "gpt-5.6-sol", "current_status": "yellow"},
+				map[string]any{"model_name": "gpt-5.5", "current_status": "green"},
+				map[string]any{"model_name": "gpt-5.5-openai-compact", "current_status": "red"},
+				map[string]any{"model_name": "claude-sonnet-4", "current_status": "green"},
+				map[string]any{"model_name": "gpt-image-2", "current_status": "green"},
+			},
+		},
+	}, []string{"green", "yellow"})
+
+	if containsString(targets, "gpt-5.5-openai-compact") {
+		t.Fatal("red status must be excluded")
+	}
+	if containsString(targets, "gpt-image-2") {
+		t.Fatal("image models must be skipped")
+	}
+	for _, name := range []string{"gpt-5.6-sol", "gpt-5.5", "claude-sonnet-4"} {
+		if !containsString(targets, name) {
+			t.Fatalf("targets missing %s: %#v", name, targets)
+		}
+	}
+	if !containsString(gpt, "gpt-5.6-sol") || !containsString(gpt, "gpt-5.5") {
+		t.Fatalf("gpt = %#v", gpt)
+	}
+	if !reflect.DeepEqual(claude, []string{"claude-sonnet-4"}) {
+		t.Fatalf("claude = %#v", claude)
+	}
+}
+
 func TestExtractCharityModelsIncludesNonGPT(t *testing.T) {
 	t.Parallel()
 
@@ -35,6 +69,23 @@ func TestExtractCharityModelsIncludesNonGPT(t *testing.T) {
 	}
 	if !reflect.DeepEqual(claude, []string{"claude-sonnet-4"}) {
 		t.Fatalf("claude = %#v", claude)
+	}
+}
+
+func TestNormalizeMuyuanBackfillsStatusURL(t *testing.T) {
+	t.Parallel()
+
+	sites := model.NormalizeCharityModelMonitorSites([]model.CharityModelMonitorSite{
+		{Key: "muyuan", Name: "君の的公益", Enabled: true, PricingURL: "https://muyuan.do/api/pricing"},
+	})
+	if len(sites) != 1 {
+		t.Fatalf("sites = %#v", sites)
+	}
+	if sites[0].StatusURL != "https://muyuan.do/api/model-status" {
+		t.Fatalf("StatusURL = %q", sites[0].StatusURL)
+	}
+	if !reflect.DeepEqual(sites[0].StatusAllow, []string{"green", "yellow"}) {
+		t.Fatalf("StatusAllow = %#v", sites[0].StatusAllow)
 	}
 }
 

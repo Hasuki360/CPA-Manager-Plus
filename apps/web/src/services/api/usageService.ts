@@ -102,6 +102,8 @@ export interface CharityModelMonitorSite {
   name: string;
   enabled: boolean;
   pricingUrl?: string;
+  statusUrl?: string;
+  statusAllow?: string[];
   referer?: string;
   codexProviderSection?: string;
   codexBaseUrl?: string;

@@ -164,11 +164,11 @@ func (w *CharityModelMonitorWorker) checkSite(ctx context.Context, cfg CharityMo
 	var gptModels []string
 	var claudeModels []string
 	if !site.SyncCodexHeadersOnly {
-		pricing, err := w.fetchPricing(ctx, site)
+		catalog, err := w.fetchModelCatalog(ctx, site)
 		if err != nil {
 			return model.CharityModelMonitorSiteState{}, nil, err
 		}
-		targets, gptModels, claudeModels = extractCharityModels(pricing)
+		targets, gptModels, claudeModels = catalog.targets, catalog.gpt, catalog.claude
 	}
 	state := model.CharityModelMonitorSiteState{
 		Name:             site.Name,
@@ -183,7 +183,7 @@ func (w *CharityModelMonitorWorker) checkSite(ctx context.Context, cfg CharityMo
 	}
 	results := make([]model.CharityModelMonitorProviderState, 0, 2)
 	if site.CodexBaseURL != "" && (site.MonitorGPT || site.SyncCodexHeadersOnly) {
-		// Pass the full pricing catalog for Codex. Custom model lists may include
+		// Pass the full pricing/status catalog for Codex. Custom model lists may include
 		// glm/deepseek/grok; pattern mode still filters to gpt-* inside syncProvider.
 		codexAvailable := targets
 		if len(codexAvailable) == 0 {
@@ -223,18 +223,48 @@ func normalizeCharityMonitorConfig(cfg CharityModelMonitorConfig) CharityModelMo
 	return cfg
 }
 
-func (w *CharityModelMonitorWorker) fetchPricing(ctx context.Context, site model.CharityModelMonitorSite) (map[string]any, error) {
-	pricingURL := strings.TrimSpace(site.PricingURL)
-	if pricingURL == "" {
-		return nil, errors.New("pricing URL is empty")
+type charityModelCatalog struct {
+	targets []string
+	gpt     []string
+	claude  []string
+	source  string
+}
+
+func (w *CharityModelMonitorWorker) fetchModelCatalog(ctx context.Context, site model.CharityModelMonitorSite) (charityModelCatalog, error) {
+	statusURL := strings.TrimSpace(site.StatusURL)
+	if statusURL != "" {
+		statusData, err := w.fetchJSON(ctx, statusURL, site.Referer)
+		if err != nil {
+			return charityModelCatalog{}, fmt.Errorf("model-status: %w", err)
+		}
+		targets, gpt, claude := extractModelStatusModels(statusData, site.StatusAllow)
+		if len(targets) > 0 {
+			return charityModelCatalog{targets: targets, gpt: gpt, claude: claude, source: "model-status"}, nil
+		}
+		// Empty status catalog is unusual; fall back to pricing if configured.
+		if strings.TrimSpace(site.PricingURL) == "" {
+			return charityModelCatalog{source: "model-status"}, nil
+		}
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, pricingURL, nil)
+	if strings.TrimSpace(site.PricingURL) == "" {
+		return charityModelCatalog{}, errors.New("pricing/status URL is empty")
+	}
+	pricing, err := w.fetchPricing(ctx, site)
+	if err != nil {
+		return charityModelCatalog{}, err
+	}
+	targets, gpt, claude := extractCharityModels(pricing)
+	return charityModelCatalog{targets: targets, gpt: gpt, claude: claude, source: "pricing"}, nil
+}
+
+func (w *CharityModelMonitorWorker) fetchJSON(ctx context.Context, rawURL, referer string) (map[string]any, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("User-Agent", charityMonitorUserAgent)
 	req.Header.Set("Accept", "application/json, text/plain, */*")
-	if referer := strings.TrimSpace(site.Referer); referer != "" {
+	if referer = strings.TrimSpace(referer); referer != "" {
 		req.Header.Set("Referer", referer)
 	}
 	res, err := w.client.Do(req)
@@ -243,13 +273,78 @@ func (w *CharityModelMonitorWorker) fetchPricing(ctx context.Context, site model
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return nil, fmt.Errorf("pricing request failed: %s", res.Status)
+		return nil, fmt.Errorf("request failed: %s", res.Status)
 	}
 	var data map[string]any
 	if err := json.NewDecoder(res.Body).Decode(&data); err != nil {
 		return nil, err
 	}
 	return data, nil
+}
+
+func (w *CharityModelMonitorWorker) fetchPricing(ctx context.Context, site model.CharityModelMonitorSite) (map[string]any, error) {
+	pricingURL := strings.TrimSpace(site.PricingURL)
+	if pricingURL == "" {
+		return nil, errors.New("pricing URL is empty")
+	}
+	return w.fetchJSON(ctx, pricingURL, site.Referer)
+}
+
+// extractModelStatusModels reads NewAPI-style /api/model-status payloads.
+// A model is available when current_status is in allow (default green/yellow).
+func extractModelStatusModels(data map[string]any, allow []string) ([]string, []string, []string) {
+	allowSet := map[string]struct{}{}
+	if len(allow) == 0 {
+		allow = model.DefaultModelStatusAllow()
+	}
+	for _, status := range allow {
+		allowSet[strings.ToLower(strings.TrimSpace(status))] = struct{}{}
+	}
+
+	root := data
+	if nested, ok := data["data"].(map[string]any); ok {
+		root = nested
+	}
+	items, _ := root["models"].([]any)
+	if items == nil {
+		// Some deployments may put the array directly under data.
+		if list, ok := data["data"].([]any); ok {
+			items = list
+		}
+	}
+
+	targets := map[string]struct{}{}
+	gpt := map[string]struct{}{}
+	claude := map[string]struct{}{}
+	for _, item := range items {
+		row, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		name := strings.TrimSpace(fmt.Sprint(row["model_name"]))
+		if name == "" || name == "<nil>" {
+			name = strings.TrimSpace(fmt.Sprint(row["display_name"]))
+		}
+		lower := strings.ToLower(name)
+		if name == "" || name == "<nil>" || strings.Contains(lower, "image") {
+			continue
+		}
+		status := strings.ToLower(strings.TrimSpace(fmt.Sprint(row["current_status"])))
+		if status == "" || status == "<nil>" {
+			status = strings.ToLower(strings.TrimSpace(fmt.Sprint(row["status"])))
+		}
+		if _, ok := allowSet[status]; !ok {
+			continue
+		}
+		targets[name] = struct{}{}
+		switch {
+		case strings.HasPrefix(lower, "gpt-"):
+			gpt[name] = struct{}{}
+		case strings.HasPrefix(lower, "claude-"):
+			claude[name] = struct{}{}
+		}
+	}
+	return sortedKeys(targets), sortedKeys(gpt), sortedKeys(claude)
 }
 
 func extractCharityModels(data map[string]any) ([]string, []string, []string) {

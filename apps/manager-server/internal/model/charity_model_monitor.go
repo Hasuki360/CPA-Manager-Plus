@@ -13,18 +13,24 @@ const (
 )
 
 type CharityModelMonitorSite struct {
-	Key                  string `json:"key"`
-	Name                 string `json:"name"`
-	Enabled              bool   `json:"enabled"`
-	PricingURL           string `json:"pricingUrl,omitempty"`
-	Referer              string `json:"referer,omitempty"`
-	CodexProviderSection string `json:"codexProviderSection,omitempty"`
-	CodexBaseURL         string `json:"codexBaseUrl,omitempty"`
+	Key                   string `json:"key"`
+	Name                  string `json:"name"`
+	Enabled               bool   `json:"enabled"`
+	// PricingURL is the classic NewAPI pricing catalog endpoint.
+	PricingURL            string `json:"pricingUrl,omitempty"`
+	// StatusURL is an optional model health endpoint (e.g. muyuan /api/model-status).
+	// When set, availability is taken from current_status instead of pure pricing presence.
+	StatusURL             string `json:"statusUrl,omitempty"`
+	// StatusAllow lists accepted current_status values (default: green,yellow).
+	StatusAllow           []string `json:"statusAllow,omitempty"`
+	Referer               string `json:"referer,omitempty"`
+	CodexProviderSection  string `json:"codexProviderSection,omitempty"`
+	CodexBaseURL          string `json:"codexBaseUrl,omitempty"`
 	ClaudeProviderSection string `json:"claudeProviderSection,omitempty"`
-	ClaudeBaseURL        string `json:"claudeBaseUrl,omitempty"`
-	MonitorGPT           bool   `json:"monitorGpt"`
-	MonitorClaude        bool   `json:"monitorClaude"`
-	SyncCodexHeadersOnly bool   `json:"syncCodexHeadersOnly,omitempty"`
+	ClaudeBaseURL         string `json:"claudeBaseUrl,omitempty"`
+	MonitorGPT            bool   `json:"monitorGpt"`
+	MonitorClaude         bool   `json:"monitorClaude"`
+	SyncCodexHeadersOnly  bool   `json:"syncCodexHeadersOnly,omitempty"`
 }
 
 type CharityModelMonitorProviderState struct {
@@ -98,17 +104,19 @@ func DefaultCharityModelMonitorSites() []CharityModelMonitorSite {
 			MonitorClaude:        true,
 		},
 		{
-			Key:                  "muyuan",
-			Name:                 "君の的公益",
-			Enabled:              true,
-			PricingURL:           "https://muyuan.do/api/pricing",
-			Referer:              "https://muyuan.do/pricing",
-			CodexProviderSection: "codex-api-key",
-			CodexBaseURL:         "https://muyuan.do/v1",
+			Key:                   "muyuan",
+			Name:                  "君の的公益",
+			Enabled:               true,
+			PricingURL:            "https://muyuan.do/api/pricing",
+			StatusURL:             "https://muyuan.do/api/model-status",
+			StatusAllow:           []string{"green", "yellow"},
+			Referer:               "https://muyuan.do/model-status",
+			CodexProviderSection:  "codex-api-key",
+			CodexBaseURL:          "https://muyuan.do/v1",
 			ClaudeProviderSection: "claude-api-key",
-			ClaudeBaseURL:        "https://muyuan.do",
-			MonitorGPT:           true,
-			MonitorClaude:        true,
+			ClaudeBaseURL:         "https://muyuan.do",
+			MonitorGPT:            true,
+			MonitorClaude:         true,
 		},
 		{
 			Key:                  "anyrouter",
@@ -145,11 +153,25 @@ func NormalizeCharityModelMonitorSites(sites []CharityModelMonitorSite) []Charit
 		site.Key = strings.TrimSpace(site.Key)
 		site.Name = strings.TrimSpace(site.Name)
 		site.PricingURL = strings.TrimSpace(site.PricingURL)
+		site.StatusURL = strings.TrimSpace(site.StatusURL)
 		site.Referer = strings.TrimSpace(site.Referer)
 		site.CodexProviderSection = stringFallback(strings.TrimSpace(site.CodexProviderSection), "codex-api-key")
 		site.CodexBaseURL = strings.TrimSpace(site.CodexBaseURL)
 		site.ClaudeProviderSection = stringFallback(strings.TrimSpace(site.ClaudeProviderSection), "claude-api-key")
 		site.ClaudeBaseURL = strings.TrimSpace(site.ClaudeBaseURL)
+		site.StatusAllow = normalizeStatusAllow(site.StatusAllow)
+		// Backfill known site defaults so existing DB configs pick up model-status.
+		if site.Key == "muyuan" {
+			if site.StatusURL == "" {
+				site.StatusURL = "https://muyuan.do/api/model-status"
+			}
+			if site.Referer == "" || strings.Contains(site.Referer, "/pricing") {
+				site.Referer = "https://muyuan.do/model-status"
+			}
+			if len(site.StatusAllow) == 0 {
+				site.StatusAllow = []string{"green", "yellow"}
+			}
+		}
 		if site.Name == "" {
 			site.Name = fmt.Sprintf("公益站 %d", i+1)
 		}
@@ -166,6 +188,30 @@ func NormalizeCharityModelMonitorSites(sites []CharityModelMonitorSite) []Charit
 		result = append(result, site)
 	}
 	return result
+}
+
+func normalizeStatusAllow(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		status := strings.ToLower(strings.TrimSpace(value))
+		if status == "" {
+			continue
+		}
+		if _, ok := seen[status]; ok {
+			continue
+		}
+		seen[status] = struct{}{}
+		result = append(result, status)
+	}
+	return result
+}
+
+func DefaultModelStatusAllow() []string {
+	return []string{"green", "yellow"}
 }
 
 func stringFallback(value, fallback string) string {
