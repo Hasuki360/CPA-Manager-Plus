@@ -18,6 +18,7 @@ export type ProviderKind =
   | 'gemini'
   | 'interactions'
   | 'codex'
+  | 'xai'
   | 'claude'
   | 'vertex'
   | 'openai';
@@ -26,6 +27,7 @@ export const PROVIDER_KINDS: readonly ProviderKind[] = [
   'gemini',
   'interactions',
   'codex',
+  'xai',
   'claude',
   'vertex',
   'openai',
@@ -59,13 +61,14 @@ interface ProviderRowBase {
 export type ProviderRow =
   | (ProviderRowBase & { kind: 'gemini'; raw: GeminiKeyConfig })
   | (ProviderRowBase & { kind: 'interactions'; raw: GeminiKeyConfig })
-  | (ProviderRowBase & { kind: 'codex' | 'claude' | 'vertex'; raw: ProviderKeyConfig })
+  | (ProviderRowBase & { kind: 'codex' | 'xai' | 'claude' | 'vertex'; raw: ProviderKeyConfig })
   | (ProviderRowBase & { kind: 'openai'; raw: OpenAIProviderConfig });
 
 export interface BuildProviderRowsInput {
   gemini: GeminiKeyConfig[];
   interactions?: GeminiKeyConfig[];
   codex: ProviderKeyConfig[];
+  xai?: ProviderKeyConfig[];
   claude: ProviderKeyConfig[];
   vertex: ProviderKeyConfig[];
   openai: OpenAIProviderConfig[];
@@ -77,7 +80,11 @@ const collectModelNames = (models?: { name: string }[]): string[] =>
 
 const buildHaystack = (parts: Array<string | undefined>): string =>
   parts
-    .map((part) => String(part ?? '').trim().toLowerCase())
+    .map((part) =>
+      String(part ?? '')
+        .trim()
+        .toLowerCase()
+    )
     .filter(Boolean)
     .join('\n');
 
@@ -87,7 +94,7 @@ const getKeyConfigSortName = (config: GeminiKeyConfig | ProviderKeyConfig): stri
     .find(Boolean) ?? '';
 
 function buildKeyConfigRow(
-  kind: 'gemini' | 'interactions' | 'codex' | 'claude' | 'vertex',
+  kind: 'gemini' | 'interactions' | 'codex' | 'xai' | 'claude' | 'vertex',
   config: GeminiKeyConfig | ProviderKeyConfig,
   originalIndex: number,
   usageByProvider: ProviderRecentUsageMap,
@@ -164,53 +171,83 @@ export function buildProviderRows({
   gemini,
   interactions = [],
   codex,
+  xai = [],
   claude,
   vertex,
   openai,
   usageByProvider,
 }: BuildProviderRowsInput): ProviderRow[] {
-  const keyConfigDisplayNames = buildKeyConfigDisplayNames(codex, claude, vertex, gemini, interactions);
+  // Per-kind display maps so ordinals don't collide across provider types.
+  const geminiNames = buildKeyConfigDisplayNames(gemini);
+  const interactionsNames = buildKeyConfigDisplayNames(interactions);
+  const codexNames = buildKeyConfigDisplayNames(codex);
+  const xaiNames = buildKeyConfigDisplayNames(xai);
+  const claudeNames = buildKeyConfigDisplayNames(claude);
+  const vertexNames = buildKeyConfigDisplayNames(vertex);
   return [
-    ...gemini.map((config, index) => buildKeyConfigRow('gemini', config, index, usageByProvider, keyConfigDisplayNames)),
-    ...interactions.map((config, index) =>
-      buildKeyConfigRow('interactions', config, index, usageByProvider, keyConfigDisplayNames)
+    ...gemini.map((config, index) =>
+      buildKeyConfigRow('gemini', config, index, usageByProvider, geminiNames)
     ),
-    ...codex.map((config, index) => buildKeyConfigRow('codex', config, index, usageByProvider, keyConfigDisplayNames)),
-    ...claude.map((config, index) => buildKeyConfigRow('claude', config, index, usageByProvider, keyConfigDisplayNames)),
-    ...vertex.map((config, index) => buildKeyConfigRow('vertex', config, index, usageByProvider, keyConfigDisplayNames)),
+    ...interactions.map((config, index) =>
+      buildKeyConfigRow('interactions', config, index, usageByProvider, interactionsNames)
+    ),
+    ...codex.map((config, index) =>
+      buildKeyConfigRow('codex', config, index, usageByProvider, codexNames)
+    ),
+    ...xai.map((config, index) =>
+      buildKeyConfigRow('xai', config, index, usageByProvider, xaiNames)
+    ),
+    ...claude.map((config, index) =>
+      buildKeyConfigRow('claude', config, index, usageByProvider, claudeNames)
+    ),
+    ...vertex.map((config, index) =>
+      buildKeyConfigRow('vertex', config, index, usageByProvider, vertexNames)
+    ),
     ...openai.map((provider, index) => buildOpenAIRow(provider, index, usageByProvider)),
   ];
 }
 
-/** map key = `${kind}:${originalIndex}` → display label */
+/** map key = `${originalIndex}` → friendly display label within one provider kind */
 function buildKeyConfigDisplayNames(
-  ...groups: Array<Array<{ prefix?: string; name?: string; baseUrl?: string }>>
+  items: Array<{ prefix?: string; name?: string; baseUrl?: string }>
 ): Map<string, string> {
   const map = new Map<string, string>();
-  for (const items of groups) {
-    if (!items.length) continue;
-    const hostCounts = new Map<string, number>();
-    items.forEach((item) => {
-      if (item.prefix?.trim()) return;
-      if (item.name?.trim()) return;
-      const host = extractHostFromUrl(item.baseUrl);
-      if (host) hostCounts.set(host, (hostCounts.get(host) || 0) + 1);
-    });
-    const ordinals = new Map<string, number>();
-    items.forEach((item, index) => {
-      const prefix = item.prefix?.trim();
-      if (prefix) { map.set(`${index}`, prefix); return; }
-      const name = item.name?.trim();
-      if (name) { map.set(`${index}`, name); return; }
-      const host = extractHostFromUrl(item.baseUrl);
-      if (!host) { map.set(`${index}`, ''); return; }
-      const count = hostCounts.get(host) || 0;
-      if (count <= 1) { map.set(`${index}`, host); return; }
-      const ordinal = (ordinals.get(host) || 0) + 1;
-      ordinals.set(host, ordinal);
-      map.set(`${index}`, `${host} #${ordinal}`);
-    });
-  }
+  if (!items.length) return map;
+
+  const hostCounts = new Map<string, number>();
+  items.forEach((item) => {
+    if (item.prefix?.trim()) return;
+    if (item.name?.trim()) return;
+    const host = extractHostFromUrl(item.baseUrl);
+    if (host) hostCounts.set(host, (hostCounts.get(host) || 0) + 1);
+  });
+
+  const ordinals = new Map<string, number>();
+  items.forEach((item, index) => {
+    const prefix = item.prefix?.trim();
+    if (prefix) {
+      map.set(`${index}`, prefix);
+      return;
+    }
+    const name = item.name?.trim();
+    if (name) {
+      map.set(`${index}`, name);
+      return;
+    }
+    const host = extractHostFromUrl(item.baseUrl);
+    if (!host) {
+      map.set(`${index}`, '');
+      return;
+    }
+    const count = hostCounts.get(host) || 0;
+    if (count <= 1) {
+      map.set(`${index}`, host);
+      return;
+    }
+    const ordinal = (ordinals.get(host) || 0) + 1;
+    ordinals.set(host, ordinal);
+    map.set(`${index}`, `${host} #${ordinal}`);
+  });
   return map;
 }
 

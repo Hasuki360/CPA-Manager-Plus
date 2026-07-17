@@ -579,6 +579,7 @@ export function MonitoringCenterPage() {
           geminiApiKeys: config?.geminiApiKeys || [],
           claudeApiKeys: config?.claudeApiKeys || [],
           codexApiKeys: config?.codexApiKeys || [],
+          xaiApiKeys: config?.xaiApiKeys || [],
           vertexApiKeys: config?.vertexApiKeys || [],
           openaiCompatibility: config?.openaiCompatibility || [],
         })
@@ -727,8 +728,7 @@ export function MonitoringCenterPage() {
             )
           )
           .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
-        const nextState =
-          mergeObservedAccountQuotaState(state, targets, observedEntries) ?? state;
+        const nextState = mergeObservedAccountQuotaState(state, targets, observedEntries) ?? state;
         changed = changed || nextState !== state;
         return [account, nextState] as const;
       })
