@@ -47,6 +47,7 @@ import type {
   OpenAIProviderConfig,
   ProviderKeyConfig,
 } from '@/types';
+import { createConfigMutationLock } from './model/configMutationLock';
 import styles from './AiProvidersPage.module.scss';
 
 /** 公益站检测时间统一按东八区展示（后端存 UTC RFC3339）。 */
@@ -193,6 +194,16 @@ export function AiProvidersPage() {
   const [expandedCharityKeys, setExpandedCharityKeys] = useState<Set<string>>(() => new Set());
   const http500DirtyRef = useRef(false);
   const [charityLoadError, setCharityLoadError] = useState('');
+  const configMutationLockRef = useRef(createConfigMutationLock());
+  const beginConfigMutation = useCallback((switchingKey: string) => {
+    if (!configMutationLockRef.current.tryAcquire()) return false;
+    setConfigSwitchingKey(switchingKey);
+    return true;
+  }, []);
+  const finishConfigMutation = useCallback(() => {
+    configMutationLockRef.current.release();
+    setConfigSwitchingKey(null);
+  }, []);
 
   // 表格筛选 / 排序 / 详情状态
   const [kindFilter, setKindFilter] = useState<ProviderKindFilter>('all');
@@ -608,6 +619,7 @@ export function AiProvidersPage() {
     actions: Map<string, ProviderHealthCheckApplyAction>
   ) => {
     if (actions.size === 0) return;
+    if (configMutationLockRef.current.isLocked()) return;
 
     const rowByKey = new Map(rows.map((row) => [row.key, row]));
     const previous = {
@@ -717,7 +729,7 @@ export function AiProvidersPage() {
       return;
     }
 
-    setConfigSwitchingKey('health-check');
+    if (!beginConfigMutation('health-check')) return;
 
     const applyLocalState = (
       gemini: GeminiKeyConfig[],
@@ -841,7 +853,7 @@ export function AiProvidersPage() {
       showNotification(`${t('notification.update_failed')}: ${message}`, 'error');
       throw err;
     } finally {
-      setConfigSwitchingKey(null);
+      finishConfigMutation();
     }
   };
 
@@ -861,7 +873,7 @@ export function AiProvidersPage() {
       if (!current) return;
 
       const switchingKey = `${provider}:${current.apiKey}`;
-      setConfigSwitchingKey(switchingKey);
+      if (!beginConfigMutation(switchingKey)) return;
 
       const previousList = source;
       const nextExcluded = enabled
@@ -904,7 +916,7 @@ export function AiProvidersPage() {
         }
         showNotification(`${t('notification.update_failed')}: ${message}`, 'error');
       } finally {
-        setConfigSwitchingKey(null);
+        finishConfigMutation();
       }
       return;
     }
@@ -921,7 +933,7 @@ export function AiProvidersPage() {
     if (!current) return;
 
     const switchingKey = `${provider}:${current.apiKey}`;
-    setConfigSwitchingKey(switchingKey);
+    if (!beginConfigMutation(switchingKey)) return;
 
     const previousList = source;
     const nextExcluded = enabled
@@ -984,7 +996,7 @@ export function AiProvidersPage() {
       }
       showNotification(`${t('notification.update_failed')}: ${message}`, 'error');
     } finally {
-      setConfigSwitchingKey(null);
+      finishConfigMutation();
     }
   };
 
@@ -993,7 +1005,7 @@ export function AiProvidersPage() {
     if (!current) return;
 
     const switchingKey = `openai:${current.name}:${index}`;
-    setConfigSwitchingKey(switchingKey);
+    if (!beginConfigMutation(switchingKey)) return;
 
     const previousList = openaiProviders;
     const nextItem: OpenAIProviderConfig = { ...current, disabled: !enabled };
@@ -1017,7 +1029,7 @@ export function AiProvidersPage() {
       clearCache('openai-compatibility');
       showNotification(`${t('notification.update_failed')}: ${message}`, 'error');
     } finally {
-      setConfigSwitchingKey(null);
+      finishConfigMutation();
     }
   };
 
@@ -1032,7 +1044,7 @@ export function AiProvidersPage() {
     if (!current) return;
 
     const switchingKey = `${provider}:${current.apiKey}:websockets`;
-    setConfigSwitchingKey(switchingKey);
+    if (!beginConfigMutation(switchingKey)) return;
 
     const previousList = source;
     const nextItem: ProviderKeyConfig = { ...current, websockets: enabled };
@@ -1083,7 +1095,7 @@ export function AiProvidersPage() {
       }
       showNotification(`${t('notification.update_failed')}: ${message}`, 'error');
     } finally {
-      setConfigSwitchingKey(null);
+      finishConfigMutation();
     }
   };
 
@@ -1097,7 +1109,7 @@ export function AiProvidersPage() {
     if (!current) return;
 
     const switchingKey = `${provider}:${current.apiKey}:cloak`;
-    setConfigSwitchingKey(switchingKey);
+    if (!beginConfigMutation(switchingKey)) return;
 
     const previousList = source;
     const nextItem: ProviderKeyConfig = enabled
@@ -1141,7 +1153,7 @@ export function AiProvidersPage() {
       }
       showNotification(`${t('notification.update_failed')}: ${message}`, 'error');
     } finally {
-      setConfigSwitchingKey(null);
+      finishConfigMutation();
     }
   };
 
@@ -1156,7 +1168,7 @@ export function AiProvidersPage() {
       if (!current) return;
 
       const switchingKey = `${provider}:${current.apiKey}:disable-cooling`;
-      setConfigSwitchingKey(switchingKey);
+      if (!beginConfigMutation(switchingKey)) return;
 
       const previousList = source;
       const nextItem: GeminiKeyConfig = { ...current, disableCooling: enabled };
@@ -1200,7 +1212,7 @@ export function AiProvidersPage() {
         }
         showNotification(`${t('notification.update_failed')}: ${message}`, 'error');
       } finally {
-        setConfigSwitchingKey(null);
+        finishConfigMutation();
       }
       return;
     }
@@ -1210,7 +1222,7 @@ export function AiProvidersPage() {
       if (!current) return;
 
       const switchingKey = `${provider}:${current.name}:${index}:disable-cooling`;
-      setConfigSwitchingKey(switchingKey);
+      if (!beginConfigMutation(switchingKey)) return;
 
       const previousList = openaiProviders;
       const nextItem: OpenAIProviderConfig = { ...current, disableCooling: enabled };
@@ -1231,7 +1243,7 @@ export function AiProvidersPage() {
         clearCache('openai-compatibility');
         showNotification(`${t('notification.update_failed')}: ${message}`, 'error');
       } finally {
-        setConfigSwitchingKey(null);
+        finishConfigMutation();
       }
       return;
     }
@@ -1242,7 +1254,7 @@ export function AiProvidersPage() {
     if (!current) return;
 
     const switchingKey = `${provider}:${current.apiKey}:disable-cooling`;
-    setConfigSwitchingKey(switchingKey);
+    if (!beginConfigMutation(switchingKey)) return;
 
     const previousList = source;
     const nextItem: ProviderKeyConfig = { ...current, disableCooling: enabled };
@@ -1293,7 +1305,7 @@ export function AiProvidersPage() {
       }
       showNotification(`${t('notification.update_failed')}: ${message}`, 'error');
     } finally {
-      setConfigSwitchingKey(null);
+      finishConfigMutation();
     }
   };
 
@@ -1307,7 +1319,7 @@ export function AiProvidersPage() {
       const current = source[row.originalIndex];
       if (!current || current.priority === nextPriority) return;
 
-      setConfigSwitchingKey(switchingKey);
+      if (!beginConfigMutation(switchingKey)) return;
       const previousList = source;
       const nextList = previousList.map((item, idx) =>
         idx === row.originalIndex ? { ...item, priority: nextPriority } : item
@@ -1351,7 +1363,7 @@ export function AiProvidersPage() {
         }
         showNotification(`${t('notification.update_failed')}: ${message}`, 'error');
       } finally {
-        setConfigSwitchingKey(null);
+        finishConfigMutation();
       }
       return;
     }
@@ -1360,7 +1372,7 @@ export function AiProvidersPage() {
       const current = openaiProviders[row.originalIndex];
       if (!current || current.priority === nextPriority) return;
 
-      setConfigSwitchingKey(switchingKey);
+      if (!beginConfigMutation(switchingKey)) return;
       const previousList = openaiProviders;
       const nextList = previousList.map((item, idx) =>
         idx === row.originalIndex ? { ...item, priority: nextPriority } : item
@@ -1384,7 +1396,7 @@ export function AiProvidersPage() {
         clearCache('openai-compatibility');
         showNotification(`${t('notification.update_failed')}: ${message}`, 'error');
       } finally {
-        setConfigSwitchingKey(null);
+        finishConfigMutation();
       }
       return;
     }
@@ -1400,7 +1412,7 @@ export function AiProvidersPage() {
     const current = source[row.originalIndex];
     if (!current || current.priority === nextPriority) return;
 
-    setConfigSwitchingKey(switchingKey);
+    if (!beginConfigMutation(switchingKey)) return;
     const previousList = source;
     const nextList = previousList.map((item, idx) =>
       idx === row.originalIndex ? { ...item, priority: nextPriority } : item
@@ -1463,7 +1475,7 @@ export function AiProvidersPage() {
       }
       showNotification(`${t('notification.update_failed')}: ${message}`, 'error');
     } finally {
-      setConfigSwitchingKey(null);
+      finishConfigMutation();
     }
   };
 
