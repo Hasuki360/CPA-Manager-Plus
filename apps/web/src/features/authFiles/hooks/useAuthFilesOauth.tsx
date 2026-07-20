@@ -6,6 +6,7 @@ import type { AuthFileItem, OAuthModelAliasEntry } from '@/types';
 import type { AuthFileModelItem, OAuthConfigLoadState } from '@/features/authFiles/constants';
 import { normalizeProviderKey } from '@/features/authFiles/constants';
 import {
+  applyOAuthAliasWritePlans,
   createSerialAsyncQueue,
   findChannelMappings,
   getHttpStatusCode,
@@ -477,31 +478,13 @@ export function useAuthFilesOauth(options: UseAuthFilesOauthOptions): UseAuthFil
           return;
         }
 
-        // Capture pre-write snapshots so a mid-loop network failure can best-effort roll back.
-        const previousByChannel = new Map(
-          planResult.plans.map((plan) => {
-            const { mappings } = findChannelMappings(latest, plan.channel);
-            return [plan.channel, mappings] as const;
-          })
+        await applyOAuthAliasWritePlans(
+          planResult.plans.map((plan) => ({
+            ...plan,
+            previousMappings: findChannelMappings(latest, plan.channel).mappings,
+          })),
+          persistChannelMappings
         );
-        const appliedChannels: string[] = [];
-
-        try {
-          for (const plan of planResult.plans) {
-            await persistChannelMappings(plan.channel, plan.nextMappings);
-            appliedChannels.push(plan.channel);
-          }
-        } catch (writeErr: unknown) {
-          for (const channel of appliedChannels) {
-            const previous = previousByChannel.get(channel) ?? [];
-            try {
-              await persistChannelMappings(channel, previous);
-            } catch {
-              // Best-effort rollback; surface the original write error below.
-            }
-          }
-          throw writeErr;
-        }
 
         showNotification(t('oauth_model_alias.save_success'), 'success');
       });
@@ -534,12 +517,16 @@ export function useAuthFilesOauth(options: UseAuthFilesOauthOptions): UseAuthFil
             );
             if (providersToUpdate.length === 0) return;
 
-            for (const [channel, mappings] of providersToUpdate) {
-              const nextMappings = mappings.filter(
-                (mapping) => (mapping.alias ?? '').trim().toLowerCase() !== aliasKey
-              );
-              await persistChannelMappings(channel, nextMappings);
-            }
+            await applyOAuthAliasWritePlans(
+              providersToUpdate.map(([channel, mappings]) => ({
+                channel,
+                previousMappings: mappings,
+                nextMappings: mappings.filter(
+                  (mapping) => (mapping.alias ?? '').trim().toLowerCase() !== aliasKey
+                ),
+              })),
+              persistChannelMappings
+            );
 
             showNotification(t('oauth_model_alias.delete_success'), 'success');
           });
@@ -556,8 +543,11 @@ export function useAuthFilesOauth(options: UseAuthFilesOauthOptions): UseAuthFil
     modelAliasError,
     allProviderModels,
     providerList,
-    loadExcluded: () => loadExcluded(),
-    loadModelAlias: () => loadModelAlias(),
+    // Return the memoized callbacks directly. Wrapping them in new arrow functions
+    // each render breaks AuthFilesPage init effects that depend on these refs and
+    // causes an infinite GET loop (loader setState → re-render → new refs → effect).
+    loadExcluded,
+    loadModelAlias,
     deleteExcluded,
     deleteModelAlias,
     handleMappingUpdate,

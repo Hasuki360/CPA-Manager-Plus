@@ -148,6 +148,39 @@ export type OAuthAliasRenamePlan = {
   nextMappings: OAuthModelAliasEntry[];
 };
 
+export type OAuthAliasWritePlan = OAuthAliasRenamePlan & {
+  previousMappings: OAuthModelAliasEntry[];
+};
+
+export const applyOAuthAliasWritePlans = async (
+  plans: OAuthAliasWritePlan[],
+  persist: (channel: string, mappings: OAuthModelAliasEntry[]) => Promise<void>
+): Promise<void> => {
+  const appliedPlans: OAuthAliasWritePlan[] = [];
+  let activePlan: OAuthAliasWritePlan | null = null;
+
+  try {
+    for (const plan of plans) {
+      activePlan = plan;
+      await persist(plan.channel, plan.nextMappings);
+      appliedPlans.push(plan);
+      activePlan = null;
+    }
+  } catch (writeError: unknown) {
+    // The failing request may have reached the server before its response was lost,
+    // so restore that channel too. Rewriting the previous value is safe if it did not apply.
+    const rollbackPlans = activePlan ? [...appliedPlans, activePlan] : appliedPlans;
+    for (const plan of [...rollbackPlans].reverse()) {
+      try {
+        await persist(plan.channel, plan.previousMappings);
+      } catch {
+        // Best-effort rollback. The caller reloads the server state and reports the original error.
+      }
+    }
+    throw writeError;
+  }
+};
+
 export type OAuthAliasRenamePlanResult =
   | { ok: true; plans: OAuthAliasRenamePlan[] }
   | {
@@ -242,9 +275,7 @@ export const mergeOAuthAliasLink = (
   ) {
     return { kind: 'unchanged' };
   }
-  if (
-    currentMappings.some((mapping) => (mapping.alias ?? '').trim().toLowerCase() === aliasKey)
-  ) {
+  if (currentMappings.some((mapping) => (mapping.alias ?? '').trim().toLowerCase() === aliasKey)) {
     return { kind: 'rejected', reason: 'duplicate_alias', alias: aliasTrim };
   }
 
@@ -254,10 +285,7 @@ export const mergeOAuthAliasLink = (
   };
 };
 
-export const formatOAuthAliasPreview = (
-  mappings: OAuthModelAliasEntry[],
-  maxItems = 3
-): string => {
+export const formatOAuthAliasPreview = (mappings: OAuthModelAliasEntry[], maxItems = 3): string => {
   if (!mappings.length) return '';
   const previews = mappings.slice(0, maxItems).map((entry) => {
     const name = String(entry.name ?? '').trim();

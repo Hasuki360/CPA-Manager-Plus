@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  applyOAuthAliasWritePlans,
   createSerialAsyncQueue,
   findChannelMappings,
   formatOAuthAliasPreview,
@@ -8,6 +9,47 @@ import {
   normalizeOAuthAliasEntries,
   planOAuthAliasRename,
 } from './oauthAliasValidation';
+
+describe('applyOAuthAliasWritePlans', () => {
+  it('rolls back already-applied channels when a later write fails', async () => {
+    const stored = new Map([
+      ['claude', [{ name: 'claude-upstream', alias: 'shared' }]],
+      ['codex', [{ name: 'codex-upstream', alias: 'shared' }]],
+    ]);
+    const writes: string[] = [];
+
+    let codexWrites = 0;
+    const persist = async (channel: string, mappings: Array<{ name: string; alias: string }>) => {
+      writes.push(channel);
+      stored.set(channel, mappings);
+      if (channel === 'codex' && codexWrites++ === 0) {
+        throw new Error('response lost after write');
+      }
+    };
+
+    await expect(
+      applyOAuthAliasWritePlans(
+        [
+          {
+            channel: 'claude',
+            previousMappings: [{ name: 'claude-upstream', alias: 'shared' }],
+            nextMappings: [],
+          },
+          {
+            channel: 'codex',
+            previousMappings: [{ name: 'codex-upstream', alias: 'shared' }],
+            nextMappings: [],
+          },
+        ],
+        persist
+      )
+    ).rejects.toThrow('response lost after write');
+
+    expect(writes).toEqual(['claude', 'codex', 'codex', 'claude']);
+    expect(stored.get('claude')).toEqual([{ name: 'claude-upstream', alias: 'shared' }]);
+    expect(stored.get('codex')).toEqual([{ name: 'codex-upstream', alias: 'shared' }]);
+  });
+});
 
 describe('normalizeOAuthAliasEntries', () => {
   it('accepts multiple aliases for the same upstream name', () => {
@@ -138,9 +180,11 @@ describe('mergeOAuthAliasLink', () => {
       reason: 'same_as_name',
       alias: 'same',
     });
-    expect(
-      mergeOAuthAliasLink([{ name: 'a', alias: 'shared' }], 'b', 'SHARED')
-    ).toEqual({ kind: 'rejected', reason: 'duplicate_alias', alias: 'SHARED' });
+    expect(mergeOAuthAliasLink([{ name: 'a', alias: 'shared' }], 'b', 'SHARED')).toEqual({
+      kind: 'rejected',
+      reason: 'duplicate_alias',
+      alias: 'SHARED',
+    });
   });
 });
 
