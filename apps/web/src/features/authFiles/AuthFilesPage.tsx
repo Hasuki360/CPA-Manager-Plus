@@ -297,6 +297,7 @@ export function AuthFilesPage() {
     deleting,
     deletingAll,
     statusUpdating,
+    credentialRefreshing = {},
     batchStatusUpdating,
     batchFieldsUpdating,
     fileInputRef,
@@ -307,6 +308,7 @@ export function AuthFilesPage() {
     handleDelete,
     handleDeleteAll,
     handleDownload,
+    handleCredentialRefresh,
     handleStatusToggle,
     toggleSelect,
     selectAllVisible,
@@ -1997,9 +1999,14 @@ export function AuthFilesPage() {
         editor={prefixProxyEditor}
         updatedText={prefixProxyUpdatedText}
         dirty={prefixProxyDirty}
+        credentialRefreshing={Boolean(
+          prefixProxyEditor?.authFile &&
+          credentialRefreshing[getAuthFileSelectionKey(prefixProxyEditor.authFile)] === true
+        )}
         onClose={closePrefixProxyEditor}
         onCopyText={copyTextWithNotification}
         onSave={handlePrefixProxySave}
+        onRefreshCredential={handleCredentialRefresh}
         onChange={handlePrefixProxyChange}
       />
 

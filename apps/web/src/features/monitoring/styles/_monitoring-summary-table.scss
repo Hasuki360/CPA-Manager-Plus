@@ -1093,20 +1093,6 @@
     color: var(--monitor-muted);
   }
 
-  .realtimeFailureStatus {
-    position: relative;
-    display: inline-flex;
-    width: fit-content;
-    max-width: 100%;
-    align-items: center;
-    outline: none;
-  }
-
-  .realtimeFailureStatus:focus-visible .realtimeRequestStatus {
-    text-decoration: underline;
-    text-underline-offset: 3px;
-  }
-
   .realtimeRequestStatus {
     display: inline-flex;
     align-items: center;
@@ -1145,6 +1131,7 @@
     --monitor-accent: var(--primary-color);
     --monitor-accent-strong: var(--primary-active);
     --monitor-red: var(--error-color);
+    --monitor-diagnostic-color: var(--monitor-red);
 
     position: fixed;
     z-index: 2030;
@@ -1157,7 +1144,7 @@
     overflow: auto;
     padding: 10px 12px;
     padding-right: 42px;
-    border: 1px solid color-mix(in srgb, var(--monitor-red) 26%, var(--monitor-line));
+    border: 1px solid color-mix(in srgb, var(--monitor-diagnostic-color) 26%, var(--monitor-line));
     border-radius: 8px;
     background: var(--monitor-surface-elevated);
     box-shadow: var(--shadow-lg);
@@ -1175,6 +1162,10 @@
     user-select: text;
   }
 
+  .realtimeSuccessDiagnosticTooltip {
+    --monitor-diagnostic-color: var(--monitor-green);
+  }
+
   .realtimeFailureTooltip::before {
     content: '';
     position: absolute;
@@ -1189,15 +1180,19 @@
   .realtimeFailureTooltipBelow::before {
     top: -5px;
     bottom: auto;
-    border-left: 1px solid color-mix(in srgb, var(--monitor-red) 26%, var(--monitor-line));
-    border-top: 1px solid color-mix(in srgb, var(--monitor-red) 26%, var(--monitor-line));
+    border-left: 1px solid
+      color-mix(in srgb, var(--monitor-diagnostic-color) 26%, var(--monitor-line));
+    border-top: 1px solid
+      color-mix(in srgb, var(--monitor-diagnostic-color) 26%, var(--monitor-line));
   }
 
   .realtimeFailureTooltipAbove::before {
     top: auto;
     bottom: -5px;
-    border-right: 1px solid color-mix(in srgb, var(--monitor-red) 26%, var(--monitor-line));
-    border-bottom: 1px solid color-mix(in srgb, var(--monitor-red) 26%, var(--monitor-line));
+    border-right: 1px solid
+      color-mix(in srgb, var(--monitor-diagnostic-color) 26%, var(--monitor-line));
+    border-bottom: 1px solid
+      color-mix(in srgb, var(--monitor-diagnostic-color) 26%, var(--monitor-line));
   }
 
   .realtimeFailureTooltipOpen {
@@ -1232,7 +1227,7 @@
   }
 
   .realtimeFailureTooltipStatus {
-    color: var(--monitor-red);
+    color: var(--monitor-diagnostic-color);
     font-size: 11px;
     font-weight: 750;
     line-height: 1.2;

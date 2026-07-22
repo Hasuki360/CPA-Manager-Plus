@@ -54,21 +54,56 @@ inside GitHub Actions.
 
 Write the post for users and community members rather than code reviewers:
 
-- open with one clear release theme and its practical value;
-- select 3-6 high-value highlights;
-- make each bullet express exactly one feature, fix, or user benefit;
-- target 15-28 Chinese characters and never exceed 32 Chinese characters per
-  bullet;
-- do not join changes with semicolons, compound clauses, or long capability
-  lists; split the idea or leave the detail in the GitHub Release;
-- omit commit counts, file counts, internal scopes, module paths, and other
-  technical noise unless users must act on it;
-- include upgrade cautions only when users need to take action or understand a
-  meaningful compatibility, data, security, or behavior change;
+- use `## <M> 月 <D> 日 v<version>` as the Markdown heading, with `更新内容`,
+  `注意事项`, `发布截图`, and `致谢` sections as applicable; end the Markdown
+  summary and release closeout with the separate title
+  `CPA-Manager-Plus [<M>月<D>日：<primary benefit>，<supporting benefit>]`;
+- make the standalone title reflect the release's main user value, without
+  implementation trivia; it is not part of the date/version heading;
+- list every release-relevant, user-visible semantic change in `更新内容`; do
+  not impose a fixed item count, but merge implementation commits that result
+  in the same user behavior;
+- keep each bullet to one concise sentence with the product subject and its
+  user-visible result; retain necessary product terms but omit CRUD lists,
+  commit/file counts, internal paths, tests, demo fixtures, and pure CI noise;
+- include `注意事项` only for upgrade, data, compatibility, configuration, or
+  meaningful behavior changes that users need to act on or understand;
+- include `发布截图` only when a specific screen or workflow should be shown;
+- keep `发布截图` and the standalone community-summary title in the Markdown
+  release summary only; Telegram HTML must omit both because the workflow does
+  not attach media and the title is not part of the message format;
 - include acknowledgements only for external contributors and preserve their
   GitHub profile links;
 - keep claims factual and grounded in the formal release notes;
 - keep the complete HTML body within 3,500 characters.
+
+Markdown community-summary template:
+
+```markdown
+## <M> 月 <D> 日 v<version>
+
+### 更新内容
+
+- <用户可感知的更新>
+
+### 注意事项
+
+- <需要升级、配置或兼容性关注的事项>
+
+### 发布截图
+
+<具体页面或操作路径；没有推荐时省略本节>
+
+### 致谢
+
+- [@contributor](https://github.com/contributor) - <贡献带来的用户价值>
+
+CPA-Manager-Plus [<M>月<D>日：<primary benefit>，<supporting benefit>]
+```
+
+Omit optional sections that have no content. The Telegram HTML mirrors only
+the applicable `更新内容`, `注意事项`, and `致谢` sections; do not append the
+standalone Markdown community-summary title.
 
 Telegram posts use a conservative HTML subset supported by the Bot API:
 

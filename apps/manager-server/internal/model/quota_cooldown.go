@@ -18,6 +18,7 @@ type QuotaCooldown struct {
 	Provider         string
 	ReasonCode       string
 	WindowKind       string
+	EvidenceJSON     string
 	RecoverAtMS      int64
 	Owner            string
 	EventHash        string
@@ -37,6 +38,7 @@ type QuotaCooldownUpsert struct {
 	Provider         string
 	ReasonCode       string
 	WindowKind       string
+	EvidenceJSON     string
 	RecoverAtMS      int64
 	Owner            string
 	EventHash        string
