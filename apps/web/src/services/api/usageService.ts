@@ -183,6 +183,8 @@ export interface ManagerCodexInspectionConfig {
   timeout?: number;
   retries?: number;
   userAgent?: string;
+  xaiInferenceUserAgent?: string;
+  xaiInferenceEnabled?: boolean;
   xaiInferenceModel?: string;
   xaiInferencePrompt?: string;
   usedPercentThreshold?: number;
@@ -1426,6 +1428,17 @@ const getDemoCodexInspectionActionsResponse = (
   const selected = resultIds.length
     ? detail.results.filter((result) => resultIds.includes(result.id))
     : detail.results;
+  const selectedIds = new Set(selected.map((result) => result.id));
+  detail.results = detail.results.map((result) => {
+    if (!selectedIds.has(result.id)) return result;
+    const executedAction = overrideByID.get(result.id) ?? result.action;
+    return {
+      ...result,
+      actionStatus: 'success',
+      executedAction,
+      actionError: undefined,
+    };
+  });
   return {
     outcomes: selected.map((result) => ({
       resultId: result.id,

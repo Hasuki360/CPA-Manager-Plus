@@ -21,6 +21,8 @@ export interface AuthPoolCleanConfig {
   timeout?: number;
   retries?: number;
   userAgent?: string;
+  xaiInferenceUserAgent?: string;
+  xaiInferenceEnabled?: boolean;
   xaiInferenceModel?: string;
   xaiInferencePrompt?: string;
   usedPercentThreshold?: number;

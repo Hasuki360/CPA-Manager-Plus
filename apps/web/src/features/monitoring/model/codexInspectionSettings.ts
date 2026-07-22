@@ -10,6 +10,7 @@ import { normalizeNumberValue } from '@/utils/quota';
 import {
   DEFAULT_XAI_INSPECTION_MODEL,
   DEFAULT_XAI_INSPECTION_PROMPT,
+  XAI_INFERENCE_USER_AGENT,
 } from '@/utils/quota/constants';
 
 export const CODEX_INSPECTION_SETTINGS_STORAGE_KEY = 'cli-proxy-codex-inspection-settings-v1';
@@ -61,6 +62,8 @@ export const DEFAULT_CODEX_INSPECTION_SETTINGS: CodexInspectionConfigurableSetti
   timeout: 15000,
   retries: 0,
   userAgent: 'codex_cli_rs/0.76.0 (Debian 13.0.0; x86_64) WindowsTerminal',
+  xaiInferenceUserAgent: XAI_INFERENCE_USER_AGENT,
+  xaiInferenceEnabled: false,
   xaiInferenceModel: DEFAULT_XAI_INSPECTION_MODEL,
   xaiInferencePrompt: DEFAULT_XAI_INSPECTION_PROMPT,
   usedPercentThreshold: 100,
@@ -179,6 +182,17 @@ export const readConfigurableSettingsFromConfig = (
     timeout: normalizeNumberValue(clean?.timeout) ?? undefined,
     retries: normalizeNumberValue(clean?.retries) ?? undefined,
     userAgent: readString(clean?.userAgent),
+    xaiInferenceUserAgent: readString(
+      cleanRecord.xaiInferenceUserAgent ??
+        cleanRecord.xai_inference_user_agent ??
+        cleanRecord['xai-inference-user-agent']
+    ),
+    xaiInferenceEnabled: readBoolean(
+      cleanRecord.xaiInferenceEnabled ??
+        cleanRecord.xai_inference_enabled ??
+        cleanRecord['xai-inference-enabled'],
+      false
+    ),
     xaiInferenceModel: readString(clean?.xaiInferenceModel),
     xaiInferencePrompt: readString(clean?.xaiInferencePrompt),
     usedPercentThreshold: normalizeNumberValue(clean?.usedPercentThreshold) ?? undefined,
@@ -199,6 +213,8 @@ type CodexInspectionConfigurableSettingsInput = {
   timeout?: unknown;
   retries?: unknown;
   userAgent?: unknown;
+  xaiInferenceUserAgent?: unknown;
+  xaiInferenceEnabled?: unknown;
   xaiInferenceModel?: unknown;
   xaiInferencePrompt?: unknown;
   usedPercentThreshold?: unknown;
@@ -249,6 +265,13 @@ export const normalizeConfigurableSettings = (
         ? DEFAULT_CODEX_INSPECTION_SETTINGS.retries
         : Math.max(0, Math.floor(retriesValue)),
     userAgent: readString(merged.userAgent) || DEFAULT_CODEX_INSPECTION_SETTINGS.userAgent,
+    xaiInferenceUserAgent:
+      readString(merged.xaiInferenceUserAgent) ||
+      DEFAULT_CODEX_INSPECTION_SETTINGS.xaiInferenceUserAgent,
+    xaiInferenceEnabled: readBoolean(
+      merged.xaiInferenceEnabled,
+      DEFAULT_CODEX_INSPECTION_SETTINGS.xaiInferenceEnabled
+    ),
     xaiInferenceModel:
       readString(merged.xaiInferenceModel) || DEFAULT_CODEX_INSPECTION_SETTINGS.xaiInferenceModel,
     xaiInferencePrompt:

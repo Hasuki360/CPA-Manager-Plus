@@ -6,24 +6,26 @@ import styles from '../CodexInspectionPage.module.scss';
 type CodexInspectionConfigOverviewProps = {
   title: string;
   editLabel: string;
-  interactionHint: string;
   copyLabel: string;
   copiedLabel: string;
   items: ConfigOverviewItem[];
   onEdit: (field?: string) => void;
   ariaLabel?: string;
+  compact?: boolean;
+  embedded?: boolean;
 };
 
 // 已存在配置的「读」面板:可点击的 label/value 概览卡,点任意卡片直达对应字段编辑。
 export function CodexInspectionConfigOverview({
   title,
   editLabel,
-  interactionHint,
   copyLabel,
   copiedLabel,
   items,
   onEdit,
   ariaLabel,
+  compact = false,
+  embedded = false,
 }: CodexInspectionConfigOverviewProps) {
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
@@ -38,11 +40,19 @@ export function CodexInspectionConfigOverview({
   };
 
   return (
-    <section className={styles.configOverview} aria-label={ariaLabel ?? title}>
+    <section
+      className={[
+        styles.configOverview,
+        compact ? styles.configOverviewCompact : '',
+        embedded ? styles.configOverviewEmbedded : '',
+      ]
+        .filter(Boolean)
+        .join(' ')}
+      aria-label={ariaLabel ?? title}
+    >
       <header className={styles.configOverviewHeader}>
         <div>
           <span className={styles.configOverviewTitle}>{title}</span>
-          <span className={styles.configOverviewInteractionHint}>{interactionHint}</span>
         </div>
         <button type="button" className={styles.configOverviewEdit} onClick={() => onEdit()}>
           <IconSettings size={14} />

@@ -1,6 +1,6 @@
 import type { TFunction } from 'i18next';
 import type { XaiBillingSummary } from '@/types';
-import { probeXaiBilling, probeXaiInference } from '@/utils/quota/providerRequests';
+import { probeXaiBilling, probeXaiInference, probeXaiQuota } from '@/utils/quota/providerRequests';
 import { formatQuotaResetTime } from '@/utils/quota/formatters';
 import { XaiProbeError } from '@/utils/quota/xaiErrors';
 import { formatXaiProbeIssue } from '@/utils/quota/xaiPresentation';
@@ -81,7 +81,10 @@ const buildXaiQuotaWindows = (summary: XaiBillingSummary): CodexInspectionQuotaW
   }
 
   const onDemandPercent = finitePercent(summary.onDemandUsedPercent);
-  if (onDemandPercent !== null || summary.onDemandCapCents !== null) {
+  if (
+    onDemandPercent !== null ||
+    (summary.onDemandCapCents !== null && summary.onDemandCapCents > 0)
+  ) {
     windows.push({
       id: 'xai-on-demand',
       labelKey: 'xai_quota.on_demand_cap',
@@ -124,6 +127,16 @@ const withRetry = async <T>(
 
 const shouldRetryXaiInference = (error: unknown) =>
   error instanceof XaiProbeError &&
+  [
+    'upstream_error',
+    'rate_limited',
+    'probe_invalid',
+    'model_unavailable',
+    'protocol_changed',
+  ].includes(error.decision.classification);
+
+const shouldRetryXaiBilling = (error: unknown) =>
+  !(error instanceof XaiProbeError) ||
   [
     'upstream_error',
     'rate_limited',
@@ -195,7 +208,7 @@ export const inspectSingleXaiAccount = async (
       isQuota: false,
       autoRecoverEligible: false,
       error: t('xai_quota.missing_auth_index'),
-      planType: 'xai',
+      planType: null,
       quotaWindows: [],
       errorKind: 'missing_auth_index',
       errorDetail: t('xai_quota.missing_auth_index'),
@@ -204,25 +217,85 @@ export const inspectSingleXaiAccount = async (
 
   const requestConfig = settings.timeout > 0 ? { timeout: settings.timeout } : undefined;
   let billingSummary: XaiBillingSummary | null = null;
+  let billingStatusCode: number | null = null;
+  let billingError: unknown = null;
+  let billingPartial = false;
+  let billingSource: 'billing' | 'official-api' = 'billing';
   try {
     const billing = await withRetry(
       settings.retries,
-      () => probeXaiBilling(account.raw, t, requestConfig),
-      () => true
+      () =>
+        settings.xaiInferenceEnabled
+          ? probeXaiBilling(account.raw, t, requestConfig)
+          : probeXaiQuota(account.raw, t, requestConfig),
+      shouldRetryXaiBilling
     );
     billingSummary = billing.summary;
-  } catch {
-    // Billing is supplementary quota evidence. A real inference remains the
-    // health authority even when the billing endpoints are unavailable.
+    billingStatusCode = billing.statusCode ?? null;
+    billingPartial = billing.partial;
+    billingError = billing.blockingFailure ?? null;
+    billingSource =
+      'source' in billing && billing.source === 'official-api' ? 'official-api' : 'billing';
+  } catch (error) {
+    billingError = error;
+    // With inference enabled, billing remains supplementary quota evidence.
+    // With inference disabled, the error is handled as the health result below.
   }
 
   try {
+    if (!settings.xaiInferenceEnabled) {
+      if (billingError) throw billingError;
+      if (!billingSummary) throw new Error(t('xai_quota.empty_data'));
+
+      const usedPercent = resolveXaiUsedPercent(billingSummary);
+      const actionReason =
+        billingSource === 'official-api'
+          ? t(
+              account.disabled
+                ? 'monitoring.xai_inspection_reason_official_api_manual_disable'
+                : 'monitoring.xai_inspection_reason_official_api_healthy'
+            )
+          : t(
+              billingPartial
+                ? 'monitoring.xai_inspection_reason_billing_partial'
+                : 'monitoring.xai_inspection_reason_billing_healthy'
+            );
+      onLog?.(
+        'info',
+        t('monitoring.xai_inspection_log_result', {
+          account: account.displayAccount,
+          action: formatXaiInspectionAction('keep', t),
+          percent: usedPercent === null ? '--' : `${usedPercent.toFixed(1)}%`,
+        })
+      );
+      return {
+        ...account,
+        action: 'keep',
+        actionReason,
+        statusCode: billingStatusCode,
+        usedPercent,
+        isQuota: false,
+        autoRecoverEligible: false,
+        error: '',
+        planType: null,
+        quotaWindows: buildXaiQuotaWindows(billingSummary),
+        errorKind:
+          billingSource === 'official-api'
+            ? 'official_api_healthy'
+            : billingPartial
+              ? 'billing_partial'
+              : 'billing_healthy',
+        errorDetail: '',
+      };
+    }
+
     const inference = await withRetry(
       settings.retries,
       () =>
         probeXaiInference(account.raw, t, requestConfig, {
           model: settings.xaiInferenceModel,
           prompt: settings.xaiInferencePrompt,
+          userAgent: settings.xaiInferenceUserAgent,
         }),
       shouldRetryXaiInference
     );
@@ -251,7 +324,7 @@ export const inspectSingleXaiAccount = async (
       isQuota: false,
       autoRecoverEligible: action === 'enable',
       error: '',
-      planType: 'xai',
+      planType: null,
       quotaWindows: billingSummary ? buildXaiQuotaWindows(billingSummary) : [],
       errorKind: 'inference_healthy',
       errorDetail: '',
@@ -284,7 +357,7 @@ export const inspectSingleXaiAccount = async (
         isQuota: ['free_quota_exhausted', 'spending_limit'].includes(decision.classification),
         autoRecoverEligible: false,
         error: error.message,
-        planType: 'xai',
+        planType: null,
         quotaWindows: billingSummary ? buildXaiQuotaWindows(billingSummary) : [],
         errorKind: decision.classification,
         errorDetail: detail,
@@ -309,7 +382,7 @@ export const inspectSingleXaiAccount = async (
       isQuota: false,
       autoRecoverEligible: false,
       error: message,
-      planType: 'xai',
+      planType: null,
       quotaWindows: billingSummary ? buildXaiQuotaWindows(billingSummary) : [],
       errorKind: 'request_error',
       errorDetail: truncateDetail(message),

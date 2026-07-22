@@ -81,6 +81,8 @@ export interface CodexInspectionSettings {
   timeout: number;
   retries: number;
   userAgent: string;
+  xaiInferenceUserAgent: string;
+  xaiInferenceEnabled: boolean;
   xaiInferenceModel: string;
   xaiInferencePrompt: string;
   usedPercentThreshold: number;
@@ -95,6 +97,8 @@ export interface CodexInspectionConfigurableSettings {
   timeout: number;
   retries: number;
   userAgent: string;
+  xaiInferenceUserAgent: string;
+  xaiInferenceEnabled: boolean;
   xaiInferenceModel: string;
   xaiInferencePrompt: string;
   usedPercentThreshold: number;
@@ -346,6 +350,8 @@ export const resolveCodexInspectionSettings = (
     timeout: configurable.timeout,
     retries: configurable.retries,
     userAgent: configurable.userAgent,
+    xaiInferenceUserAgent: configurable.xaiInferenceUserAgent,
+    xaiInferenceEnabled: configurable.xaiInferenceEnabled,
     xaiInferenceModel: configurable.xaiInferenceModel,
     xaiInferencePrompt: configurable.xaiInferencePrompt,
     usedPercentThreshold: configurable.usedPercentThreshold,

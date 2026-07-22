@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AuthFileItem } from '@/types';
+import en from '@/i18n/locales/en.json';
+import ru from '@/i18n/locales/ru.json';
+import zhCN from '@/i18n/locales/zh-CN.json';
+import zhTW from '@/i18n/locales/zh-TW.json';
 import { authFilesApi } from '@/services/api/authFiles';
+import { formatQuotaResetTime } from '@/utils/quota/formatters';
+import serverInspectionPageSource from './ServerCodexInspectionPage.tsx?raw';
 import {
   CODEX_INSPECTION_LAST_RUN_STORAGE_KEY,
   CODEX_INSPECTION_SETTINGS_STORAGE_KEY,
@@ -25,15 +31,20 @@ import {
   countActions,
   filterInspectionResults,
   filterByAction,
+  formatInspectionQuotaResetLabel,
+  formatPercent,
   formatServerCodexInspectionLogDetail,
+  getInspectionProbePresentation,
+  getInspectionUserAgentVisibility,
+  getVisibleActionFilters,
   getCanonicalServerCodexInspectionActionIds,
   normalizeActionFilter,
   getMixedServerCodexInspectionActionIds,
   isActionableServerCodexInspectionResult,
   isPendingServerReauthResult,
   normalizeServerCodexInspectionActionStatus,
+  shouldShowInspectionConclusionReason,
   summarizeInspectionError,
-  summarizeXaiInference,
   getXaiInferenceState,
   validateInspectionConfigDraft,
 } from './model/codexInspectionPresentation';
@@ -105,6 +116,8 @@ const createRunResult = (): CodexInspectionRunResult => {
       timeout: 1000,
       retries: 0,
       userAgent: 'test-agent',
+      xaiInferenceUserAgent: 'xai-test-agent',
+      xaiInferenceEnabled: false,
       xaiInferenceModel: 'grok-test',
       xaiInferencePrompt: 'Reply OK.',
       usedPercentThreshold: 90,
@@ -143,6 +156,48 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe('credential inspection state labels', () => {
+  it('describes the state without repeating the file context', () => {
+    expect([
+      en.monitoring.codex_inspection_state_enabled,
+      en.monitoring.codex_inspection_state_disabled,
+    ]).toEqual(['Enabled', 'Disabled']);
+    expect([
+      zhCN.monitoring.codex_inspection_state_enabled,
+      zhCN.monitoring.codex_inspection_state_disabled,
+    ]).toEqual(['已启用', '已禁用']);
+    expect([
+      zhTW.monitoring.codex_inspection_state_enabled,
+      zhTW.monitoring.codex_inspection_state_disabled,
+    ]).toEqual(['已啟用', '已禁用']);
+    expect([
+      ru.monitoring.codex_inspection_state_enabled,
+      ru.monitoring.codex_inspection_state_disabled,
+    ]).toEqual(['Включено', 'Отключено']);
+  });
+
+  it('keeps server execution state separate from conclusion reasons', () => {
+    expect(serverInspectionPageSource).not.toContain("reasonParts.join(' · ')");
+    expect(serverInspectionPageSource).not.toContain('formatServerResultStateDetail');
+    expect(serverInspectionPageSource).toContain('formatServerTerminalActionStatusLabel');
+  });
+
+  it('keeps demo conclusion reason translations available in every locale', () => {
+    const keys = [
+      'codex_inspection_reason_healthy',
+      'codex_inspection_reason_reauth',
+      'codex_inspection_reason_quota_threshold',
+      'codex_inspection_reason_recovered',
+    ] as const;
+
+    for (const locale of [en, zhCN, zhTW, ru]) {
+      for (const key of keys) {
+        expect(locale.monitoring[key]).toBeTypeOf('string');
+      }
+    }
+  });
+});
+
 describe('xAI inference presentation', () => {
   it('classifies provider inference states', () => {
     expect(getXaiInferenceState({ provider: 'codex', errorKind: 'inference_healthy' })).toBe(
@@ -154,59 +209,79 @@ describe('xAI inference presentation', () => {
     expect(getXaiInferenceState({ provider: 'xai', errorKind: 'missing_auth_index' })).toBe(
       'skipped'
     );
+    expect(getXaiInferenceState({ provider: 'xai', errorKind: 'billing_healthy' })).toBe('skipped');
+    expect(getXaiInferenceState({ provider: 'xai', errorKind: 'billing_partial' })).toBe('skipped');
+    expect(getXaiInferenceState({ provider: 'xai', errorKind: 'identity_healthy' })).toBe(
+      'skipped'
+    );
     expect(getXaiInferenceState({ provider: 'xai', errorKind: 'model_unavailable' })).toBe(
       'failed'
     );
     expect(getXaiInferenceState({ provider: 'xai', errorKind: 'future_failure' })).toBe('failed');
   });
 
-  it('aggregates success rate across the complete xAI result set', () => {
+  it('presents the active probe source without treating billing health as inference health', () => {
     expect(
-      summarizeXaiInference([
-        { provider: 'codex', errorKind: 'request_error' },
-        { provider: 'xai', errorKind: 'inference_healthy' },
-        { provider: 'xai', errorKind: 'inference_healthy' },
-        { provider: 'xai', errorKind: 'rate_limited' },
-        { provider: 'xai', errorKind: 'missing_auth_index' },
-      ])
-    ).toEqual({
-      total: 4,
-      attempted: 3,
-      succeeded: 2,
-      failed: 1,
-      skipped: 1,
-      successRate: (2 / 3) * 100,
-    });
+      getInspectionProbePresentation(
+        { provider: 'xai', errorKind: 'billing_healthy', statusCode: null },
+        { xaiInferenceEnabled: false }
+      )
+    ).toEqual({ source: 'xai_billing', state: 'success', statusCode: null });
+    expect(
+      getInspectionProbePresentation(
+        { provider: 'xai', errorKind: 'billing_partial', statusCode: null },
+        { xaiInferenceEnabled: false }
+      )
+    ).toEqual({ source: 'xai_billing', state: 'success', statusCode: null });
+    expect(
+      getInspectionProbePresentation(
+        { provider: 'xai', errorKind: 'inference_healthy', statusCode: 200 },
+        { xaiInferenceEnabled: true }
+      )
+    ).toEqual({ source: 'xai_inference', state: 'success', statusCode: 200 });
+    expect(
+      getInspectionProbePresentation(
+        { provider: 'xai', errorKind: 'model_unavailable', statusCode: 404 },
+        { xaiInferenceEnabled: true }
+      )
+    ).toEqual({ source: 'xai_inference', state: 'failed', statusCode: 404 });
+  });
+});
+
+describe('inspection quota reset presentation', () => {
+  it('formats server ISO reset values while preserving existing display labels', () => {
+    const isoReset = '2026-07-29T00:00:00+00:00';
+    expect(formatInspectionQuotaResetLabel(isoReset)).toBe(formatQuotaResetTime(isoReset));
+    expect(formatInspectionQuotaResetLabel('2h 18m')).toBe('2h 18m');
+    expect(formatInspectionQuotaResetLabel('-')).toBe('');
   });
 
-  it('returns an empty rate when all xAI inference checks were skipped', () => {
-    expect(
-      summarizeXaiInference([{ provider: 'xai', errorKind: 'missing_auth_index' }])
-    ).toMatchObject({ attempted: 0, succeeded: 0, failed: 0, skipped: 1, successRate: null });
-  });
-
-  it('does not create an inference summary for Codex-only results', () => {
-    expect(summarizeXaiInference([{ provider: 'codex', errorKind: 'request_error' }])).toEqual({
-      total: 0,
-      attempted: 0,
-      succeeded: 0,
-      failed: 0,
-      skipped: 0,
-      successRate: null,
-    });
-  });
-
-  it('reports zero percent when every attempted xAI inference failed', () => {
-    expect(
-      summarizeXaiInference([
-        { provider: 'xai', errorKind: 'rate_limited' },
-        { provider: 'xai', errorKind: 'model_unavailable' },
-      ])
-    ).toMatchObject({ attempted: 2, succeeded: 0, failed: 2, successRate: 0 });
+  it('formats percentages that are already expressed on a 0-100 scale', () => {
+    expect(formatPercent(97)).toBe('97.0%');
+    expect(formatPercent(null)).toBe('--');
   });
 });
 
 describe('Codex inspection settings', () => {
+  it('shows provider User-Agent fields only when their request path is active', () => {
+    expect(getInspectionUserAgentVisibility('codex', false)).toEqual({
+      codex: true,
+      xaiInference: false,
+    });
+    expect(getInspectionUserAgentVisibility('xai', false)).toEqual({
+      codex: false,
+      xaiInference: false,
+    });
+    expect(getInspectionUserAgentVisibility('xai', true)).toEqual({
+      codex: false,
+      xaiInference: true,
+    });
+    expect(getInspectionUserAgentVisibility('codex+xai', true)).toEqual({
+      codex: true,
+      xaiInference: true,
+    });
+  });
+
   it('migrates legacy auto execute settings to auto disable', () => {
     const storage = createStorage();
     vi.stubGlobal('localStorage', storage);
@@ -237,6 +312,8 @@ describe('Codex inspection settings', () => {
         timeout: '15000',
         retries: '-1',
         userAgent: 'agent',
+        xaiInferenceUserAgent: 'xai-agent',
+        xaiInferenceEnabled: false,
         xaiInferenceModel: '',
         xaiInferencePrompt: '',
         usedPercentThreshold: '120',
@@ -256,6 +333,27 @@ describe('Codex inspection settings', () => {
     expect(invalid.errors.usedPercentThreshold).toContain('0-100');
     expect(invalid.errors.sampleSize).toContain('>= 0');
 
+    const inferenceDisabled = validateInspectionConfigDraft(
+      {
+        targetTypes: 'xai',
+        workers: '3',
+        deleteWorkers: '2',
+        timeout: '15000',
+        retries: '0',
+        userAgent: 'agent',
+        xaiInferenceUserAgent: 'xai-agent',
+        xaiInferenceEnabled: false,
+        xaiInferenceModel: '',
+        xaiInferencePrompt: '',
+        usedPercentThreshold: '100',
+        sampleSize: '0',
+        autoActionMode: 'none',
+        autoRecoverEnabled: false,
+      },
+      t
+    );
+    expect(inferenceDisabled.ok).toBe(true);
+
     const valid = validateInspectionConfigDraft(
       {
         targetTypes: ' Codex + xAI ',
@@ -264,6 +362,8 @@ describe('Codex inspection settings', () => {
         timeout: '15000',
         retries: '0',
         userAgent: ' agent ',
+        xaiInferenceUserAgent: ' xai-agent ',
+        xaiInferenceEnabled: true,
         xaiInferenceModel: ' grok-custom ',
         xaiInferencePrompt: ' Reply briefly. ',
         usedPercentThreshold: '99.5',
@@ -282,6 +382,8 @@ describe('Codex inspection settings', () => {
       timeout: 15000,
       retries: 0,
       userAgent: 'agent',
+      xaiInferenceUserAgent: 'xai-agent',
+      xaiInferenceEnabled: true,
       xaiInferenceModel: 'grok-custom',
       xaiInferencePrompt: 'Reply briefly.',
       usedPercentThreshold: 99.5,
@@ -325,6 +427,7 @@ describe('Codex inspection settings', () => {
       sampleSize: 0,
       autoActionMode: 'delete' as const,
       autoRecoverEnabled: false,
+      xaiInferenceEnabled: false,
       xaiInferenceModel: 'grok-4.5',
       xaiInferencePrompt: 'Reply with exactly OK.',
     };
@@ -358,26 +461,23 @@ describe('Codex inspection settings', () => {
     const xaiSettings = {
       ...settings,
       targetTypes: ['codex', 'xai'],
+      xaiInferenceEnabled: true,
       xaiInferenceModel: 'grok-custom',
       xaiInferencePrompt: 'Return a short health response.',
     };
-    expect(buildConfigOverviewItems(xaiSettings, { mode: 'local', t })).toEqual(
+    const xaiOverviewItems = buildConfigOverviewItems(xaiSettings, { mode: 'local', t });
+    expect(xaiOverviewItems).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ key: 'target', field: 'targetTypes' }),
         expect.objectContaining({
-          key: 'xai-model',
-          value: 'grok-custom',
-          field: 'xaiInferenceModel',
-          display: 'wide',
-        }),
-        expect.objectContaining({
-          key: 'xai-prompt',
-          value: 'Return a short health response.',
-          field: 'xaiInferencePrompt',
-          display: 'long-text',
+          key: 'xai-inference',
+          value: 'Enabled',
+          field: 'xaiInferenceEnabled',
         }),
       ])
     );
+    expect(xaiOverviewItems.map((item) => item.key)).not.toContain('xai-model');
+    expect(xaiOverviewItems.map((item) => item.key)).not.toContain('xai-prompt');
   });
 });
 
@@ -392,7 +492,7 @@ describe('Codex inspection error summaries', () => {
     return messages[key] ?? key;
   }) as never;
 
-  it.each(['billing_healthy', 'official_api_healthy'])(
+  it.each(['billing_healthy', 'billing_partial', 'identity_healthy', 'official_api_healthy'])(
     'does not present a healthy xAI classification %s as an error',
     (errorKind) => {
       expect(
@@ -584,6 +684,44 @@ describe('reauth delete execution mapping', () => {
 });
 
 describe('Codex inspection action presentation', () => {
+  it('keeps every suggested action filter visible', () => {
+    expect(getVisibleActionFilters()).toEqual([
+      'all',
+      'reauth',
+      'delete',
+      'disable',
+      'enable',
+      'keep',
+    ]);
+  });
+
+  it('hides repetitive reasons only for enabled healthy keep results', () => {
+    expect(
+      shouldShowInspectionConclusionReason(
+        createResultItem('keep', { errorKind: 'inference_healthy', statusCode: 200 })
+      )
+    ).toBe(false);
+    expect(
+      shouldShowInspectionConclusionReason(
+        createResultItem('keep', {
+          disabled: true,
+          errorKind: 'inference_healthy',
+          statusCode: 200,
+        })
+      )
+    ).toBe(true);
+    expect(
+      shouldShowInspectionConclusionReason(
+        createResultItem('keep', { errorKind: 'protocol_changed', statusCode: 200 })
+      )
+    ).toBe(true);
+    expect(
+      shouldShowInspectionConclusionReason(
+        createResultItem('keep', { errorKind: 'billing_partial', statusCode: null })
+      )
+    ).toBe(true);
+  });
+
   it('counts reauth suggestions and separates handling status from action filters', () => {
     const items = [
       createResultItem('delete', { statusCode: 500 }),

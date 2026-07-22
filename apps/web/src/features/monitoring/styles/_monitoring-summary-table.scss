@@ -1092,20 +1092,6 @@
     color: var(--monitor-muted);
   }
 
-  .realtimeFailureStatus {
-    position: relative;
-    display: inline-flex;
-    width: fit-content;
-    max-width: 100%;
-    align-items: center;
-    outline: none;
-  }
-
-  .realtimeFailureStatus:focus-visible .realtimeRequestStatus {
-    text-decoration: underline;
-    text-underline-offset: 3px;
-  }
-
   .realtimeRequestStatus {
     display: inline-flex;
     align-items: center;
@@ -1132,117 +1118,6 @@
 
   .realtimeRequestStatusBad {
     color: var(--monitor-red);
-  }
-
-  .realtimeFailureTooltip {
-    --monitor-surface: var(--bg-primary);
-    --monitor-surface-elevated: color-mix(in srgb, var(--bg-primary) 82%, var(--surface-subtle));
-    --monitor-surface-hover: color-mix(in srgb, var(--surface-subtle-hover) 74%, var(--bg-primary));
-    --monitor-ink: var(--text-primary);
-    --monitor-muted: var(--text-secondary);
-    --monitor-line: var(--border-color);
-    --monitor-accent: var(--primary-color);
-    --monitor-accent-strong: var(--primary-active);
-    --monitor-red: var(--error-color);
-
-    position: fixed;
-    z-index: 2030;
-    display: grid;
-    gap: 8px;
-    width: max-content;
-    min-width: 220px;
-    max-width: min(420px, calc(100vw - 48px));
-    max-height: 240px;
-    overflow: auto;
-    padding: 10px 12px;
-    padding-right: 42px;
-    border: 1px solid color-mix(in srgb, var(--monitor-red) 26%, var(--monitor-line));
-    border-radius: 8px;
-    background: var(--monitor-surface-elevated);
-    box-shadow: var(--shadow-lg);
-    color: var(--monitor-ink);
-    font-size: 12px;
-    line-height: 1.45;
-    opacity: 0;
-    pointer-events: none;
-    transform: translateY(-4px);
-    transition:
-      opacity 0.12s ease,
-      transform 0.12s ease;
-    visibility: hidden;
-    white-space: normal;
-    user-select: text;
-  }
-
-  .realtimeFailureTooltip::before {
-    content: '';
-    position: absolute;
-    left: 16px;
-    top: -5px;
-    width: 8px;
-    height: 8px;
-    background: var(--monitor-surface-elevated);
-    transform: rotate(45deg);
-  }
-
-  .realtimeFailureTooltipBelow::before {
-    top: -5px;
-    bottom: auto;
-    border-left: 1px solid color-mix(in srgb, var(--monitor-red) 26%, var(--monitor-line));
-    border-top: 1px solid color-mix(in srgb, var(--monitor-red) 26%, var(--monitor-line));
-  }
-
-  .realtimeFailureTooltipAbove::before {
-    top: auto;
-    bottom: -5px;
-    border-right: 1px solid color-mix(in srgb, var(--monitor-red) 26%, var(--monitor-line));
-    border-bottom: 1px solid color-mix(in srgb, var(--monitor-red) 26%, var(--monitor-line));
-  }
-
-  .realtimeFailureTooltipOpen {
-    opacity: 1;
-    pointer-events: auto;
-    transform: translateY(0);
-    visibility: visible;
-  }
-
-  .realtimeFailureCopyButton {
-    position: absolute;
-    right: 8px;
-    top: 8px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 24px;
-    height: 24px;
-    padding: 0;
-    border: 1px solid color-mix(in srgb, var(--monitor-line) 84%, transparent);
-    border-radius: 6px;
-    background: color-mix(in srgb, var(--monitor-surface) 88%, transparent);
-    color: var(--monitor-muted);
-    cursor: pointer;
-  }
-
-  .realtimeFailureCopyButton:hover,
-  .realtimeFailureCopyButton:focus-visible {
-    border-color: color-mix(in srgb, var(--monitor-accent) 36%, var(--monitor-line));
-    background: var(--monitor-surface-hover);
-    color: var(--monitor-accent-strong);
-  }
-
-  .realtimeFailureTooltipStatus {
-    color: var(--monitor-red);
-    font-size: 11px;
-    font-weight: 750;
-    line-height: 1.2;
-    white-space: nowrap;
-  }
-
-  .realtimeFailureTooltipBody {
-    overflow-wrap: anywhere;
-    color: var(--monitor-ink);
-    font-family: var(--font-family-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-    white-space: pre-wrap;
   }
 
   .monoCell {

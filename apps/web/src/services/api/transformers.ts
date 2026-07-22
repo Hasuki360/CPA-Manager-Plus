@@ -434,6 +434,16 @@ export const normalizeConfigResponse = (raw: unknown): Config => {
       timeout: normalizeNumber(clean.timeout),
       retries: normalizeNumber(clean.retries),
       userAgent: normalizeString(clean['user_agent'] ?? clean.userAgent ?? clean['user-agent']),
+      xaiInferenceUserAgent: normalizeString(
+        clean['xai_inference_user_agent'] ??
+          clean.xaiInferenceUserAgent ??
+          clean['xai-inference-user-agent']
+      ),
+      xaiInferenceEnabled: normalizeBoolean(
+        clean['xai_inference_enabled'] ??
+          clean.xaiInferenceEnabled ??
+          clean['xai-inference-enabled']
+      ),
       xaiInferenceModel: normalizeString(
         clean['xai_inference_model'] ?? clean.xaiInferenceModel ?? clean['xai-inference-model']
       ),

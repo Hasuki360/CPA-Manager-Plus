@@ -54,6 +54,10 @@ const sanitizeInspectionSettingsForStorage = (
   timeout: clampPositiveInteger(settings.timeout, DEFAULT_CODEX_INSPECTION_SETTINGS.timeout),
   retries: Math.max(0, Math.floor(normalizeNumberValue(settings.retries) ?? 0)),
   userAgent: readString(settings.userAgent) || DEFAULT_CODEX_INSPECTION_SETTINGS.userAgent,
+  xaiInferenceUserAgent:
+    readString(settings.xaiInferenceUserAgent) ||
+    DEFAULT_CODEX_INSPECTION_SETTINGS.xaiInferenceUserAgent,
+  xaiInferenceEnabled: readBoolean(settings.xaiInferenceEnabled, false),
   xaiInferenceModel:
     readString(settings.xaiInferenceModel) || DEFAULT_CODEX_INSPECTION_SETTINGS.xaiInferenceModel,
   xaiInferencePrompt:
@@ -74,6 +78,8 @@ const normalizeStoredSettings = (value: unknown): CodexInspectionSettings => {
     timeout: input.timeout,
     retries: input.retries,
     userAgent: input.userAgent,
+    xaiInferenceUserAgent: input.xaiInferenceUserAgent,
+    xaiInferenceEnabled: input.xaiInferenceEnabled,
     xaiInferenceModel: input.xaiInferenceModel,
     xaiInferencePrompt: input.xaiInferencePrompt,
     usedPercentThreshold: input.usedPercentThreshold,
@@ -90,6 +96,8 @@ const normalizeStoredSettings = (value: unknown): CodexInspectionSettings => {
     timeout: configurable.timeout,
     retries: configurable.retries,
     userAgent: configurable.userAgent,
+    xaiInferenceUserAgent: configurable.xaiInferenceUserAgent,
+    xaiInferenceEnabled: configurable.xaiInferenceEnabled,
     xaiInferenceModel: configurable.xaiInferenceModel,
     xaiInferencePrompt: configurable.xaiInferencePrompt,
     usedPercentThreshold: configurable.usedPercentThreshold,

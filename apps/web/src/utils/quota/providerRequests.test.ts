@@ -50,10 +50,23 @@ import {
   mergeXaiBillingSummaries,
   probeXaiBilling,
   probeXaiInference,
+  probeXaiQuota,
 } from './providerRequests';
 import { XaiProbeError } from './xaiErrors';
 
 const t = ((key: string) => key) as TFunction;
+
+const completedXaiInferenceResponse = () => ({
+  object: 'response',
+  status: 'completed',
+  error: null,
+  output: [
+    {
+      type: 'message',
+      content: [{ type: 'output_text', text: 'OK' }],
+    },
+  ],
+});
 
 beforeEach(() => {
   mocks.getSubscription.mockReset();
@@ -1585,6 +1598,26 @@ describe('buildXaiBillingSummary', () => {
       usedCents: null,
     });
   });
+
+  it('preserves the billing reset for weekly plans with positive on-demand credits', () => {
+    const summary = buildXaiBillingSummary({
+      currentPeriod: {
+        type: 'USAGE_PERIOD_TYPE_WEEKLY',
+        end: '2026-07-29T00:00:00Z',
+      },
+      onDemandCap: { val: 5000 },
+      onDemandUsed: { val: 1000 },
+      billingPeriodEnd: '2026-08-01T00:00:00Z',
+    });
+
+    expect(summary).toMatchObject({
+      periodType: 'weekly',
+      onDemandCapCents: 5000,
+      onDemandUsedCents: 1000,
+      onDemandUsedPercent: 20,
+      billingPeriodEnd: '2026-08-01T00:00:00Z',
+    });
+  });
 });
 
 describe('mergeXaiBillingSummaries', () => {
@@ -1925,8 +1958,38 @@ describe('fetchXaiQuota', () => {
     expect(result).toMatchObject({
       partial: true,
       summary: { monthlyLimitCents: 20000, usedCents: 5000 },
+      statusCode: 200,
     });
     expect(result.failures).toHaveLength(1);
+  });
+
+  it('preserves usable billing data while exposing a one-sided spending limit as blocking', async () => {
+    mocks.request
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: { config: { credit_usage_percent: 3 } },
+      })
+      .mockResolvedValueOnce({
+        statusCode: 402,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '{"code":"personal-team-blocked:spending-limit"}',
+        body: { code: 'personal-team-blocked:spending-limit' },
+      });
+
+    const result = await probeXaiQuota({ name: 'xai.json', type: 'xai', authIndex: 'xai-1' }, t);
+
+    expect(result).toMatchObject({
+      partial: true,
+      summary: { usagePercent: 3 },
+      statusCode: 200,
+      blockingFailure: {
+        decision: { classification: 'spending_limit', suggestedAction: 'disable' },
+      },
+    });
   });
 
   it('prefers a verified xAI quota signal when both billing requests fail differently', async () => {
@@ -2136,16 +2199,44 @@ describe('fetchXaiQuota', () => {
 });
 
 describe('probeXaiInference', () => {
-  const completedEvent =
-    'data: {"type":"response.completed","response":{"status":"completed"}}\n\n';
-
-  it('sends a streamed real inference request through the OAuth CLI endpoint', async () => {
+  it('defaults missing auth metadata to the OAuth CLI endpoint', async () => {
+    const body = completedXaiInferenceResponse();
     mocks.request.mockResolvedValue({
       statusCode: 200,
       hasStatusCode: true,
       header: {},
-      bodyText: completedEvent,
-      body: completedEvent,
+      bodyText: JSON.stringify(body),
+      body,
+    });
+
+    await probeXaiInference(
+      {
+        name: 'xai-legacy.json',
+        type: 'xai',
+        authIndex: 'xai-legacy-1',
+        metadata: { base_url: XAI_OFFICIAL_API_BASE_URL },
+      },
+      t
+    );
+
+    expect(mocks.request.mock.calls[0][0]).toMatchObject({
+      url: `${XAI_CLI_CHAT_PROXY_BASE_URL}/responses`,
+      header: {
+        'x-xai-token-auth': 'xai-grok-cli',
+        'x-grok-client-version': XAI_GROK_CLIENT_VERSION,
+        'User-Agent': XAI_INFERENCE_USER_AGENT,
+      },
+    });
+  });
+
+  it('sends a non-streamed real inference request through the OAuth CLI endpoint', async () => {
+    const body = completedXaiInferenceResponse();
+    mocks.request.mockResolvedValue({
+      statusCode: 200,
+      hasStatusCode: true,
+      header: {},
+      bodyText: JSON.stringify(body),
+      body,
     });
 
     const result = await probeXaiInference(
@@ -2167,7 +2258,7 @@ describe('probeXaiInference', () => {
       url: `${XAI_CLI_CHAT_PROXY_BASE_URL}/responses`,
       header: {
         Authorization: 'Bearer $TOKEN$',
-        Accept: 'text/event-stream',
+        Accept: 'application/json',
         'Content-Type': 'application/json',
         'x-xai-token-auth': 'xai-grok-cli',
         'x-grok-client-version': XAI_GROK_CLIENT_VERSION,
@@ -2177,23 +2268,19 @@ describe('probeXaiInference', () => {
     });
     expect(JSON.parse(request.data)).toEqual({
       model: DEFAULT_XAI_INSPECTION_MODEL,
-      input: [
-        {
-          role: 'user',
-          content: [{ type: 'input_text', text: DEFAULT_XAI_INSPECTION_PROMPT }],
-        },
-      ],
-      stream: true,
+      input: DEFAULT_XAI_INSPECTION_PROMPT,
+      stream: false,
     });
   });
 
   it('uses the official endpoint without CLI-only headers for API credentials', async () => {
+    const body = completedXaiInferenceResponse();
     mocks.request.mockResolvedValue({
       statusCode: 200,
       hasStatusCode: true,
       header: {},
-      bodyText: completedEvent,
-      body: completedEvent,
+      bodyText: JSON.stringify(body),
+      body,
     });
 
     await probeXaiInference(
@@ -2210,44 +2297,48 @@ describe('probeXaiInference', () => {
       url: `${XAI_OFFICIAL_API_BASE_URL}/responses`,
       header: {
         Authorization: 'Bearer $TOKEN$',
-        Accept: 'text/event-stream',
+        Accept: 'application/json',
         'Content-Type': 'application/json',
+        'User-Agent': XAI_INFERENCE_USER_AGENT,
       },
     });
     expect(mocks.request.mock.calls[0][0].header).not.toHaveProperty('x-xai-token-auth');
   });
 
   it('uses the configured model and prompt in the real inference request', async () => {
+    const body = completedXaiInferenceResponse();
     mocks.request.mockResolvedValue({
       statusCode: 200,
       hasStatusCode: true,
       header: {},
-      bodyText: completedEvent,
-      body: completedEvent,
+      bodyText: JSON.stringify(body),
+      body,
     });
 
     await probeXaiInference({ name: 'xai.json', type: 'xai', authIndex: 'xai-1' }, t, undefined, {
       model: 'grok-custom',
       prompt: 'Return a short health response.',
+      userAgent: 'xai-custom-agent',
     });
 
     expect(JSON.parse(mocks.request.mock.calls[0][0].data)).toMatchObject({
       model: 'grok-custom',
-      input: [
-        {
-          content: [{ type: 'input_text', text: 'Return a short health response.' }],
-        },
-      ],
+      input: 'Return a short health response.',
+      stream: false,
+    });
+    expect(mocks.request.mock.calls[0][0].header).toMatchObject({
+      'User-Agent': 'xai-custom-agent',
     });
   });
 
   it('honors explicit using_api=false even when auth_kind is absent', async () => {
+    const body = completedXaiInferenceResponse();
     mocks.request.mockResolvedValue({
       statusCode: 200,
       hasStatusCode: true,
       header: {},
-      bodyText: completedEvent,
-      body: completedEvent,
+      bodyText: JSON.stringify(body),
+      body,
     });
 
     await probeXaiInference(
@@ -2271,8 +2362,8 @@ describe('probeXaiInference', () => {
       statusCode: 0,
       hasStatusCode: false,
       header: {},
-      bodyText: completedEvent,
-      body: completedEvent,
+      bodyText: '',
+      body: '',
     });
 
     await expect(
@@ -2305,18 +2396,33 @@ describe('probeXaiInference', () => {
     }
   );
 
-  it('rejects a completion event that does not confirm completed status', async () => {
+  it('rejects a successful HTTP response without completed model output', async () => {
     mocks.request.mockResolvedValue({
       statusCode: 200,
       hasStatusCode: true,
       header: {},
-      bodyText: 'data: {"type":"response.completed","response":{}}\n\n',
-      body: 'data: {"type":"response.completed","response":{}}\n\n',
+      bodyText: '',
+      body: null,
     });
 
     await expect(
       probeXaiInference({ name: 'xai.json', type: 'xai', authIndex: 'xai-1' }, t)
     ).rejects.toMatchObject({ decision: { classification: 'protocol_changed' } });
+  });
+
+  it('accepts a completed non-streaming response with output text', async () => {
+    const body = completedXaiInferenceResponse();
+    mocks.request.mockResolvedValue({
+      statusCode: 200,
+      hasStatusCode: true,
+      header: {},
+      bodyText: JSON.stringify(body),
+      body,
+    });
+
+    await expect(
+      probeXaiInference({ name: 'xai.json', type: 'xai', authIndex: 'xai-1' }, t)
+    ).resolves.toEqual({ statusCode: 200 });
   });
 });
 

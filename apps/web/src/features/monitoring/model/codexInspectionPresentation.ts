@@ -10,6 +10,7 @@ import {
   type CodexInspectionStoredLogEntry,
 } from '@/features/monitoring/codexInspection';
 import type { CodexInspectionResult } from '@/services/api/usageService';
+import { formatQuotaResetTime } from '@/utils/quota/formatters';
 import { formatXaiProbeIssue } from '@/utils/quota/xaiPresentation';
 import {
   codexInspectionTargetTypesToSelection,
@@ -79,6 +80,8 @@ export type InspectionSettingsDraft = {
   timeout: string;
   retries: string;
   userAgent: string;
+  xaiInferenceUserAgent: string;
+  xaiInferenceEnabled: boolean;
   xaiInferenceModel: string;
   xaiInferencePrompt: string;
   usedPercentThreshold: string;
@@ -89,7 +92,7 @@ export type InspectionSettingsDraft = {
 
 export type InspectionSettingsDraftField = Exclude<
   keyof InspectionSettingsDraft,
-  'autoActionMode' | 'autoRecoverEnabled'
+  'autoActionMode' | 'autoRecoverEnabled' | 'xaiInferenceEnabled'
 >;
 
 export const ACTION_FILTERS: ActionFilter[] = [
@@ -114,6 +117,16 @@ export const formatTime = (value: number, locale: string) =>
 export const formatPercent = (value: number | null) =>
   value === null ? '--' : `${value.toFixed(1)}%`;
 
+const ISO_QUOTA_RESET_PATTERN = /^\d{4}-\d{2}-\d{2}T/;
+
+export const formatInspectionQuotaResetLabel = (value?: string): string => {
+  const normalized = value?.trim() ?? '';
+  if (!normalized || normalized === '-') return '';
+  if (!ISO_QUOTA_RESET_PATTERN.test(normalized)) return normalized;
+  const formatted = formatQuotaResetTime(normalized);
+  return formatted === '-' ? normalized : formatted;
+};
+
 export const toSettingsDraft = (
   settings: CodexInspectionConfigurableSettings
 ): InspectionSettingsDraft => ({
@@ -123,6 +136,8 @@ export const toSettingsDraft = (
   timeout: String(settings.timeout),
   retries: String(settings.retries),
   userAgent: settings.userAgent,
+  xaiInferenceUserAgent: settings.xaiInferenceUserAgent,
+  xaiInferenceEnabled: settings.xaiInferenceEnabled,
   xaiInferenceModel: settings.xaiInferenceModel,
   xaiInferencePrompt: settings.xaiInferencePrompt,
   usedPercentThreshold: String(settings.usedPercentThreshold),
@@ -332,6 +347,8 @@ export const getActionFilterCounts = (items: CodexInspectionResultItem[]) => {
   } satisfies Record<ActionFilter, number>;
 };
 
+export const getVisibleActionFilters = (): ActionFilter[] => [...ACTION_FILTERS];
+
 export const filterByHandling = (items: CodexInspectionResultItem[], filter: HandlingFilter) => {
   if (filter === 'pending') return items.filter(isNeedsHandling);
   if (filter === 'no_action') return items.filter((item) => !isNeedsHandling(item));
@@ -398,13 +415,77 @@ export const filterInspectionResults = (
 
 export type XaiInferenceState = 'success' | 'failed' | 'skipped' | 'not-applicable';
 
-export type XaiInferenceSummary = {
-  total: number;
-  attempted: number;
-  succeeded: number;
-  failed: number;
-  skipped: number;
-  successRate: number | null;
+export type InspectionProbeSource =
+  | 'codex_usage'
+  | 'xai_billing'
+  | 'xai_identity'
+  | 'xai_inference';
+
+export type InspectionProbeState = 'success' | 'failed' | 'skipped';
+
+export type InspectionProbePresentation = {
+  source: InspectionProbeSource;
+  state: InspectionProbeState;
+  statusCode: number | null;
+};
+
+const XAI_BILLING_HEALTHY_KINDS = new Set(['billing_healthy', 'billing_partial']);
+const XAI_IDENTITY_HEALTHY_KINDS = new Set(['identity_healthy', 'official_api_healthy']);
+const HEALTHY_KEEP_KINDS = new Set([
+  '',
+  'billing_healthy',
+  'inference_healthy',
+  'identity_healthy',
+  'official_api_healthy',
+]);
+
+export const shouldShowInspectionConclusionReason = (
+  item: Pick<CodexInspectionResultItem, 'action' | 'disabled' | 'errorKind' | 'statusCode'>
+): boolean => {
+  if (item.action !== 'keep' || item.disabled) return true;
+  const errorKind = item.errorKind?.trim() ?? '';
+  if (!HEALTHY_KEEP_KINDS.has(errorKind)) return true;
+  const statusCode = item.statusCode ?? null;
+  return statusCode !== null && (statusCode < 200 || statusCode >= 300);
+};
+
+export const getInspectionProbePresentation = (
+  item: Pick<CodexInspectionResultItem, 'provider' | 'statusCode' | 'errorKind'>,
+  options: { xaiInferenceEnabled?: boolean } = {}
+): InspectionProbePresentation => {
+  const provider = item.provider.trim().toLowerCase();
+  const errorKind = item.errorKind ?? '';
+  const statusCode = item.statusCode ?? null;
+
+  if (provider !== 'xai') {
+    if (errorKind === 'missing_auth_index') {
+      return { source: 'codex_usage', state: 'skipped', statusCode };
+    }
+    const succeeded = statusCode !== null && statusCode >= 200 && statusCode < 300 && !errorKind;
+    return { source: 'codex_usage', state: succeeded ? 'success' : 'failed', statusCode };
+  }
+
+  if (errorKind === 'missing_auth_index') {
+    return {
+      source: options.xaiInferenceEnabled ? 'xai_inference' : 'xai_billing',
+      state: 'skipped',
+      statusCode,
+    };
+  }
+  if (errorKind === 'inference_healthy') {
+    return { source: 'xai_inference', state: 'success', statusCode };
+  }
+  if (XAI_BILLING_HEALTHY_KINDS.has(errorKind)) {
+    return { source: 'xai_billing', state: 'success', statusCode };
+  }
+  if (XAI_IDENTITY_HEALTHY_KINDS.has(errorKind)) {
+    return { source: 'xai_identity', state: 'success', statusCode };
+  }
+  return {
+    source: options.xaiInferenceEnabled ? 'xai_inference' : 'xai_billing',
+    state: 'failed',
+    statusCode,
+  };
 };
 
 export const getXaiInferenceState = (
@@ -413,35 +494,15 @@ export const getXaiInferenceState = (
   if (item.provider.trim().toLowerCase() !== 'xai') return 'not-applicable';
   if (item.errorKind === 'missing_auth_index') return 'skipped';
   if (item.errorKind === 'inference_healthy') return 'success';
+  if (
+    item.errorKind === 'billing_healthy' ||
+    item.errorKind === 'billing_partial' ||
+    item.errorKind === 'identity_healthy' ||
+    item.errorKind === 'official_api_healthy'
+  ) {
+    return 'skipped';
+  }
   return 'failed';
-};
-
-export const summarizeXaiInference = (
-  items: readonly Pick<CodexInspectionResultItem, 'provider' | 'errorKind'>[]
-): XaiInferenceSummary => {
-  const summary: XaiInferenceSummary = {
-    total: 0,
-    attempted: 0,
-    succeeded: 0,
-    failed: 0,
-    skipped: 0,
-    successRate: null,
-  };
-  items.forEach((item) => {
-    const state = getXaiInferenceState(item);
-    if (state === 'not-applicable') return;
-    summary.total += 1;
-    if (state === 'skipped') {
-      summary.skipped += 1;
-      return;
-    }
-    summary.attempted += 1;
-    if (state === 'success') summary.succeeded += 1;
-    else summary.failed += 1;
-  });
-  summary.successRate =
-    summary.attempted > 0 ? (summary.succeeded / summary.attempted) * 100 : null;
-  return summary;
 };
 
 export const summarizeInspectionError = (
@@ -456,7 +517,9 @@ export const summarizeInspectionError = (
   }
   if (
     item.errorKind === 'billing_healthy' ||
+    item.errorKind === 'billing_partial' ||
     item.errorKind === 'inference_healthy' ||
+    item.errorKind === 'identity_healthy' ||
     item.errorKind === 'official_api_healthy'
   ) {
     return '';
@@ -558,6 +621,7 @@ export type SharedInspectionConfigField =
   | 'timeout'
   | 'retries'
   | 'userAgent'
+  | 'xaiInferenceUserAgent'
   | 'xaiInferenceModel'
   | 'xaiInferencePrompt';
 
@@ -566,9 +630,21 @@ export type SharedInspectionConfigDraft = {
 } & {
   autoActionMode: CodexInspectionAutoActionMode | string;
   autoRecoverEnabled: boolean;
+  xaiInferenceEnabled: boolean;
 };
 
 export type InspectionConfigFieldErrors = Partial<Record<SharedInspectionConfigField, string>>;
+
+export const getInspectionUserAgentVisibility = (
+  targetTypes: unknown,
+  xaiInferenceEnabled: boolean
+) => {
+  const normalizedTargets = normalizeCodexInspectionTargetTypes(targetTypes);
+  return {
+    codex: normalizedTargets.includes('codex'),
+    xaiInference: normalizedTargets.includes('xai') && xaiInferenceEnabled,
+  };
+};
 
 export type ValidatedInspectionConfigValues = {
   targetTypes: string[];
@@ -577,6 +653,8 @@ export type ValidatedInspectionConfigValues = {
   timeout: number;
   retries: number;
   userAgent: string;
+  xaiInferenceUserAgent: string;
+  xaiInferenceEnabled: boolean;
   xaiInferenceModel: string;
   xaiInferencePrompt: string;
   usedPercentThreshold: number;
@@ -614,7 +692,10 @@ export const validateInspectionConfigFields = (
   if (normalizeCodexInspectionTargetTypes(draft.targetTypes).length === 0) {
     errors.targetTypes = t('monitoring.codex_inspection_settings_target_type_required');
   }
-  if (normalizeCodexInspectionTargetTypes(draft.targetTypes).includes('xai')) {
+  if (
+    normalizeCodexInspectionTargetTypes(draft.targetTypes).includes('xai') &&
+    draft.xaiInferenceEnabled
+  ) {
     if (!draft.xaiInferenceModel.trim()) {
       errors.xaiInferenceModel = t('monitoring.codex_inspection_settings_xai_model_required');
     }
@@ -671,6 +752,8 @@ export const validateInspectionConfigDraft = (
       timeout: Number(draft.timeout.trim()),
       retries: Number(draft.retries.trim()),
       userAgent: draft.userAgent.trim(),
+      xaiInferenceUserAgent: draft.xaiInferenceUserAgent.trim(),
+      xaiInferenceEnabled: draft.xaiInferenceEnabled === true,
       xaiInferenceModel: draft.xaiInferenceModel.trim(),
       xaiInferencePrompt: draft.xaiInferencePrompt.trim(),
       usedPercentThreshold: Number(draft.usedPercentThreshold.trim()),
@@ -715,6 +798,7 @@ type ConfigOverviewSettings = Pick<
   | 'timeout'
   | 'usedPercentThreshold'
   | 'sampleSize'
+  | 'xaiInferenceEnabled'
   | 'xaiInferenceModel'
   | 'xaiInferencePrompt'
 > & {
@@ -764,22 +848,13 @@ export const buildConfigOverviewItems = (
     },
   ];
   if (targetTypes.includes('xai')) {
-    providerItems.push(
-      {
-        key: 'xai-model',
-        label: t('monitoring.codex_inspection_settings_xai_model_label'),
-        value: settings.xaiInferenceModel,
-        field: 'xaiInferenceModel',
-        display: 'wide',
-      },
-      {
-        key: 'xai-prompt',
-        label: t('monitoring.codex_inspection_settings_xai_prompt_label'),
-        value: settings.xaiInferencePrompt,
-        field: 'xaiInferencePrompt',
-        display: 'long-text',
-      }
-    );
+    providerItems.push({
+      key: 'xai-inference',
+      label: t('monitoring.codex_inspection_settings_xai_inference_enabled_label'),
+      value: settings.xaiInferenceEnabled ? t('common.enabled') : t('common.disabled'),
+      tone: settings.xaiInferenceEnabled ? 'warn' : 'idle',
+      field: 'xaiInferenceEnabled',
+    });
   }
 
   if (options.mode === 'server') {

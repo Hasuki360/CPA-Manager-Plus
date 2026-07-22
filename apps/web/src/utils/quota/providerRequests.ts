@@ -1000,6 +1000,8 @@ export const buildXaiBillingSummary = (
     monthlyLimitCents !== null ||
     usedCents !== null ||
     (!hasWeeklyData && (onDemandCapCents !== null || !!billingPeriodEnd));
+  const hasBillingPeriodData =
+    hasMonthlyData || onDemandCapCents !== null || onDemandUsedCents !== null;
 
   if (!hasWeeklyData && !hasMonthlyData) return null;
 
@@ -1018,8 +1020,8 @@ export const buildXaiBillingSummary = (
   summary.onDemandCapCents = onDemandCapCents;
   summary.onDemandUsedCents = onDemandUsedCents;
   summary.onDemandUsedPercent = onDemandUsedPercent;
-  summary.billingPeriodStart = hasMonthlyData ? billingPeriodStart : undefined;
-  summary.billingPeriodEnd = hasMonthlyData ? billingPeriodEnd : undefined;
+  summary.billingPeriodStart = hasBillingPeriodData ? billingPeriodStart : undefined;
+  summary.billingPeriodEnd = hasBillingPeriodData ? billingPeriodEnd : undefined;
   summary.usedPercent = usedPercent;
 
   return summary;
@@ -1140,11 +1142,14 @@ const readXaiAuthBoolean = (file: AuthFileItem, ...keys: string[]): boolean | nu
 const sameXaiBaseUrl = (left: string, right: string) =>
   left.trim().replace(/\/+$/, '').toLowerCase() === right.trim().replace(/\/+$/, '').toLowerCase();
 
-const resolveXaiInferenceRequest = (file: AuthFileItem) => {
+const resolveXaiInferenceRequest = (file: AuthFileItem, userAgent?: string) => {
   const configuredBaseUrl = readXaiAuthString(file, 'base_url', 'baseUrl').replace(/\/+$/, '');
   const usingApi = readXaiAuthBoolean(file, 'using_api', 'usingApi');
   const authKind = readXaiAuthString(file, 'auth_kind', 'authKind').toLowerCase();
-  const resolvedUsingApi = usingApi ?? authKind !== 'oauth';
+  // xAI OAuth/CLI credentials may omit auth_kind and using_api from the
+  // management auth-files listing. Keep those credentials on the CLI proxy;
+  // API credentials must opt in explicitly with using_api=true or api_key.
+  const resolvedUsingApi = usingApi ?? (authKind ? authKind !== 'oauth' : false);
   const usesCliChatProxy =
     !resolvedUsingApi &&
     (!configuredBaseUrl || sameXaiBaseUrl(configuredBaseUrl, XAI_OFFICIAL_API_BASE_URL));
@@ -1153,41 +1158,17 @@ const resolveXaiInferenceRequest = (file: AuthFileItem) => {
     : configuredBaseUrl || XAI_OFFICIAL_API_BASE_URL;
   const header: Record<string, string> = {
     Authorization: 'Bearer $TOKEN$',
-    Accept: 'text/event-stream',
+    Accept: 'application/json',
     'Content-Type': 'application/json',
+    'User-Agent': normalizeStringValue(userAgent) || XAI_INFERENCE_USER_AGENT,
   };
   if (usesCliChatProxy || sameXaiBaseUrl(baseUrl, XAI_CLI_CHAT_PROXY_BASE_URL)) {
     header['x-xai-token-auth'] = 'xai-grok-cli';
     header['x-grok-client-version'] = XAI_GROK_CLIENT_VERSION;
-    header['User-Agent'] = XAI_INFERENCE_USER_AGENT;
   }
   const userId = resolveXaiUserId(file);
   if (userId) header['x-userid'] = userId;
   return { url: `${baseUrl}/responses`, header };
-};
-
-const hasXaiInferenceCompletion = (bodyText: string) => {
-  const isCompleted = (value: unknown) => {
-    const event = toXaiRecord(value);
-    if (!event || event.type !== 'response.completed') return false;
-    const response = toXaiRecord(event.response);
-    const status = normalizeStringValue(response?.status)?.toLowerCase();
-    return status === 'completed';
-  };
-  try {
-    if (isCompleted(JSON.parse(bodyText))) return true;
-  } catch {
-    // A streaming body is expected to contain individual SSE data frames.
-  }
-  return bodyText.split('\n').some((line) => {
-    const data = line.trim();
-    if (!data.startsWith('data:')) return false;
-    try {
-      return isCompleted(JSON.parse(data.slice('data:'.length).trim()));
-    } catch {
-      return false;
-    }
-  });
 };
 
 const requestXaiBilling = async (
@@ -1195,7 +1176,7 @@ const requestXaiBilling = async (
   url: string,
   header: Record<string, string>,
   requestConfig?: AxiosRequestConfig
-): Promise<XaiBillingSummary | null> => {
+): Promise<{ summary: XaiBillingSummary; statusCode: number | null } | null> => {
   const result = await apiCallApi.request(
     {
       authIndex,
@@ -1229,13 +1210,16 @@ const requestXaiBilling = async (
     const decision = classifyXaiProbe({ surface: 'billing', envelope, hasPayload: false });
     throw new XaiProbeError('xAI billing response schema changed', envelope, decision);
   }
-  return summary;
+  return {
+    summary,
+    statusCode: result.hasStatusCode ? result.statusCode : null,
+  };
 };
 
 const requestXaiOfficialApiHealth = async (
   authIndex: string,
   requestConfig?: AxiosRequestConfig
-): Promise<XaiOfficialApiHealth> => {
+): Promise<{ health: XaiOfficialApiHealth; statusCode: number | null }> => {
   const result = await apiCallApi.request(
     {
       authIndex,
@@ -1286,10 +1270,13 @@ const requestXaiOfficialApiHealth = async (
   }
 
   return {
-    source: 'api.x.ai/v1/me',
-    userId,
-    teamId,
-    teamBlocked,
+    health: {
+      source: 'api.x.ai/v1/me',
+      userId,
+      teamId,
+      teamBlocked,
+    },
+    statusCode: result.hasStatusCode ? result.statusCode : null,
   };
 };
 
@@ -1297,6 +1284,8 @@ export interface XaiBillingProbeResult {
   summary: XaiBillingSummary;
   failures: unknown[];
   partial: boolean;
+  statusCode?: number | null;
+  blockingFailure?: unknown;
 }
 
 export interface XaiQuotaProbeResult extends XaiBillingProbeResult {
@@ -1341,6 +1330,22 @@ const selectXaiBillingFailure = (failures: unknown[]) =>
 const isXaiOfficialApiFallbackFailure = (failure: unknown): boolean =>
   failure instanceof XaiProbeError && failure.decision.classification === 'permission_unknown';
 
+const isXaiBlockingBillingFailure = (failure: unknown): boolean => {
+  if (!(failure instanceof XaiProbeError)) return false;
+  return ![
+    'upstream_error',
+    'rate_limited',
+    'probe_invalid',
+    'model_unavailable',
+    'protocol_changed',
+  ].includes(failure.decision.classification);
+};
+
+const selectXaiBlockingBillingFailure = (failures: unknown[]) => {
+  const blockingFailures = failures.filter(isXaiBlockingBillingFailure);
+  return blockingFailures.length > 0 ? selectXaiBillingFailure(blockingFailures) : undefined;
+};
+
 const resolveXaiProbeAuthIndex = (file: AuthFileItem, t: TFunction): string => {
   const rawAuthIndex = file['auth_index'] ?? file.authIndex;
   const authIndex = normalizeAuthIndex(rawAuthIndex);
@@ -1357,7 +1362,29 @@ export interface XaiInferenceProbeResult {
 export interface XaiInferenceProbeOptions {
   model?: string;
   prompt?: string;
+  userAgent?: string;
 }
+
+const hasCompletedXaiInferenceOutput = (value: unknown): boolean => {
+  const response = toXaiRecord(value);
+  if (!response || normalizeStringValue(response.status)?.toLowerCase() !== 'completed') {
+    return false;
+  }
+  if (response.error !== undefined && response.error !== null) return false;
+  if (!Array.isArray(response.output)) return false;
+  return response.output.some((rawOutput) => {
+    const output = toXaiRecord(rawOutput);
+    if (!output || normalizeStringValue(output.type)?.toLowerCase() !== 'message') return false;
+    if (!Array.isArray(output.content)) return false;
+    return output.content.some((rawContent) => {
+      const content = toXaiRecord(rawContent);
+      return (
+        normalizeStringValue(content?.type)?.toLowerCase() === 'output_text' &&
+        Boolean(normalizeStringValue(content?.text))
+      );
+    });
+  });
+};
 
 export const probeXaiInference = async (
   file: AuthFileItem,
@@ -1366,7 +1393,7 @@ export const probeXaiInference = async (
   options?: XaiInferenceProbeOptions
 ): Promise<XaiInferenceProbeResult> => {
   const authIndex = resolveXaiProbeAuthIndex(file, t);
-  const { url, header } = resolveXaiInferenceRequest(file);
+  const { url, header } = resolveXaiInferenceRequest(file, options?.userAgent);
   const result = await apiCallApi.request(
     {
       authIndex,
@@ -1375,18 +1402,8 @@ export const probeXaiInference = async (
       header,
       data: JSON.stringify({
         model: normalizeStringValue(options?.model) || DEFAULT_XAI_INSPECTION_MODEL,
-        input: [
-          {
-            role: 'user',
-            content: [
-              {
-                type: 'input_text',
-                text: normalizeStringValue(options?.prompt) || DEFAULT_XAI_INSPECTION_PROMPT,
-              },
-            ],
-          },
-        ],
-        stream: true,
+        input: normalizeStringValue(options?.prompt) || DEFAULT_XAI_INSPECTION_PROMPT,
+        stream: false,
       }),
     },
     requestConfig
@@ -1412,10 +1429,22 @@ export const probeXaiInference = async (
     const decision = classifyXaiProbe({ surface: 'inference', envelope });
     throw new XaiProbeError(getApiCallErrorMessage(result), envelope, decision);
   }
-  if (!hasXaiInferenceCompletion(result.bodyText)) {
-    const decision = classifyXaiProbe({ surface: 'inference', envelope, hasPayload: false });
+  if (!hasCompletedXaiInferenceOutput(result.body)) {
+    const classified = classifyXaiProbe({ surface: 'inference', envelope, hasPayload: false });
+    const decision = {
+      ...classified,
+      classification:
+        classified.classification === 'unknown'
+          ? ('protocol_changed' as const)
+          : classified.classification,
+      suggestedAction: 'keep' as const,
+      reasonCode:
+        classified.classification === 'unknown' ? 'xai_protocol_changed' : classified.reasonCode,
+      confidence: 'verified' as const,
+      needsReview: true,
+    };
     throw new XaiProbeError(
-      'xAI inference did not return a completed response event',
+      'xAI inference response did not contain completed output',
       envelope,
       decision
     );
@@ -1434,8 +1463,10 @@ const requestXaiBillingProbe = async (
     requestXaiBilling(authIndex, XAI_BILLING_WEEKLY_URL, requestHeader, requestConfig),
     requestXaiBilling(authIndex, XAI_BILLING_MONTHLY_URL, requestHeader, requestConfig),
   ]);
-  const weeklySummary = weeklyResult.status === 'fulfilled' ? weeklyResult.value : null;
-  const monthlySummary = monthlyResult.status === 'fulfilled' ? monthlyResult.value : null;
+  const weeklyProbe = weeklyResult.status === 'fulfilled' ? weeklyResult.value : null;
+  const monthlyProbe = monthlyResult.status === 'fulfilled' ? monthlyResult.value : null;
+  const weeklySummary = weeklyProbe?.summary ?? null;
+  const monthlySummary = monthlyProbe?.summary ?? null;
   const failures = [weeklyResult, monthlyResult].flatMap((result) =>
     result.status === 'rejected' ? [result.reason] : []
   );
@@ -1446,6 +1477,7 @@ const requestXaiBillingProbe = async (
     monthlySummary,
     failures,
     summary: mergeXaiBillingSummaries(weeklySummary, monthlySummary),
+    statusCode: weeklyProbe?.statusCode ?? monthlyProbe?.statusCode ?? null,
   };
 };
 
@@ -1454,11 +1486,8 @@ export const probeXaiBilling = async (
   t: TFunction,
   requestConfig?: AxiosRequestConfig
 ): Promise<XaiBillingProbeResult> => {
-  const { failures, monthlySummary, summary, weeklySummary } = await requestXaiBillingProbe(
-    file,
-    t,
-    requestConfig
-  );
+  const { failures, monthlySummary, statusCode, summary, weeklySummary } =
+    await requestXaiBillingProbe(file, t, requestConfig);
   if (!summary) {
     if (failures.length > 0) throw selectXaiBillingFailure(failures);
     throw new Error(t('xai_quota.empty_data'));
@@ -1468,6 +1497,7 @@ export const probeXaiBilling = async (
     summary,
     failures,
     partial: failures.length > 0 || weeklySummary === null || monthlySummary === null,
+    statusCode,
   };
 };
 
@@ -1476,7 +1506,7 @@ export const probeXaiQuota = async (
   t: TFunction,
   requestConfig?: AxiosRequestConfig
 ): Promise<XaiQuotaProbeResult> => {
-  const { authIndex, failures, monthlySummary, summary, weeklySummary } =
+  const { authIndex, failures, monthlySummary, statusCode, summary, weeklySummary } =
     await requestXaiBillingProbe(file, t, requestConfig);
   if (summary) {
     return {
@@ -1484,6 +1514,8 @@ export const probeXaiQuota = async (
       failures,
       partial: failures.length > 0 || weeklySummary === null || monthlySummary === null,
       source: 'billing',
+      statusCode,
+      blockingFailure: selectXaiBlockingBillingFailure(failures),
     };
   }
   if (failures.length === 0) {
@@ -1494,12 +1526,13 @@ export const probeXaiQuota = async (
   }
 
   try {
-    const officialApiHealth = await requestXaiOfficialApiHealth(authIndex, requestConfig);
+    const officialApiResult = await requestXaiOfficialApiHealth(authIndex, requestConfig);
     return {
-      summary: { ...emptyXaiBillingSummary(), officialApiHealth },
+      summary: { ...emptyXaiBillingSummary(), officialApiHealth: officialApiResult.health },
       failures: [],
       partial: false,
       source: 'official-api',
+      statusCode: officialApiResult.statusCode,
     };
   } catch (error) {
     throw selectXaiBillingFailure([...failures, error]);
