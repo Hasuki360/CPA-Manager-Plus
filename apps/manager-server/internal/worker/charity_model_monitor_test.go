@@ -1,7 +1,10 @@
 package worker
 
 import (
+	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
@@ -69,6 +72,40 @@ func TestExtractCharityModelsIncludesNonGPT(t *testing.T) {
 	}
 	if !reflect.DeepEqual(claude, []string{"claude-sonnet-4"}) {
 		t.Fatalf("claude = %#v", claude)
+	}
+}
+
+func TestFetchModelCatalogFallsBackToPricingWhenStatusFails(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/status":
+			http.Error(w, "forbidden", http.StatusForbidden)
+		case "/pricing":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":[{"model_name":"gpt-5.6-sol"},{"model_name":"glm-5.2"}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	worker := &CharityModelMonitorWorker{client: server.Client()}
+	catalog, err := worker.fetchModelCatalog(context.Background(), model.CharityModelMonitorSite{
+		StatusURL:  server.URL + "/status",
+		PricingURL: server.URL + "/pricing",
+	})
+	if err != nil {
+		t.Fatalf("fetchModelCatalog() error = %v", err)
+	}
+	if catalog.source != "pricing" {
+		t.Fatalf("source = %q, want pricing", catalog.source)
+	}
+	for _, name := range []string{"gpt-5.6-sol", "glm-5.2"} {
+		if !containsString(catalog.targets, name) {
+			t.Fatalf("targets missing %s: %#v", name, catalog.targets)
+		}
 	}
 }
 

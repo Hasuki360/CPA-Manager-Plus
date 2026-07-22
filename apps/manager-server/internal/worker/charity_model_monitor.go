@@ -50,7 +50,7 @@ type charityProviderEntry struct {
 
 func NewCharityModelMonitorWorker(st *store.Store, cfg CharityModelMonitorConfig) *CharityModelMonitorWorker {
 	return &CharityModelMonitorWorker{
-		store: st,
+		store:  st,
 		client: &http.Client{Timeout: 40 * time.Second},
 		config: normalizeCharityMonitorConfig(cfg),
 	}
@@ -232,17 +232,22 @@ type charityModelCatalog struct {
 
 func (w *CharityModelMonitorWorker) fetchModelCatalog(ctx context.Context, site model.CharityModelMonitorSite) (charityModelCatalog, error) {
 	statusURL := strings.TrimSpace(site.StatusURL)
+	var statusErr error
 	if statusURL != "" {
 		statusData, err := w.fetchJSON(ctx, statusURL, site.Referer)
-		if err != nil {
-			return charityModelCatalog{}, fmt.Errorf("model-status: %w", err)
+		if err == nil {
+			targets, gpt, claude := extractModelStatusModels(statusData, site.StatusAllow)
+			if len(targets) > 0 {
+				return charityModelCatalog{targets: targets, gpt: gpt, claude: claude, source: "model-status"}, nil
+			}
+		} else {
+			statusErr = fmt.Errorf("model-status: %w", err)
 		}
-		targets, gpt, claude := extractModelStatusModels(statusData, site.StatusAllow)
-		if len(targets) > 0 {
-			return charityModelCatalog{targets: targets, gpt: gpt, claude: claude, source: "model-status"}, nil
-		}
-		// Empty status catalog is unusual; fall back to pricing if configured.
+		// A failed or empty status endpoint falls back to pricing when configured.
 		if strings.TrimSpace(site.PricingURL) == "" {
+			if statusErr != nil {
+				return charityModelCatalog{}, statusErr
+			}
 			return charityModelCatalog{source: "model-status"}, nil
 		}
 	}
@@ -251,6 +256,9 @@ func (w *CharityModelMonitorWorker) fetchModelCatalog(ctx context.Context, site 
 	}
 	pricing, err := w.fetchPricing(ctx, site)
 	if err != nil {
+		if statusErr != nil {
+			return charityModelCatalog{}, fmt.Errorf("%v; pricing: %w", statusErr, err)
+		}
 		return charityModelCatalog{}, err
 	}
 	targets, gpt, claude := extractCharityModels(pricing)
