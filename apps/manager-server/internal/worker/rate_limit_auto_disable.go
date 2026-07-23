@@ -480,14 +480,14 @@ func (w *RateLimitAutoDisableWorker) quotaAutoDisableCandidateFromEvent(ctx cont
 		}, true
 	}
 	if fileName == "" {
-		if event.Failed && event.FailStatusCode == http.StatusTooManyRequests {
-			log.Printf("[quota-auto-disable] %s 429 event %q has no auth file snapshot, skip account quota cooldown", provider, event.EventHash)
+		if event.Failed && (event.FailStatusCode == http.StatusTooManyRequests || isAntigravityQuotaNotFound(event, provider)) {
+			log.Printf("[quota-auto-disable] %s quota event %q has no auth file snapshot, skip account quota cooldown", provider, event.EventHash)
 		}
 		return quotaAutoDisableCandidate{}, false
 	}
 	var resetAt time.Time
 	var ok bool
-	if provider == "antigravity" && event.Failed && event.FailStatusCode == http.StatusTooManyRequests {
+	if provider == "antigravity" && event.Failed && (event.FailStatusCode == http.StatusTooManyRequests || isAntigravityQuotaNotFound(event, provider)) {
 		resetAt, ok = w.antigravityQuotaResetTime(ctx, baseURL, managementKey, event, fileName, now)
 	}
 	if !ok {
@@ -517,6 +517,14 @@ func (w *RateLimitAutoDisableWorker) quotaAutoDisableCandidateFromEvent(ctx cont
 		Owner:          model.QuotaCooldownOwnerUsage429,
 		HTTPStatusCode: event.FailStatusCode,
 	}, true
+}
+
+func isAntigravityQuotaNotFound(event usage.Event, provider string) bool {
+	if provider != "antigravity" || !event.Failed || event.FailStatusCode != http.StatusNotFound {
+		return false
+	}
+	blob := strings.ToLower(strings.Join([]string{event.FailBody, event.FailSummary, event.RawJSON}, "\n"))
+	return strings.Contains(blob, "requested entity was not found") && strings.Contains(blob, "not_found")
 }
 
 func (w *RateLimitAutoDisableWorker) antigravityQuotaResetTime(ctx context.Context, baseURL string, managementKey string, event usage.Event, fileName string, now time.Time) (time.Time, bool) {

@@ -702,6 +702,65 @@ func TestQuotaAutoDisableCandidateIgnoresGenericRetryAfterHeader(t *testing.T) {
 	}
 }
 
+func TestAntigravityQuota404NotFoundUsesQuotaSummary(t *testing.T) {
+	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
+	weeklyReset := now.Add(6*24*time.Hour + 8*time.Hour)
+	body := fmt.Sprintf(`{"groups":[{"displayName":"Gemini","buckets":[{"remainingFraction":0,"resetTime":%q}]}]}`, weeklyReset.Format(time.RFC3339))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer test-management-key" {
+			http.Error(w, "missing auth", http.StatusUnauthorized)
+			return
+		}
+		switch r.URL.Path {
+		case "/v0/management/auth-files":
+			_ = json.NewEncoder(w).Encode([]map[string]any{{
+				"name":       "antigravity-free-shami66505.json",
+				"auth_index": "ag-404",
+				"provider":   "antigravity",
+				"project_id": "numeric-symbol-qm2jp",
+			}})
+		case "/v0/management/api-call":
+			_ = json.NewEncoder(w).Encode(map[string]any{"status_code": 200, "body": json.RawMessage(body)})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	event := usage.Event{
+		EventHash:        "evt-antigravity-404",
+		Failed:           true,
+		FailStatusCode:   http.StatusNotFound,
+		FailBody:         `{"error":{"code":404,"message":"Requested entity was not found.","status":"NOT_FOUND"}}`,
+		AuthFileSnapshot: "antigravity-free-shami66505.json",
+		AuthIndex:        "ag-404",
+		Provider:         "antigravity",
+	}
+	worker := NewRateLimitAutoDisableWorker(nil)
+	candidate, ok := worker.quotaAutoDisableCandidateFromEvent(context.Background(), event, collectorpkg.RuntimeConfig{}, server.URL, "test-management-key", now)
+	if !ok {
+		t.Fatal("Antigravity quota 404 candidate not detected")
+	}
+	if !candidate.ResetAt.Equal(weeklyReset) || candidate.HTTPStatusCode != http.StatusNotFound {
+		t.Fatalf("candidate = %#v, want resetAt %s and status 404", candidate, weeklyReset)
+	}
+}
+
+func TestAntigravityOrdinary404IsIgnored(t *testing.T) {
+	event := usage.Event{
+		EventHash:        "evt-antigravity-model-404",
+		Failed:           true,
+		FailStatusCode:   http.StatusNotFound,
+		FailBody:         `{"error":{"code":404,"message":"Model gemini-missing was not found","status":"NOT_FOUND"}}`,
+		AuthFileSnapshot: "antigravity.json",
+		AuthIndex:        "ag-1",
+		Provider:         "antigravity",
+	}
+	if isAntigravityQuotaNotFound(event, "antigravity") {
+		t.Fatal("ordinary model 404 must not be treated as quota exhaustion")
+	}
+}
+
 func TestAntigravityQuotaCheckPrefersExhaustedWeeklyReset(t *testing.T) {
 	now := time.Date(2026, 7, 10, 10, 0, 0, 0, time.UTC)
 	weeklyReset := now.Add(6 * 24 * time.Hour)
