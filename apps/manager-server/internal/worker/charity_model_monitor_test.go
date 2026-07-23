@@ -109,6 +109,35 @@ func TestFetchModelCatalogFallsBackToPricingWhenStatusFails(t *testing.T) {
 	}
 }
 
+func TestNormalizeCharityStateRemovesMuyuanHistory(t *testing.T) {
+	t.Parallel()
+
+	state := model.NormalizeCharityModelMonitorState(model.CharityModelMonitorState{
+		Sites: map[string]model.CharityModelMonitorSiteState{
+			"x666":   {Name: "薄荷公益站"},
+			"muyuan": {Name: "君の的公益"},
+		},
+		LastProviderSync: []model.CharityModelMonitorProviderState{
+			{Site: "薄荷公益站", Provider: "https://x666.me/v1"},
+			{Site: "君の的公益", Provider: "https://muyuan.do/v1"},
+		},
+		LastProviderError: []string{"君の的公益: 403", "thin mint error"},
+		History: []model.CharityModelMonitorHistoryEntry{{
+			ProviderResults: []model.CharityModelMonitorProviderState{{Site: "君の的公益"}},
+			ProviderErrors:  []string{"muyuan: 403"},
+		}},
+	})
+	if _, ok := state.Sites["muyuan"]; ok {
+		t.Fatal("muyuan site state was not removed")
+	}
+	if len(state.LastProviderSync) != 1 || len(state.LastProviderError) != 1 {
+		t.Fatalf("state was not filtered: %#v", state)
+	}
+	if len(state.History) != 1 || len(state.History[0].ProviderResults) != 0 || len(state.History[0].ProviderErrors) != 0 {
+		t.Fatalf("history was not filtered: %#v", state.History)
+	}
+}
+
 func TestNormalizeRemovesPersistedMuyuan(t *testing.T) {
 	t.Parallel()
 

@@ -88,6 +88,40 @@ type CharityModelMonitorState struct {
 
 const MaxCharityModelMonitorHistory = 12
 
+func NormalizeCharityModelMonitorState(state CharityModelMonitorState) CharityModelMonitorState {
+	delete(state.Sites, "muyuan")
+	state.LastProviderSync = filterRemovedCharityProviderStates(state.LastProviderSync)
+	state.LastProviderError = filterRemovedCharityErrors(state.LastProviderError)
+	for i := range state.History {
+		state.History[i].ProviderResults = filterRemovedCharityProviderStates(state.History[i].ProviderResults)
+		state.History[i].ProviderErrors = filterRemovedCharityErrors(state.History[i].ProviderErrors)
+	}
+	return state
+}
+
+func filterRemovedCharityProviderStates(states []CharityModelMonitorProviderState) []CharityModelMonitorProviderState {
+	result := make([]CharityModelMonitorProviderState, 0, len(states))
+	for _, state := range states {
+		if strings.Contains(strings.ToLower(state.Provider), "muyuan.do") || strings.Contains(state.Site, "君の") {
+			continue
+		}
+		result = append(result, state)
+	}
+	return result
+}
+
+func filterRemovedCharityErrors(errors []string) []string {
+	result := make([]string, 0, len(errors))
+	for _, item := range errors {
+		lower := strings.ToLower(item)
+		if strings.Contains(lower, "muyuan") || strings.Contains(item, "君の") {
+			continue
+		}
+		result = append(result, item)
+	}
+	return result
+}
+
 func DefaultCharityModelMonitorSites() []CharityModelMonitorSite {
 	return []CharityModelMonitorSite{
 		{

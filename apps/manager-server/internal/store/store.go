@@ -56,6 +56,7 @@ var DefaultCodexInspectionConfig = model.DefaultCodexInspectionConfig
 var NormalizeCodexInspectionConfig = model.NormalizeCodexInspectionConfig
 var NormalizeCharityModelMonitorInterval = model.NormalizeCharityModelMonitorInterval
 var NormalizeCharityModelMonitorSites = model.NormalizeCharityModelMonitorSites
+var NormalizeCharityModelMonitorState = model.NormalizeCharityModelMonitorState
 
 // Aggregation result types re-exported for service-layer consumers.
 type Aggregate = usageevent.Aggregate

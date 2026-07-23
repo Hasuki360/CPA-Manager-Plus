@@ -202,6 +202,7 @@ func (r *repository) LoadCharityModelMonitorState(ctx context.Context) (model.Ch
 	if err := json.Unmarshal([]byte(raw), &state); err != nil {
 		return model.CharityModelMonitorState{}, false, err
 	}
+	state = model.NormalizeCharityModelMonitorState(state)
 	return state, true, nil
 }
 
