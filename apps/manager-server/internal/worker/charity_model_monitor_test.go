@@ -109,20 +109,31 @@ func TestFetchModelCatalogFallsBackToPricingWhenStatusFails(t *testing.T) {
 	}
 }
 
-func TestNormalizeMuyuanBackfillsStatusURL(t *testing.T) {
+func TestNormalizeMuyuanRestoresPricingOnly(t *testing.T) {
 	t.Parallel()
 
 	sites := model.NormalizeCharityModelMonitorSites([]model.CharityModelMonitorSite{
-		{Key: "muyuan", Name: "君の的公益", Enabled: true, PricingURL: "https://muyuan.do/api/pricing"},
+		{
+			Key:         "muyuan",
+			Name:        "君の的公益",
+			Enabled:     true,
+			PricingURL:  "https://muyuan.do/api/pricing",
+			StatusURL:   "https://muyuan.do/api/model-status",
+			StatusAllow: []string{"green", "yellow"},
+			Referer:     "https://muyuan.do/model-status",
+		},
 	})
 	if len(sites) != 1 {
 		t.Fatalf("sites = %#v", sites)
 	}
-	if sites[0].StatusURL != "https://muyuan.do/api/model-status" {
-		t.Fatalf("StatusURL = %q", sites[0].StatusURL)
+	if sites[0].StatusURL != "" {
+		t.Fatalf("StatusURL = %q, want empty", sites[0].StatusURL)
 	}
-	if !reflect.DeepEqual(sites[0].StatusAllow, []string{"green", "yellow"}) {
-		t.Fatalf("StatusAllow = %#v", sites[0].StatusAllow)
+	if len(sites[0].StatusAllow) != 0 {
+		t.Fatalf("StatusAllow = %#v, want empty", sites[0].StatusAllow)
+	}
+	if sites[0].Referer != "https://muyuan.do/pricing" {
+		t.Fatalf("Referer = %q", sites[0].Referer)
 	}
 }
 
