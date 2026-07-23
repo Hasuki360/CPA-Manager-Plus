@@ -109,31 +109,21 @@ func TestFetchModelCatalogFallsBackToPricingWhenStatusFails(t *testing.T) {
 	}
 }
 
-func TestNormalizeMuyuanRestoresPricingOnly(t *testing.T) {
+func TestNormalizeRemovesPersistedMuyuan(t *testing.T) {
 	t.Parallel()
 
 	sites := model.NormalizeCharityModelMonitorSites([]model.CharityModelMonitorSite{
-		{
-			Key:         "muyuan",
-			Name:        "君の的公益",
-			Enabled:     true,
-			PricingURL:  "https://muyuan.do/api/pricing",
-			StatusURL:   "https://muyuan.do/api/model-status",
-			StatusAllow: []string{"green", "yellow"},
-			Referer:     "https://muyuan.do/model-status",
-		},
+		{Key: "x666", Name: "薄荷公益站", Enabled: true},
+		{Key: "muyuan", Name: "君の的公益", Enabled: true},
+		{Key: "anyrouter", Name: "AnyRouter", Enabled: true},
 	})
-	if len(sites) != 1 {
+	if len(sites) != 2 {
 		t.Fatalf("sites = %#v", sites)
 	}
-	if sites[0].StatusURL != "" {
-		t.Fatalf("StatusURL = %q, want empty", sites[0].StatusURL)
-	}
-	if len(sites[0].StatusAllow) != 0 {
-		t.Fatalf("StatusAllow = %#v, want empty", sites[0].StatusAllow)
-	}
-	if sites[0].Referer != "https://muyuan.do/pricing" {
-		t.Fatalf("Referer = %q", sites[0].Referer)
+	for _, site := range sites {
+		if site.Key == "muyuan" {
+			t.Fatalf("persisted muyuan site was not removed: %#v", sites)
+		}
 	}
 }
 

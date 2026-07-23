@@ -104,19 +104,6 @@ func DefaultCharityModelMonitorSites() []CharityModelMonitorSite {
 			MonitorClaude:         true,
 		},
 		{
-			Key:                   "muyuan",
-			Name:                  "君の的公益",
-			Enabled:               true,
-			PricingURL:            "https://muyuan.do/api/pricing",
-			Referer:               "https://muyuan.do/pricing",
-			CodexProviderSection:  "codex-api-key",
-			CodexBaseURL:          "https://muyuan.do/v1",
-			ClaudeProviderSection: "claude-api-key",
-			ClaudeBaseURL:         "https://muyuan.do",
-			MonitorGPT:            true,
-			MonitorClaude:         true,
-		},
-		{
 			Key:                  "anyrouter",
 			Name:                 "AnyRouter",
 			Enabled:              true,
@@ -149,6 +136,11 @@ func NormalizeCharityModelMonitorSites(sites []CharityModelMonitorSite) []Charit
 	seen := map[string]int{}
 	for i, site := range sites {
 		site.Key = strings.TrimSpace(site.Key)
+		// muyuan was removed from the built-in monitor. Filter persisted copies
+		// so existing databases stop scheduling it after upgrade.
+		if site.Key == "muyuan" {
+			continue
+		}
 		site.Name = strings.TrimSpace(site.Name)
 		site.PricingURL = strings.TrimSpace(site.PricingURL)
 		site.StatusURL = strings.TrimSpace(site.StatusURL)
@@ -158,15 +150,6 @@ func NormalizeCharityModelMonitorSites(sites []CharityModelMonitorSite) []Charit
 		site.ClaudeProviderSection = stringFallback(strings.TrimSpace(site.ClaudeProviderSection), "claude-api-key")
 		site.ClaudeBaseURL = strings.TrimSpace(site.ClaudeBaseURL)
 		site.StatusAllow = normalizeStatusAllow(site.StatusAllow)
-		// Restore muyuan to its original pricing-only catalog check. This also
-		// clears model-status values persisted by the previous normalization.
-		if site.Key == "muyuan" {
-			site.StatusURL = ""
-			site.StatusAllow = nil
-			if site.Referer == "" || strings.Contains(site.Referer, "/model-status") {
-				site.Referer = "https://muyuan.do/pricing"
-			}
-		}
 		if site.Name == "" {
 			site.Name = fmt.Sprintf("公益站 %d", i+1)
 		}

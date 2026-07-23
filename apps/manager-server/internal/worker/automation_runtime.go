@@ -3,7 +3,6 @@ package worker
 import (
 	"context"
 	"log"
-	"net/http"
 	"strings"
 
 	collectorpkg "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/collector"
@@ -135,7 +134,6 @@ func (h *automationUsageHandler) HandleUsageEvents(ctx context.Context, cfg coll
 		return
 	}
 	settings := h.settings.RuntimeSettings(ctx)
-	cfg = runtimeConfigWithHTTP500Settings(cfg, settings)
 	if h.quotaWorker != nil {
 		quotaEvents := filterQuotaCooldownEvents(events, settings)
 		if len(quotaEvents) > 0 {
@@ -148,26 +146,12 @@ func (h *automationUsageHandler) HandleUsageEvents(ctx context.Context, cfg coll
 	}
 }
 
-func runtimeConfigWithHTTP500Settings(cfg collectorpkg.RuntimeConfig, settings automationsvc.RuntimeSettings) collectorpkg.RuntimeConfig {
-	cfg.HTTP500CooldownEnabled = settings.HTTP500CooldownEnabled
-	cfg.HTTP500CooldownWindowMinutes = settings.HTTP500CooldownWindowMinutes
-	cfg.HTTP500CooldownThreshold = settings.HTTP500CooldownThreshold
-	cfg.HTTP500CooldownDurationMinutes = settings.HTTP500CooldownDurationMinutes
-	return cfg
-}
-
 func filterQuotaCooldownEvents(events []usage.Event, settings automationsvc.RuntimeSettings) []usage.Event {
-	if len(events) == 0 || (!settings.QuotaCooldownEnabled && !settings.AntigravityQuotaCooldownEnabled && !settings.HTTP500CooldownEnabled) {
+	if len(events) == 0 || (!settings.QuotaCooldownEnabled && !settings.AntigravityQuotaCooldownEnabled) {
 		return nil
 	}
 	filtered := make([]usage.Event, 0, len(events))
 	for _, event := range events {
-		if event.Failed && event.FailStatusCode == http.StatusInternalServerError {
-			if settings.HTTP500CooldownEnabled {
-				filtered = append(filtered, event)
-			}
-			continue
-		}
 		switch normalizedQuotaProvider(event) {
 		case "codex", "xai", "x-ai", "grok":
 			if settings.QuotaCooldownEnabled {

@@ -162,10 +162,6 @@ export interface AccountProcessingPolicy {
   charityModelMonitorIntervalMinutes?: number;
   charityModelMonitorSites?: CharityModelMonitorSite[];
   charityModelMonitorState?: CharityModelMonitorState;
-  http500Cooldown?: AccountPolicyCapability;
-  http500CooldownWindowMinutes?: number;
-  http500CooldownThreshold?: number;
-  http500CooldownDurationMinutes?: number;
 }
 
 export interface AccountProcessingPolicyPatch {
@@ -176,10 +172,6 @@ export interface AccountProcessingPolicyPatch {
   charityModelMonitorEnabled?: boolean;
   charityModelMonitorIntervalMinutes?: number;
   charityModelMonitorSites?: CharityModelMonitorSite[];
-  http500CooldownEnabled?: boolean;
-  http500CooldownWindowMinutes?: number;
-  http500CooldownThreshold?: number;
-  http500CooldownDurationMinutes?: number;
 }
 
 export interface QuotaCooldownInfo {
@@ -1537,11 +1529,6 @@ const getDemoPatchedAccountProcessingPolicy = (
   return {
     ...policy,
     updatedAtMs: Date.now(),
-    http500CooldownWindowMinutes:
-      patch.http500CooldownWindowMinutes ?? policy.http500CooldownWindowMinutes,
-    http500CooldownThreshold: patch.http500CooldownThreshold ?? policy.http500CooldownThreshold,
-    http500CooldownDurationMinutes:
-      patch.http500CooldownDurationMinutes ?? policy.http500CooldownDurationMinutes,
     charityModelMonitorIntervalMinutes:
       patch.charityModelMonitorIntervalMinutes ?? policy.charityModelMonitorIntervalMinutes,
     charityModelMonitorSites: patch.charityModelMonitorSites ?? policy.charityModelMonitorSites,
@@ -1565,19 +1552,6 @@ const getDemoPatchedAccountProcessingPolicy = (
     charityModelMonitor: {
       ...policy.charityModelMonitor,
       enabled: patch.charityModelMonitorEnabled ?? policy.charityModelMonitor.enabled,
-    },
-    http500Cooldown: {
-      ...(policy.http500Cooldown ?? {
-        enabled: true,
-        configured: false,
-        source: 'startup',
-        locked: false,
-        envKey: '',
-        configFileKey: 'http500CooldownEnabled',
-      }),
-      enabled: patch.http500CooldownEnabled ?? policy.http500Cooldown?.enabled ?? true,
-      configured: true,
-      source: 'db',
     },
   };
 };

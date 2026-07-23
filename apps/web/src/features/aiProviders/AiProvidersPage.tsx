@@ -94,49 +94,6 @@ const findCharityStateForRow = (
   );
 };
 
-type Http500PresetKey = 'relaxed' | 'standard' | 'strict' | 'custom';
-
-const HTTP500_PRESETS = {
-  relaxed: {
-    label: '宽松',
-    description: '适合偶发波动的公益站，减少误封。',
-    windowMinutes: 15,
-    threshold: 5,
-    durationMinutes: 10,
-  },
-  standard: {
-    label: '标准',
-    description: '推荐默认值，兼顾稳定和恢复速度。',
-    windowMinutes: 10,
-    threshold: 3,
-    durationMinutes: 10,
-  },
-  strict: {
-    label: '严格',
-    description: '快速隔离异常通道，适合高失败率场景。',
-    windowMinutes: 5,
-    threshold: 2,
-    durationMinutes: 15,
-  },
-} as const;
-
-const resolveHttp500Preset = (draft: {
-  windowMinutes: number;
-  threshold: number;
-  durationMinutes: number;
-}): Http500PresetKey => {
-  for (const [key, preset] of Object.entries(HTTP500_PRESETS)) {
-    if (
-      draft.windowMinutes === preset.windowMinutes &&
-      draft.threshold === preset.threshold &&
-      draft.durationMinutes === preset.durationMinutes
-    ) {
-      return key as Http500PresetKey;
-    }
-  }
-  return 'custom';
-};
-
 export function AiProvidersPage() {
   const { t } = useTranslation();
   const { showNotification, showConfirmation } = useNotificationStore();
@@ -182,17 +139,7 @@ export function AiProvidersPage() {
   const [charitySaving, setCharitySaving] = useState(false);
   const [charityIntervalDraft, setCharityIntervalDraft] = useState(15);
   const [charityIntervalSaving, setCharityIntervalSaving] = useState(false);
-  const [http500Draft, setHttp500Draft] = useState({
-    windowMinutes: 10,
-    threshold: 3,
-    durationMinutes: 10,
-  });
-  const [http500Preset, setHttp500Preset] = useState<Http500PresetKey>('standard');
-  const [http500Saving, setHttp500Saving] = useState(false);
-  const [http500Expanded, setHttp500Expanded] = useState(false);
-  const [http500Toggling, setHttp500Toggling] = useState(false);
   const [expandedCharityKeys, setExpandedCharityKeys] = useState<Set<string>>(() => new Set());
-  const http500DirtyRef = useRef(false);
   const [charityLoadError, setCharityLoadError] = useState('');
   const configMutationLockRef = useRef(createConfigMutationLock());
   const beginConfigMutation = useCallback((switchingKey: string) => {
@@ -324,15 +271,6 @@ export function AiProvidersPage() {
       setCharityPolicy(data);
       setCharityLoadError('');
       setCharityIntervalDraft(data.charityModelMonitorIntervalMinutes ?? 15);
-      const nextHttp500Draft = {
-        windowMinutes: data.http500CooldownWindowMinutes ?? 10,
-        threshold: data.http500CooldownThreshold ?? 3,
-        durationMinutes: data.http500CooldownDurationMinutes ?? 10,
-      };
-      if (!http500DirtyRef.current) {
-        setHttp500Draft(nextHttp500Draft);
-        setHttp500Preset(resolveHttp500Preset(nextHttp500Draft));
-      }
     } catch (err: unknown) {
       const message = getErrorMessage(err);
       setCharityLoadError(message ? `状态加载失败：${message}` : '状态加载失败，请稍后重试');
@@ -467,8 +405,6 @@ export function AiProvidersPage() {
   const charityEnabled = charityPolicy?.charityModelMonitor?.enabled === true;
   const charityInterval = charityPolicy?.charityModelMonitorIntervalMinutes ?? 15;
   const charityIntervalUnchanged = charityIntervalDraft === charityInterval;
-  // Unset means always-on for backward compatibility.
-  const http500Enabled = charityPolicy?.http500Cooldown?.enabled !== false;
 
   const updateCharityIntervalDraft = useCallback((value: string) => {
     const parsed = Number.parseInt(value, 10);
@@ -517,17 +453,6 @@ export function AiProvidersPage() {
   const filtersActive =
     kindFilter !== 'all' || searchText.trim() !== '' || selectedModels.size > 0;
 
-  const applyHttp500Preset = useCallback((presetKey: Exclude<Http500PresetKey, 'custom'>) => {
-    const preset = HTTP500_PRESETS[presetKey];
-    http500DirtyRef.current = true;
-    setHttp500Preset(presetKey);
-    setHttp500Draft({
-      windowMinutes: preset.windowMinutes,
-      threshold: preset.threshold,
-      durationMinutes: preset.durationMinutes,
-    });
-  }, []);
-
   const toggleCharityCard = useCallback((key: string) => {
     setExpandedCharityKeys((current) => {
       const next = new Set(current);
@@ -537,77 +462,6 @@ export function AiProvidersPage() {
     });
   }, []);
 
-  const http500Unchanged = useMemo(() => {
-    if (!charityPolicy) return true;
-    return (
-      http500Draft.windowMinutes === (charityPolicy.http500CooldownWindowMinutes ?? 10) &&
-      http500Draft.threshold === (charityPolicy.http500CooldownThreshold ?? 3) &&
-      http500Draft.durationMinutes === (charityPolicy.http500CooldownDurationMinutes ?? 10)
-    );
-  }, [http500Draft, charityPolicy]);
-
-  const updateHttp500Draft = useCallback(
-    (field: 'windowMinutes' | 'threshold' | 'durationMinutes', value: string) => {
-      const parsed = Number.parseInt(value, 10);
-      http500DirtyRef.current = true;
-      setHttp500Preset('custom');
-      setHttp500Draft((current) => ({
-        ...current,
-        [field]: Number.isFinite(parsed) ? parsed : 0,
-      }));
-    },
-    []
-  );
-
-  const persistHttp500Settings = useCallback(async () => {
-    if (!managerServiceBase || !managementKey) return;
-    setHttp500Saving(true);
-    try {
-      const data = await usageServiceApi.updateAccountProcessingPolicy(
-        managerServiceBase,
-        managementKey,
-        {
-          http500CooldownWindowMinutes: http500Draft.windowMinutes,
-          http500CooldownThreshold: http500Draft.threshold,
-          http500CooldownDurationMinutes: http500Draft.durationMinutes,
-        }
-      );
-      setCharityPolicy(data);
-      const nextHttp500Draft = {
-        windowMinutes: data.http500CooldownWindowMinutes ?? 10,
-        threshold: data.http500CooldownThreshold ?? 3,
-        durationMinutes: data.http500CooldownDurationMinutes ?? 10,
-      };
-      setHttp500Draft(nextHttp500Draft);
-      http500DirtyRef.current = false;
-      setHttp500Preset(resolveHttp500Preset(nextHttp500Draft));
-      showNotification('HTTP 500 通道关闭策略已保存', 'success');
-    } catch (err: unknown) {
-      const message = getErrorMessage(err);
-      showNotification(`HTTP 500 通道关闭策略保存失败：${message}`, 'error');
-    } finally {
-      setHttp500Saving(false);
-    }
-  }, [getErrorMessage, http500Draft, managementKey, managerServiceBase, showNotification]);
-
-  const toggleHttp500Cooldown = useCallback(async (enabled: boolean) => {
-    if (!managerServiceBase || !managementKey) return;
-    setHttp500Toggling(true);
-    try {
-      const data = await usageServiceApi.updateAccountProcessingPolicy(
-        managerServiceBase,
-        managementKey,
-        { http500CooldownEnabled: enabled }
-      );
-      setCharityPolicy(data);
-      showNotification(enabled ? 'HTTP 500 通道熔断已开启' : 'HTTP 500 通道熔断已关闭', 'success');
-    } catch (err: unknown) {
-      const message = getErrorMessage(err);
-      showNotification(`HTTP 500 通道熔断保存失败：${message}`, 'error');
-    } finally {
-      setHttp500Toggling(false);
-    }
-  }, [getErrorMessage, managementKey, managerServiceBase, showNotification]);
 
   const clearFilters = () => {
     setKindFilter('all');
@@ -1851,7 +1705,7 @@ export function AiProvidersPage() {
             </div>
           ) : (
             <p className={styles.charityMonitorEmpty}>
-              暂无最近自愈结果。开启总开关后，worker 下次运行会按 AI 提供商自动匹配薄荷 / 君の / AnyRouter。
+              暂无最近自愈结果。开启总开关后，worker 下次运行会按 AI 提供商自动匹配薄荷 / AnyRouter。
             </p>
           )}
           {charityPolicy?.charityModelMonitorState?.lastProviderError?.length ? (
@@ -1860,127 +1714,6 @@ export function AiProvidersPage() {
                 <span key={line}>{line}</span>
               ))}
             </div>
-          ) : null}
-        </Card>
-
-        <Card className={styles.http500Card}>
-          <div className={styles.charityMonitorHeader}>
-            <div>
-              <h3>HTTP 500 通道熔断</h3>
-              <p>
-                同一通道在指定窗口内累计 HTTP 500 次数达到阈值后自动关闭渠道，到期自动恢复。
-              </p>
-            </div>
-            <div className={styles.charityMonitorActions}>
-              <ToggleSwitch
-                checked={http500Enabled}
-                onChange={(value) => void toggleHttp500Cooldown(value)}
-                disabled={actionsDisabled || http500Toggling || charityLoading || !managerServiceBase}
-                ariaLabel="HTTP 500 通道熔断总开关"
-              />
-              {http500Expanded ? (
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => void persistHttp500Settings()}
-                  disabled={http500Saving || http500Unchanged || !managerServiceBase || !http500Enabled}
-                >
-                  保存关闭策略
-                </Button>
-              ) : null}
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setHttp500Expanded((value) => !value)}
-                aria-expanded={http500Expanded}
-              >
-                {http500Expanded ? <IconChevronUp size={14} /> : <IconChevronDown size={14} />}
-                {http500Expanded ? '收起' : '展开设置'}
-              </Button>
-            </div>
-          </div>
-          <div className={styles.http500CollapsedSummary}>
-            <span>总开关：{http500Enabled ? '已开启' : '已关闭'}</span>
-            <span>
-              当前策略：
-              {http500Preset === 'custom'
-                ? '自定义'
-                : HTTP500_PRESETS[http500Preset as Exclude<Http500PresetKey, 'custom'>]?.label || '标准'}
-            </span>
-            <span>
-              {http500Draft.windowMinutes} 分钟内 {http500Draft.threshold} 次，关闭渠道{' '}
-              {http500Draft.durationMinutes} 分钟
-            </span>
-          </div>
-          {http500Expanded ? (
-            <>
-              <div className={styles.http500PresetGrid}>
-                {(Object.entries(HTTP500_PRESETS) as Array<[Exclude<Http500PresetKey, 'custom'>, typeof HTTP500_PRESETS[keyof typeof HTTP500_PRESETS]]>).map(([key, preset]) => (
-                  <button
-                    key={key}
-                    type="button"
-                    className={key === http500Preset ? styles.http500PresetActive : styles.http500PresetCard}
-                    onClick={() => applyHttp500Preset(key)}
-                    disabled={!http500Enabled}
-                  >
-                    <strong>{preset.label}</strong>
-                    <span>{preset.windowMinutes} 分钟内 {preset.threshold} 次，关闭渠道 {preset.durationMinutes} 分钟</span>
-                    <small>{preset.description}</small>
-                  </button>
-                ))}
-                <button
-                  type="button"
-                  className={http500Preset === 'custom' ? styles.http500PresetActive : styles.http500PresetCard}
-                  onClick={() => {
-                    http500DirtyRef.current = true;
-                    setHttp500Preset('custom');
-                  }}
-                  disabled={!http500Enabled}
-                >
-                  <strong>自定义</strong>
-                  <span>{http500Draft.windowMinutes} 分钟内 {http500Draft.threshold} 次，关闭渠道 {http500Draft.durationMinutes} 分钟</span>
-                  <small>手动调整下面三项参数。</small>
-                </button>
-              </div>
-              <div className={styles.http500Grid}>
-                <label className={styles.numberField}>
-                  <span>统计窗口（分钟）</span>
-                  <input
-                    type="number"
-                    min={1}
-                    max={1440}
-                    value={http500Draft.windowMinutes}
-                    onChange={(event) => updateHttp500Draft('windowMinutes', event.target.value)}
-                    disabled={!http500Enabled}
-                  />
-                  <small>只统计这个时间窗口内同一通道的 HTTP 500 失败次数。</small>
-                </label>
-                <label className={styles.numberField}>
-                  <span>触发次数</span>
-                  <input
-                    type="number"
-                    min={1}
-                    max={100}
-                    value={http500Draft.threshold}
-                    onChange={(event) => updateHttp500Draft('threshold', event.target.value)}
-                    disabled={!http500Enabled}
-                  />
-                  <small>窗口内累计达到该次数后，自动关闭这个通道。</small>
-                </label>
-                <label className={styles.numberField}>
-                  <span>关闭渠道时长（分钟）</span>
-                  <input
-                    type="number"
-                    min={1}
-                    max={1440}
-                    value={http500Draft.durationMinutes}
-                    onChange={(event) => updateHttp500Draft('durationMinutes', event.target.value)}
-                    disabled={!http500Enabled}
-                  />
-                  <small>关闭后等待多久自动恢复；到期会重新参与调度。</small>
-                </label>
-              </div>
-            </>
           ) : null}
         </Card>
 

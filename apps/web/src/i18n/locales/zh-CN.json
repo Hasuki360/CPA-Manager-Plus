@@ -3704,18 +3704,11 @@
     "charityModelMonitor_title": "公益站模型监控与通道自愈",
     "charityModelMonitor_summary": "通过后台监控公益站模型价格表，并在模型变化时自动调度开启或封锁通道。",
     "charityModelMonitor_toggle": "启用公益站模型监控",
-    "charityModelMonitor_description": "当监控检测到模型存在时，解封通道；若消失则封锁。HTTP 500 熔断由下方参数单独控制。",
+    "charityModelMonitor_description": "当监控检测到模型存在时，解封通道；若消失则封锁。",
     "charityModelMonitor_behavior": [
       "监听公益站价格表，当未发现可用 GPT/Claude 模型时，自动封锁通道 (Excluded Models = [\"*\"])",
-      "当模型重新出现时，解除对该通道的封锁",
-      "HTTP 500 熔断使用请求监控记录，达到配置阈值后才临时封锁通道"
+      "当模型重新出现时，解除对该通道的封锁"
     ],
-    "http500_title": "HTTP 500 熔断阈值",
-    "http500_description": "同一通道在统计窗口内累计达到指定 HTTP 500 次数后，才临时封锁。默认 10 分钟内 3 次，封锁 10 分钟。",
-    "http500_window": "统计窗口（分钟）",
-    "http500_threshold": "触发次数",
-    "http500_duration": "封锁时长（分钟）",
-    "http500_save": "保存阈值",
     "charity_config_title": "公益站监控配置",
     "charity_config_description": "配置检查间隔和通用公益站列表。第一版使用 JSON 文本框，方便直接扩展新站点。",
     "charity_config_save": "保存配置",

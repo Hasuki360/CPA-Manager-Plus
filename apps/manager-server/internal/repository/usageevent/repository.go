@@ -48,8 +48,6 @@ type Repository interface {
 	LatestHeaderSnapshots(ctx context.Context, sinceMS int64, limit int) ([]HeaderSnapshot, error)
 	ActiveDaysWithFilter(ctx context.Context, filter AnalyticsFilter, location *time.Location) (int64, error)
 	ZeroTokenModelsWithFilter(ctx context.Context, filter AnalyticsFilter) ([]string, error)
-	CountHTTP500ForAuthFileSince(ctx context.Context, authFileName string, sinceMS int64) (int64, error)
-	CountHTTP500ForSourceHashSince(ctx context.Context, sourceHash string, sinceMS int64) (int64, error)
 }
 
 type repository struct {
@@ -380,25 +378,6 @@ func (r *repository) ListRecent(ctx context.Context, limit int) ([]model.UsageEv
 func (r *repository) Count(ctx context.Context) (int64, error) {
 	var count int64
 	if err := r.db.QueryRowContext(ctx, `select count(*) from usage_events`).Scan(&count); err != nil {
-		return 0, err
-	}
-	return count, nil
-}
-
-func (r *repository) CountHTTP500ForAuthFileSince(ctx context.Context, authFileName string, sinceMS int64) (int64, error) {
-	var count int64
-	query := `select count(*) from usage_events where failed = 1 and fail_status_code = 500 and timestamp_ms >= ? and auth_file_snapshot = ?`
-	args := []any{sinceMS, authFileName}
-	if err := r.db.QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
-		return 0, err
-	}
-	return count, nil
-}
-
-func (r *repository) CountHTTP500ForSourceHashSince(ctx context.Context, sourceHash string, sinceMS int64) (int64, error) {
-	var count int64
-	query := `select count(*) from usage_events where failed = 1 and fail_status_code = 500 and timestamp_ms >= ? and source_hash = ?`
-	if err := r.db.QueryRowContext(ctx, query, sinceMS, sourceHash).Scan(&count); err != nil {
 		return 0, err
 	}
 	return count, nil

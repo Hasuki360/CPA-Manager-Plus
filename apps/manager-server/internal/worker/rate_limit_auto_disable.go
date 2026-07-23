@@ -3,8 +3,6 @@ package worker
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -45,8 +43,8 @@ var antigravityQuotaCheckURLs = []string{
 
 // RateLimitAutoDisableWorker reacts to request-monitoring events in near real time.
 // It handles strict provider quota signals with a known recovery time: Codex 429
-// usage_limit_reached responses, Antigravity quota exhaustion, xAI free-usage-exhausted
-// responses, and Hasuki HTTP 500 AI-provider cooldowns. Disables are persisted with
+// usage_limit_reached responses, Antigravity quota exhaustion, and xAI free-usage-exhausted
+// responses. Disables are persisted with
 // CPAMP ownership, so recovery never relies solely on in-memory timers and never
 // re-enables pre-existing/manual disables.
 type RateLimitAutoDisableWorker struct {
@@ -62,24 +60,20 @@ type RateLimitAutoDisableWorker struct {
 }
 
 type quotaAutoDisableCandidate struct {
-	BaseURL         string
-	ManagementKey   string
-	FileName        string
-	AuthIndex       string
-	DisplayAccount  string
-	Provider        string
-	ProviderSection string
-	ProviderBaseURL string
-	SourceHash      string
-	ReasonCode      string
-	WindowKind      string
-	ResetAt         time.Time
-	EventHash       string
-	Reason          string
-	Owner           string
-	HTTPStatusCode  int
-	TriggerCount    int64
-	EvidenceJSON    string
+	BaseURL        string
+	ManagementKey  string
+	FileName       string
+	AuthIndex      string
+	DisplayAccount string
+	Provider       string
+	ReasonCode     string
+	WindowKind     string
+	ResetAt        time.Time
+	EventHash      string
+	Reason         string
+	Owner          string
+	HTTPStatusCode int
+	EvidenceJSON   string
 }
 
 type authFile = cpaauthfiles.File
@@ -189,10 +183,6 @@ func (w *RateLimitAutoDisableWorker) runtimeConfig() (string, string) {
 }
 
 func (w *RateLimitAutoDisableWorker) handleCandidate(ctx context.Context, candidate quotaAutoDisableCandidate) {
-	if candidate.ProviderSection != "" && candidate.ProviderBaseURL != "" && candidate.HTTPStatusCode == http.StatusInternalServerError {
-		w.handleAIProviderCandidate(ctx, candidate)
-		return
-	}
 	if w == nil || w.store == nil || w.store.QuotaCooldowns == nil {
 		log.Printf("[quota-auto-disable] store unavailable, skip auth file %q", candidate.FileName)
 		return
@@ -225,11 +215,7 @@ func (w *RateLimitAutoDisableWorker) handleCandidate(ctx context.Context, candid
 	}
 
 	resolvedAuthIndex := firstNonEmpty(candidate.AuthIndex, current.AuthIndex)
-	if candidate.HTTPStatusCode == http.StatusInternalServerError {
-		log.Printf("[quota-auto-disable] HTTP 500 threshold reached for auth file %q account=%q count=%d resetAt=%s, disabling", candidate.FileName, candidate.DisplayAccount, candidate.TriggerCount, candidate.ResetAt.Format(time.RFC3339))
-	} else {
-		log.Printf("[quota-auto-disable] quota limit reached for auth file %q account=%q provider=%q resetAt=%s, disabling", candidate.FileName, candidate.DisplayAccount, candidate.Provider, candidate.ResetAt.Format(time.RFC3339))
-	}
+	log.Printf("[quota-auto-disable] quota limit reached for auth file %q account=%q provider=%q resetAt=%s, disabling", candidate.FileName, candidate.DisplayAccount, candidate.Provider, candidate.ResetAt.Format(time.RFC3339))
 	if err := w.patchAuthFile(ctx, candidate.BaseURL, candidate.ManagementKey, candidate.FileName, resolvedAuthIndex, true); err != nil {
 		log.Printf("[quota-auto-disable] failed to disable auth file %q: %v", candidate.FileName, err)
 		return
@@ -258,43 +244,6 @@ func (w *RateLimitAutoDisableWorker) handleCandidate(ctx context.Context, candid
 		return
 	}
 	log.Printf("[quota-auto-disable] disabled auth file %q; persisted CPAMP-owned auto-enable at %s", candidate.FileName, candidate.ResetAt.Format(time.RFC3339))
-}
-
-func (w *RateLimitAutoDisableWorker) handleAIProviderCandidate(ctx context.Context, candidate quotaAutoDisableCandidate) {
-	if w == nil || w.store == nil || w.store.QuotaCooldowns == nil {
-		return
-	}
-	now := time.Now()
-	if !candidate.ResetAt.After(now) {
-		return
-	}
-	preDisabled, changed, err := w.setAIProviderChannelDisabled(ctx, candidate.BaseURL, candidate.ManagementKey, candidate.ProviderSection, candidate.ProviderBaseURL, true)
-	if err != nil {
-		log.Printf("[quota-auto-disable] failed to close AI provider channel %q: %v", candidate.ProviderBaseURL, err)
-		return
-	}
-	if preDisabled && !changed {
-		log.Printf("[quota-auto-disable] AI provider channel %q already closed before CPAMP action; skip ownership", candidate.ProviderBaseURL)
-		return
-	}
-	_, err = w.store.UpsertQuotaCooldown(ctx, store.QuotaCooldownUpsert{
-		AuthFileName:     candidate.FileName,
-		AccountSnapshot:  candidate.ProviderBaseURL,
-		Provider:         candidate.ProviderSection,
-		RecoverAtMS:      candidate.ResetAt.UnixMilli(),
-		Owner:            model.QuotaCooldownOwnerHTTP500Provider,
-		EventHash:        candidate.EventHash,
-		PreDisabledState: preDisabled,
-		DisabledAtMS:     now.UnixMilli(),
-	})
-	if err != nil {
-		if changed {
-			_, _, _ = w.setAIProviderChannelDisabled(ctx, candidate.BaseURL, candidate.ManagementKey, candidate.ProviderSection, candidate.ProviderBaseURL, false)
-		}
-		log.Printf("[quota-auto-disable] closed AI provider channel %q but failed to persist recovery: %v", candidate.ProviderBaseURL, err)
-		return
-	}
-	log.Printf("[quota-auto-disable] HTTP 500 threshold reached for AI provider %q count=%d; channel closed until %s", candidate.ProviderBaseURL, candidate.TriggerCount, candidate.ResetAt.Format(time.RFC3339))
 }
 
 func (w *RateLimitAutoDisableWorker) extendExistingCooldown(ctx context.Context, candidate quotaAutoDisableCandidate, current authFile) bool {
@@ -463,10 +412,6 @@ func (w *RateLimitAutoDisableWorker) enableDue(ctx context.Context, now time.Tim
 }
 
 func (w *RateLimitAutoDisableWorker) recoverCooldown(ctx context.Context, baseURL string, managementKey string, item store.QuotaCooldown, now time.Time) {
-	if item.Owner == model.QuotaCooldownOwnerHTTP500Provider {
-		w.recoverAIProviderCooldown(ctx, baseURL, managementKey, item, now)
-		return
-	}
 	if item.Owner != model.QuotaCooldownOwnerUsage429 && item.Owner != model.QuotaCooldownOwnerXAIFreeUsage {
 		reason := "unknown owner"
 		_ = w.store.MarkQuotaCooldownSkipped(ctx, item.ID, reason)
@@ -509,210 +454,9 @@ func (w *RateLimitAutoDisableWorker) recoverCooldown(ctx context.Context, baseUR
 	log.Printf("[quota-auto-disable] enabled auth file %q after quota cooldown", item.AuthFileName)
 }
 
-type aiProviderChannel struct {
-	Section string
-	BaseURL string
-}
-
-func aiProviderCooldownKey(section string, baseURL string) string {
-	return "ai-provider:" + strings.TrimSpace(section) + ":" + normalizeURL(baseURL)
-}
-
-func shortHash(value string) string {
-	value = strings.TrimSpace(value)
-	if len(value) <= 10 {
-		return value
-	}
-	return value[:10]
-}
-
-func hashProviderAPIKey(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return ""
-	}
-	sum := sha256.Sum256([]byte(value))
-	return hex.EncodeToString(sum[:])
-}
-
-func providerAPIKeys(entry map[string]any) []string {
-	raw := entry["api-key"]
-	switch typed := raw.(type) {
-	case string:
-		return []string{typed}
-	case []any:
-		result := make([]string, 0, len(typed))
-		for _, item := range typed {
-			if value := strings.TrimSpace(fmt.Sprint(item)); value != "" {
-				result = append(result, value)
-			}
-		}
-		return result
-	case []string:
-		return typed
-	default:
-		return nil
-	}
-}
-
-func (w *RateLimitAutoDisableWorker) findAIProviderChannel(ctx context.Context, baseURL string, managementKey string, event usage.Event) (aiProviderChannel, bool) {
-	sourceHash := strings.TrimSpace(event.SourceHash)
-	if sourceHash == "" {
-		return aiProviderChannel{}, false
-	}
-	configData, err := w.managementConfigRequest(ctx, baseURL, managementKey, http.MethodGet, "/config", nil)
-	if err != nil {
-		log.Printf("[quota-auto-disable] failed to read AI provider config for HTTP 500 event: %v", err)
-		return aiProviderChannel{}, false
-	}
-	sections := []string{"codex-api-key", "claude-api-key"}
-	provider := strings.ToLower(strings.TrimSpace(firstNonEmpty(event.Provider, event.AuthProviderSnapshot)))
-	if provider == "claude" {
-		sections = []string{"claude-api-key", "codex-api-key"}
-	}
-	for _, section := range sections {
-		entries, _ := configData[section].([]any)
-		for _, raw := range entries {
-			entry, ok := raw.(map[string]any)
-			if !ok {
-				continue
-			}
-			for _, key := range providerAPIKeys(entry) {
-				if hashProviderAPIKey(key) == sourceHash {
-					return aiProviderChannel{Section: section, BaseURL: strings.TrimSpace(fmt.Sprint(entry["base-url"]))}, true
-				}
-			}
-		}
-	}
-	return aiProviderChannel{}, false
-}
-
-func (w *RateLimitAutoDisableWorker) setAIProviderChannelDisabled(ctx context.Context, baseURL string, managementKey string, section string, providerBaseURL string, disabled bool) (bool, bool, error) {
-	configData, err := w.managementConfigRequest(ctx, baseURL, managementKey, http.MethodGet, "/config", nil)
-	if err != nil {
-		return false, false, err
-	}
-	entries, ok := configData[section].([]any)
-	if !ok {
-		return false, false, fmt.Errorf("AI provider section %q is not a list", section)
-	}
-	matched := false
-	preDisabled := false
-	changed := false
-	for _, raw := range entries {
-		entry, ok := raw.(map[string]any)
-		if !ok || normalizeURL(fmt.Sprint(entry["base-url"])) != normalizeURL(providerBaseURL) {
-			continue
-		}
-		matched = true
-		preDisabled = isDisabledByExcludedModels(entry)
-		changed = setDisabledByExcludedModels(entry, disabled) || changed
-		delete(entry, "auth-index")
-	}
-	if !matched {
-		return false, false, fmt.Errorf("AI provider not found: %s %s", section, providerBaseURL)
-	}
-	if changed {
-		if _, err := w.managementConfigRequest(ctx, baseURL, managementKey, http.MethodPut, "/"+section, entries); err != nil {
-			return preDisabled, false, err
-		}
-	}
-	return preDisabled, changed, nil
-}
-
-func (w *RateLimitAutoDisableWorker) recoverAIProviderCooldown(ctx context.Context, baseURL string, managementKey string, item store.QuotaCooldown, now time.Time) {
-	section := strings.TrimSpace(item.Provider)
-	providerBaseURL := strings.TrimSpace(item.AccountSnapshot)
-	if section == "" || providerBaseURL == "" {
-		_ = w.store.MarkQuotaCooldownSkipped(ctx, item.ID, "AI provider section/base URL missing")
-		return
-	}
-	_, _, err := w.setAIProviderChannelDisabled(ctx, baseURL, managementKey, section, providerBaseURL, false)
-	if err != nil {
-		_ = w.store.RecordQuotaCooldownFailure(ctx, item.ID, err.Error())
-		log.Printf("[quota-auto-disable] failed to reopen AI provider channel %q: %v", providerBaseURL, err)
-		return
-	}
-	if err := w.store.MarkQuotaCooldownRecovered(ctx, item.ID, now.UnixMilli()); err != nil {
-		log.Printf("[quota-auto-disable] reopened AI provider channel %q but failed to mark recovery: %v", providerBaseURL, err)
-		return
-	}
-	log.Printf("[quota-auto-disable] reopened AI provider channel %q after HTTP 500 cooldown", providerBaseURL)
-}
-
-func (w *RateLimitAutoDisableWorker) managementConfigRequest(ctx context.Context, baseURL string, managementKey string, method string, path string, payload any) (map[string]any, error) {
-	var body *bytes.Reader
-	if payload != nil {
-		data, err := json.Marshal(payload)
-		if err != nil {
-			return nil, err
-		}
-		body = bytes.NewReader(data)
-	} else {
-		body = bytes.NewReader(nil)
-	}
-	reqCtx, cancel := context.WithTimeout(ctx, quotaAutoDisableActionTimeout)
-	defer cancel()
-	req, err := http.NewRequestWithContext(reqCtx, method, cpa.NormalizeBaseURL(baseURL)+"/v0/management"+path, body)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+managementKey)
-	req.Header.Set("Accept", "application/json")
-	if payload != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	res, err := w.client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer res.Body.Close()
-	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return nil, fmt.Errorf("CPA management %s %s failed: %s", method, path, res.Status)
-	}
-	if res.ContentLength == 0 {
-		return map[string]any{}, nil
-	}
-	var data map[string]any
-	if err := json.NewDecoder(res.Body).Decode(&data); err != nil {
-		return map[string]any{}, nil
-	}
-	return data, nil
-}
-
 func (w *RateLimitAutoDisableWorker) quotaAutoDisableCandidateFromEvent(ctx context.Context, event usage.Event, cfg collectorpkg.RuntimeConfig, baseURL string, managementKey string, now time.Time) (quotaAutoDisableCandidate, bool) {
 	provider := normalizeQuotaProvider(firstNonEmpty(event.Provider, event.AuthProviderSnapshot))
 	fileName := strings.TrimSpace(event.AuthFileSnapshot)
-	if event.Failed && event.FailStatusCode == http.StatusInternalServerError {
-		if !cfg.HTTP500CooldownEnabled {
-			return quotaAutoDisableCandidate{}, false
-		}
-		channel, ok := w.findAIProviderChannel(ctx, baseURL, managementKey, event)
-		if !ok {
-			log.Printf("[quota-auto-disable] HTTP 500 event %q cannot be matched to an AI provider channel, skip", event.EventHash)
-			return quotaAutoDisableCandidate{}, false
-		}
-		resetAt, count, ok := w.http500ProviderCooldownResetTime(ctx, event, cfg, now)
-		if !ok {
-			return quotaAutoDisableCandidate{}, false
-		}
-		return quotaAutoDisableCandidate{
-			BaseURL:         baseURL,
-			ManagementKey:   managementKey,
-			FileName:        aiProviderCooldownKey(channel.Section, channel.BaseURL),
-			DisplayAccount:  channel.BaseURL,
-			Provider:        provider,
-			ProviderSection: channel.Section,
-			ProviderBaseURL: channel.BaseURL,
-			SourceHash:      event.SourceHash,
-			ResetAt:         resetAt,
-			EventHash:       event.EventHash,
-			Reason:          event.FailSummary,
-			Owner:           model.QuotaCooldownOwnerHTTP500Provider,
-			HTTPStatusCode:  event.FailStatusCode,
-			TriggerCount:    count,
-		}, true
-	}
 	if resetAt, ok := xaiFreeUsageResetTimeFromEvent(event, now); ok {
 		if fileName == "" {
 			log.Printf("[quota-auto-disable] xAI free-usage event %q has no auth file snapshot, skip auto disable", event.EventHash)
@@ -773,26 +517,6 @@ func (w *RateLimitAutoDisableWorker) quotaAutoDisableCandidateFromEvent(ctx cont
 		Owner:          model.QuotaCooldownOwnerUsage429,
 		HTTPStatusCode: event.FailStatusCode,
 	}, true
-}
-
-func (w *RateLimitAutoDisableWorker) http500ProviderCooldownResetTime(ctx context.Context, event usage.Event, cfg collectorpkg.RuntimeConfig, now time.Time) (time.Time, int64, bool) {
-	if w == nil || w.store == nil || strings.TrimSpace(event.SourceHash) == "" {
-		return time.Time{}, 0, false
-	}
-	windowMinutes := model.NormalizeHTTP500CooldownWindowMinutes(cfg.HTTP500CooldownWindowMinutes)
-	threshold := model.NormalizeHTTP500CooldownThreshold(cfg.HTTP500CooldownThreshold)
-	durationMinutes := model.NormalizeHTTP500CooldownDurationMinutes(cfg.HTTP500CooldownDurationMinutes)
-	sinceMS := now.Add(-time.Duration(windowMinutes) * time.Minute).UnixMilli()
-	count, err := w.store.CountHTTP500ForSourceHashSince(ctx, event.SourceHash, sinceMS)
-	if err != nil {
-		log.Printf("[quota-auto-disable] failed to count HTTP 500 events for AI provider sourceHash=%s: %v", shortHash(event.SourceHash), err)
-		return time.Time{}, 0, false
-	}
-	if count < int64(threshold) {
-		log.Printf("[quota-auto-disable] HTTP 500 event for AI provider sourceHash=%s count=%d/%d window=%dm, keep channel open", shortHash(event.SourceHash), count, threshold, windowMinutes)
-		return time.Time{}, count, false
-	}
-	return now.Add(time.Duration(durationMinutes) * time.Minute), count, true
 }
 
 func (w *RateLimitAutoDisableWorker) antigravityQuotaResetTime(ctx context.Context, baseURL string, managementKey string, event usage.Event, fileName string, now time.Time) (time.Time, bool) {
@@ -1684,7 +1408,7 @@ func firstNonEmpty(values ...string) string {
 }
 
 // quotaAutoDisableCandidateFromEvent is a thin test helper that mirrors the worker
-// path for pure event classification without HTTP-dependent Antigravity/HTTP500 probes.
+// path for pure event classification without HTTP-dependent Antigravity probes.
 func quotaAutoDisableCandidateFromEvent(event usage.Event, baseURL string, managementKey string, now time.Time) (quotaAutoDisableCandidate, bool) {
 	w := &RateLimitAutoDisableWorker{}
 	return w.quotaAutoDisableCandidateFromEvent(context.Background(), event, collectorpkg.RuntimeConfig{}, baseURL, managementKey, now)
