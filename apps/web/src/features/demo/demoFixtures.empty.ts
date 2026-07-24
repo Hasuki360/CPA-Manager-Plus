@@ -35,7 +35,7 @@ export const getDemoCodexInspectionLocalRun = () => ({
   startedAt: 0,
   finishedAt: 0,
 });
-export const getDemoCodexInspectionLocalLogs = () => [];
+export const getDemoCodexInspectionLocalLogs = (_baseNow?: number, _t?: unknown) => [];
 export const getDemoAccountActionCandidates = () => ({ items: [], pendingCount: 0 });
 export const getDemoApiKeyAliases = () => ({ items: [] });
 export const getDemoLogsResponse = () => ({

@@ -18,32 +18,43 @@ const defaultSecretFile = "/run/secrets/cpa_management_key"
 const defaultAdminSecretFile = "/run/secrets/cpa_admin_key"
 const defaultDataKeySecretFile = "/run/secrets/cpa_data_key"
 
+const (
+	DefaultUsageImportChunkBytes     int64 = 4 * 1024 * 1024
+	DefaultUsageImportDiskQuotaBytes int64 = 16 * 1024 * 1024 * 1024
+	DefaultUsageImportMaxSessions          = 2
+	DefaultUsageImportSessionTTL           = 24 * time.Hour
+)
+
 type Config struct {
-	HTTPAddr                        string
-	DataDir                         string
-	DBPath                          string
-	CPAUpstreamURL                  string
-	ManagementKey                   string
-	AdminKey                        string
-	DataKey                         string
-	DataKeyPath                     string
-	CollectorMode                   string
-	Queue                           string
-	PopSide                         string
-	BatchSize                       int
-	PollInterval                    time.Duration
-	QueryLimit                      int
-	PprofAddr                       string
-	PanelPath                       string
-	CORSOrigins                     []string
-	TLSSkipVerify                   bool
-	QuotaCooldownEnabled            bool
-	AntigravityQuotaCooldownEnabled bool
-	AccountActionsEnabled           bool
-	AccountActionsAutoDisable       bool
-	DashboardHourlyRollupEnabled    bool
-	QuotaCooldownEnvSet             bool
-	AntigravityQuotaCooldownEnvSet bool
+	HTTPAddr                           string
+	DataDir                            string
+	DBPath                             string
+	CPAUpstreamURL                     string
+	ManagementKey                      string
+	AdminKey                           string
+	DataKey                            string
+	DataKeyPath                        string
+	CollectorMode                      string
+	Queue                              string
+	PopSide                            string
+	BatchSize                          int
+	PollInterval                       time.Duration
+	QueryLimit                         int
+	PprofAddr                          string
+	PanelPath                          string
+	CORSOrigins                        []string
+	TLSSkipVerify                      bool
+	QuotaCooldownEnabled               bool
+	AntigravityQuotaCooldownEnabled    bool
+	AccountActionsEnabled              bool
+	AccountActionsAutoDisable          bool
+	DashboardHourlyRollupEnabled       bool
+	UsageImportChunkBytes              int64
+	UsageImportDiskQuotaBytes          int64
+	UsageImportMaxSessions             int
+	UsageImportSessionTTL              time.Duration
+	QuotaCooldownEnvSet                bool
+	AntigravityQuotaCooldownEnvSet     bool
 	AccountActionsEnvSet               bool
 	AccountActionsAutoEnvSet           bool
 	CharityModelMonitorEnabled         bool
@@ -56,30 +67,34 @@ type LoadOptions struct {
 }
 
 type fileConfig struct {
-	HTTPAddr                  string   `json:"httpAddr,omitempty"`
-	DataDir                   string   `json:"dataDir,omitempty"`
-	DBPath                    string   `json:"dbPath,omitempty"`
-	CPAUpstreamURL            string   `json:"cpaUpstreamUrl,omitempty"`
-	ManagementKeyFile         string   `json:"managementKeyFile,omitempty"`
-	AdminKeyFile              string   `json:"adminKeyFile,omitempty"`
-	DataKeyFile               string   `json:"dataKeyFile,omitempty"`
-	DataKeyPath               string   `json:"dataKeyPath,omitempty"`
-	CollectorMode             string   `json:"collectorMode,omitempty"`
-	Queue                     string   `json:"queue,omitempty"`
-	PopSide                   string   `json:"popSide,omitempty"`
-	BatchSize                 int      `json:"batchSize,omitempty"`
-	PollIntervalMS            int      `json:"pollIntervalMs,omitempty"`
-	QueryLimit                int      `json:"queryLimit,omitempty"`
-	PprofAddr                 string   `json:"pprofAddr,omitempty"`
-	PanelPath                 string   `json:"panelPath,omitempty"`
-	CORSOrigins               []string `json:"corsOrigins,omitempty"`
-	TLSSkipVerify             bool     `json:"tlsSkipVerify,omitempty"`
-	QuotaCooldownEnabled      bool     `json:"quotaCooldownEnabled,omitempty"`
-	AntigravityQuotaCooldownEnabled bool `json:"antigravityQuotaCooldownEnabled,omitempty"`
-	AccountActionsEnabled     bool     `json:"accountActionsEnabled,omitempty"`
-	AccountActionsAutoDisable bool     `json:"accountActionsAutoDisable,omitempty"`
-	CharityModelMonitorEnabled bool `json:"charityModelMonitorEnabled,omitempty"`
-	CharityModelMonitorIntervalMinutes int `json:"charityModelMonitorIntervalMinutes,omitempty"`
+	HTTPAddr                           string   `json:"httpAddr,omitempty"`
+	DataDir                            string   `json:"dataDir,omitempty"`
+	DBPath                             string   `json:"dbPath,omitempty"`
+	CPAUpstreamURL                     string   `json:"cpaUpstreamUrl,omitempty"`
+	ManagementKeyFile                  string   `json:"managementKeyFile,omitempty"`
+	AdminKeyFile                       string   `json:"adminKeyFile,omitempty"`
+	DataKeyFile                        string   `json:"dataKeyFile,omitempty"`
+	DataKeyPath                        string   `json:"dataKeyPath,omitempty"`
+	CollectorMode                      string   `json:"collectorMode,omitempty"`
+	Queue                              string   `json:"queue,omitempty"`
+	PopSide                            string   `json:"popSide,omitempty"`
+	BatchSize                          int      `json:"batchSize,omitempty"`
+	PollIntervalMS                     int      `json:"pollIntervalMs,omitempty"`
+	QueryLimit                         int      `json:"queryLimit,omitempty"`
+	PprofAddr                          string   `json:"pprofAddr,omitempty"`
+	PanelPath                          string   `json:"panelPath,omitempty"`
+	CORSOrigins                        []string `json:"corsOrigins,omitempty"`
+	TLSSkipVerify                      bool     `json:"tlsSkipVerify,omitempty"`
+	QuotaCooldownEnabled               bool     `json:"quotaCooldownEnabled,omitempty"`
+	AntigravityQuotaCooldownEnabled    bool     `json:"antigravityQuotaCooldownEnabled,omitempty"`
+	AccountActionsEnabled              bool     `json:"accountActionsEnabled,omitempty"`
+	AccountActionsAutoDisable          bool     `json:"accountActionsAutoDisable,omitempty"`
+	CharityModelMonitorEnabled         bool     `json:"charityModelMonitorEnabled,omitempty"`
+	CharityModelMonitorIntervalMinutes int      `json:"charityModelMonitorIntervalMinutes,omitempty"`
+	UsageImportChunkBytes              int64    `json:"usageImportChunkBytes,omitempty"`
+	UsageImportDiskQuotaBytes          int64    `json:"usageImportDiskQuotaBytes,omitempty"`
+	UsageImportMaxSessions             int      `json:"usageImportMaxSessions,omitempty"`
+	UsageImportTTLMinutes              int      `json:"usageImportSessionTTLMinutes,omitempty"`
 }
 
 func Load() (Config, error) {
@@ -129,36 +144,52 @@ func LoadWithOptions(options LoadOptions) (Config, error) {
 	}
 
 	return Config{
-		HTTPAddr:                        env("HTTP_ADDR", stringFallback(cfgFile.HTTPAddr, "0.0.0.0:18317")),
-		DataDir:                         dataDir,
-		DBPath:                          env("USAGE_DB_PATH", dbPathFallback),
-		CPAUpstreamURL:                  env("CPA_UPSTREAM_URL", cfgFile.CPAUpstreamURL),
-		ManagementKey:                   readSecret("CPA_MANAGEMENT_KEY", "CPA_MANAGEMENT_KEY_FILE", managementKeyFile),
-		AdminKey:                        readSecret("CPA_MANAGER_ADMIN_KEY", "CPA_MANAGER_ADMIN_KEY_FILE", adminKeyFile),
-		DataKey:                         readSecret("CPA_MANAGER_DATA_KEY", "CPA_MANAGER_DATA_KEY_FILE", dataKeyFile),
-		DataKeyPath:                     env("CPA_MANAGER_DATA_KEY_PATH", dataKeyPath),
-		CollectorMode:                   normalizeCollectorMode(env("USAGE_COLLECTOR_MODE", stringFallback(cfgFile.CollectorMode, "auto"))),
-		Queue:                           env("USAGE_RESP_QUEUE", stringFallback(cfgFile.Queue, "usage")),
-		PopSide:                         env("USAGE_RESP_POP_SIDE", stringFallback(cfgFile.PopSide, "right")),
-		BatchSize:                       envInt("USAGE_BATCH_SIZE", intFallback(cfgFile.BatchSize, 100)),
-		PollInterval:                    time.Duration(envInt("USAGE_POLL_INTERVAL_MS", intFallback(cfgFile.PollIntervalMS, 500))) * time.Millisecond,
-		QueryLimit:                      envInt("USAGE_QUERY_LIMIT", intFallback(cfgFile.QueryLimit, 50000)),
-		PprofAddr:                       env("CPA_MANAGER_PPROF_ADDR", cfgFile.PprofAddr),
-		PanelPath:                       env("PANEL_PATH", resolveConfigPath(cfgFile.PanelPath, cfgDir)),
-		CORSOrigins:                     splitCSV(env("USAGE_CORS_ORIGINS", strings.Join(sliceFallback(cfgFile.CORSOrigins, []string{"*"}), ","))),
-		TLSSkipVerify:                   envBool("USAGE_RESP_TLS_SKIP_VERIFY", cfgFile.TLSSkipVerify),
-		QuotaCooldownEnabled:            envBool("USAGE_QUOTA_COOLDOWN_ENABLED", cfgFile.QuotaCooldownEnabled),
-		AntigravityQuotaCooldownEnabled: envBool("USAGE_ANTIGRAVITY_QUOTA_COOLDOWN_ENABLED", cfgFile.AntigravityQuotaCooldownEnabled),
-		AccountActionsEnabled:                 envBool("USAGE_ACCOUNT_ACTIONS_ENABLED", cfgFile.AccountActionsEnabled),
-		AccountActionsAutoDisable:             envBool("USAGE_ACCOUNT_ACTIONS_AUTO_DISABLE", cfgFile.AccountActionsAutoDisable),
-		DashboardHourlyRollupEnabled:          envBool("USAGE_DASHBOARD_HOURLY_ROLLUP_ENABLED", true),
-		CharityModelMonitorEnabled:           envBool("USAGE_CHARITY_MODEL_MONITOR_ENABLED", cfgFile.CharityModelMonitorEnabled),
-		CharityModelMonitorIntervalMinutes:   envInt("USAGE_CHARITY_MODEL_MONITOR_INTERVAL_MINUTES", intFallback(cfgFile.CharityModelMonitorIntervalMinutes, 15)),
-		QuotaCooldownEnvSet:                   hasEnv("USAGE_QUOTA_COOLDOWN_ENABLED"),
-		AntigravityQuotaCooldownEnvSet:       hasEnv("USAGE_ANTIGRAVITY_QUOTA_COOLDOWN_ENABLED"),
-		AccountActionsEnvSet:                  hasEnv("USAGE_ACCOUNT_ACTIONS_ENABLED"),
-		AccountActionsAutoEnvSet:              hasEnv("USAGE_ACCOUNT_ACTIONS_AUTO_DISABLE"),
-		CharityModelMonitorEnvSet:             hasEnv("USAGE_CHARITY_MODEL_MONITOR_ENABLED"),
+		HTTPAddr:                           env("HTTP_ADDR", stringFallback(cfgFile.HTTPAddr, "0.0.0.0:18317")),
+		DataDir:                            dataDir,
+		DBPath:                             env("USAGE_DB_PATH", dbPathFallback),
+		CPAUpstreamURL:                     env("CPA_UPSTREAM_URL", cfgFile.CPAUpstreamURL),
+		ManagementKey:                      readSecret("CPA_MANAGEMENT_KEY", "CPA_MANAGEMENT_KEY_FILE", managementKeyFile),
+		AdminKey:                           readSecret("CPA_MANAGER_ADMIN_KEY", "CPA_MANAGER_ADMIN_KEY_FILE", adminKeyFile),
+		DataKey:                            readSecret("CPA_MANAGER_DATA_KEY", "CPA_MANAGER_DATA_KEY_FILE", dataKeyFile),
+		DataKeyPath:                        env("CPA_MANAGER_DATA_KEY_PATH", dataKeyPath),
+		CollectorMode:                      normalizeCollectorMode(env("USAGE_COLLECTOR_MODE", stringFallback(cfgFile.CollectorMode, "auto"))),
+		Queue:                              env("USAGE_RESP_QUEUE", stringFallback(cfgFile.Queue, "usage")),
+		PopSide:                            env("USAGE_RESP_POP_SIDE", stringFallback(cfgFile.PopSide, "right")),
+		BatchSize:                          envInt("USAGE_BATCH_SIZE", intFallback(cfgFile.BatchSize, 100)),
+		PollInterval:                       time.Duration(envInt("USAGE_POLL_INTERVAL_MS", intFallback(cfgFile.PollIntervalMS, 500))) * time.Millisecond,
+		QueryLimit:                         envInt("USAGE_QUERY_LIMIT", intFallback(cfgFile.QueryLimit, 50000)),
+		PprofAddr:                          env("CPA_MANAGER_PPROF_ADDR", cfgFile.PprofAddr),
+		PanelPath:                          env("PANEL_PATH", resolveConfigPath(cfgFile.PanelPath, cfgDir)),
+		CORSOrigins:                        splitCSV(env("USAGE_CORS_ORIGINS", strings.Join(sliceFallback(cfgFile.CORSOrigins, []string{"*"}), ","))),
+		TLSSkipVerify:                      envBool("USAGE_RESP_TLS_SKIP_VERIFY", cfgFile.TLSSkipVerify),
+		QuotaCooldownEnabled:               envBool("USAGE_QUOTA_COOLDOWN_ENABLED", cfgFile.QuotaCooldownEnabled),
+		AntigravityQuotaCooldownEnabled:    envBool("USAGE_ANTIGRAVITY_QUOTA_COOLDOWN_ENABLED", cfgFile.AntigravityQuotaCooldownEnabled),
+		AccountActionsEnabled:              envBool("USAGE_ACCOUNT_ACTIONS_ENABLED", cfgFile.AccountActionsEnabled),
+		AccountActionsAutoDisable:          envBool("USAGE_ACCOUNT_ACTIONS_AUTO_DISABLE", cfgFile.AccountActionsAutoDisable),
+		DashboardHourlyRollupEnabled:       envBool("USAGE_DASHBOARD_HOURLY_ROLLUP_ENABLED", true),
+		CharityModelMonitorEnabled:         envBool("USAGE_CHARITY_MODEL_MONITOR_ENABLED", cfgFile.CharityModelMonitorEnabled),
+		CharityModelMonitorIntervalMinutes: envInt("USAGE_CHARITY_MODEL_MONITOR_INTERVAL_MINUTES", intFallback(cfgFile.CharityModelMonitorIntervalMinutes, 15)),
+		UsageImportChunkBytes: envInt64(
+			"USAGE_IMPORT_CHUNK_BYTES",
+			int64Fallback(cfgFile.UsageImportChunkBytes, DefaultUsageImportChunkBytes),
+		),
+		UsageImportDiskQuotaBytes: envInt64(
+			"USAGE_IMPORT_DISK_QUOTA_BYTES",
+			int64Fallback(cfgFile.UsageImportDiskQuotaBytes, DefaultUsageImportDiskQuotaBytes),
+		),
+		UsageImportMaxSessions: envInt(
+			"USAGE_IMPORT_MAX_SESSIONS",
+			intFallback(cfgFile.UsageImportMaxSessions, DefaultUsageImportMaxSessions),
+		),
+		UsageImportSessionTTL: time.Duration(envInt(
+			"USAGE_IMPORT_SESSION_TTL_MINUTES",
+			intFallback(cfgFile.UsageImportTTLMinutes, int(DefaultUsageImportSessionTTL/time.Minute)),
+		)) * time.Minute,
+		QuotaCooldownEnvSet:            hasEnv("USAGE_QUOTA_COOLDOWN_ENABLED"),
+		AntigravityQuotaCooldownEnvSet: hasEnv("USAGE_ANTIGRAVITY_QUOTA_COOLDOWN_ENABLED"),
+		AccountActionsEnvSet:           hasEnv("USAGE_ACCOUNT_ACTIONS_ENABLED"),
+		AccountActionsAutoEnvSet:       hasEnv("USAGE_ACCOUNT_ACTIONS_AUTO_DISABLE"),
+		CharityModelMonitorEnvSet:      hasEnv("USAGE_CHARITY_MODEL_MONITOR_ENABLED"),
 	}, nil
 }
 
@@ -274,6 +305,18 @@ func envInt(key string, fallback int) int {
 	return parsed
 }
 
+func envInt64(key string, fallback int64) int64 {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || parsed <= 0 {
+		return fallback
+	}
+	return parsed
+}
+
 func envBool(key string, fallback bool) bool {
 	value := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
 	if value == "" {
@@ -291,6 +334,13 @@ func stringFallback(value string, fallback string) string {
 }
 
 func intFallback(value int, fallback int) int {
+	if value <= 0 {
+		return fallback
+	}
+	return value
+}
+
+func int64Fallback(value int64, fallback int64) int64 {
 	if value <= 0 {
 		return fallback
 	}

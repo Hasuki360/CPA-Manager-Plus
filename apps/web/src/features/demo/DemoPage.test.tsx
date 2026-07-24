@@ -350,8 +350,14 @@ describe('DemoPage', () => {
     expect(lastRun).toMatchObject({
       version: 1,
       actionFilter: 'all',
+      logsCollapsed: false,
       result: { results: expect.arrayContaining([expect.objectContaining({ provider: 'xai' })]) },
     });
+    expect(lastRun.logs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ detail: expect.objectContaining({ triggerKey: 'manual' }) }),
+      ])
+    );
     expect(settings).toMatchObject({
       targetTypes: ['codex', 'xai'],
       xaiInferenceEnabled: true,

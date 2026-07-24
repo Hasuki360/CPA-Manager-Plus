@@ -2492,13 +2492,30 @@
   text-align: center;
 }
 
-.serverLogDetail {
-  display: block;
+.logDetailDisclosure {
   margin-top: 4px;
+  color: var(--inspect-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.logDetailDisclosure summary {
+  width: fit-content;
+  cursor: pointer;
+  user-select: none;
+}
+
+.logDetailDisclosure pre {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--inspect-line) 78%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--inspect-surface-muted) 72%, var(--inspect-surface));
   color: var(--inspect-muted);
   font-family: var(--font-family-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
   font-size: 12px;
   line-height: 1.45;
+  white-space: pre-wrap;
   word-break: break-word;
 }
 

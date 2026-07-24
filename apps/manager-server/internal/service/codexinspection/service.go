@@ -86,6 +86,7 @@ type ActionOutcome struct {
 	Status         string `json:"status"`
 	Success        bool   `json:"success"`
 	Error          string `json:"error,omitempty"`
+	CurrentDisabled *bool `json:"-"`
 }
 
 type ExecuteActionsResult struct {
@@ -269,45 +270,81 @@ func (s *Service) Run(ctx context.Context, req RunRequest) (RunDetail, error) {
 
 	results := s.inspectAccounts(ctx, setup, settings, run.ID, sampled, logger)
 	if err := ctx.Err(); err != nil {
-		for _, result := range results {
-			result.RunID = run.ID
-			_, _ = s.store.InsertCodexInspectionResult(persistCtx, result)
-		}
+		resultWriteFailures := s.persistInspectionResults(persistCtx, run.ID, results, logger)
 		run = summarizeRun(run, results)
 		run.Status = model.CodexInspectionStatusFailed
 		run.Error = err.Error()
+		if resultWriteFailures > 0 {
+			run.Error += fmt.Sprintf("；%d 个巡检结果写入失败，详见巡检日志", resultWriteFailures)
+		}
 		run.FinishedAtMS = time.Now().UnixMilli()
 		if err := s.store.UpdateCodexInspectionRun(persistCtx, run); err != nil {
 			return RunDetail{}, err
 		}
 		logger.warning(persistCtx, "凭证健康巡检已取消", map[string]any{"error": run.Error})
-		return s.GetRun(persistCtx, run.ID)
+		return s.getRunWithResultFallback(persistCtx, run.ID, results, resultWriteFailures > 0)
 	}
 
 	results = resolveAutoActionResults(settings.AutoActionMode, results)
 	actionOutcomes := s.executeAutoActions(ctx, setup, settings, results, logger)
+	actionSummary := summarizeActionOutcomes(actionOutcomes)
 	results = applyActionOutcomes(results, actionOutcomes)
-	for _, result := range results {
-		result.RunID = run.ID
-		_, _ = s.store.InsertCodexInspectionResult(persistCtx, result)
-	}
+	resultWriteFailures := s.persistInspectionResults(persistCtx, run.ID, results, logger)
 	run = summarizeRun(run, results)
-	if failed := countFailedOutcomes(actionOutcomes); failed > 0 {
-		run.Error = fmt.Sprintf("%d 个自动处理动作执行失败，详见巡检日志", failed)
+	if err := ctx.Err(); err != nil {
+		run.Status = model.CodexInspectionStatusFailed
+		runErrors := []string{err.Error()}
+		if resultWriteFailures > 0 {
+			runErrors = append(runErrors, fmt.Sprintf("%d 个巡检结果写入失败，详见巡检日志", resultWriteFailures))
+		}
+		run.Error = strings.Join(runErrors, "；")
+		run.FinishedAtMS = time.Now().UnixMilli()
+		if err := s.store.UpdateCodexInspectionRun(persistCtx, run); err != nil {
+			return RunDetail{}, err
+		}
+		logger.warning(persistCtx, "凭证健康巡检已取消", map[string]any{
+			"error":                  run.Error,
+			"actionSuccessCount":     actionSummary.Success,
+			"actionFailedCount":      actionSummary.Failed,
+			"actionSkippedCount":     actionSummary.Skipped,
+			"actionNeedsReviewCount": actionSummary.NeedsReview,
+			"resultWriteFailedCount": resultWriteFailures,
+		})
+		return s.getRunWithResultFallback(persistCtx, run.ID, results, resultWriteFailures > 0)
 	}
+	failedActions := actionSummary.Failed
+	runErrors := make([]string, 0, 2)
+	if failedActions > 0 {
+		runErrors = append(runErrors, fmt.Sprintf("%d 个自动处理动作执行失败，详见巡检日志", failedActions))
+	}
+	if resultWriteFailures > 0 {
+		runErrors = append(runErrors, fmt.Sprintf("%d 个巡检结果写入失败，详见巡检日志", resultWriteFailures))
+	}
+	run.Error = strings.Join(runErrors, "；")
 	run.Status = model.CodexInspectionStatusCompleted
 	run.FinishedAtMS = time.Now().UnixMilli()
 	if err := s.store.UpdateCodexInspectionRun(persistCtx, run); err != nil {
 		return RunDetail{}, err
 	}
-	logger.success(persistCtx, "凭证健康巡检完成", map[string]any{
-		"deleteCount":  run.DeleteCount,
-		"disableCount": run.DisableCount,
-		"enableCount":  run.EnableCount,
-		"keepCount":    run.KeepCount,
-		"actionErrors": failedActionOutcomes(actionOutcomes),
-	})
-	return s.GetRun(persistCtx, run.ID)
+	completionDetail := map[string]any{
+		"deleteCount":            run.DeleteCount,
+		"disableCount":           run.DisableCount,
+		"enableCount":            run.EnableCount,
+		"reauthCount":            run.ReauthCount,
+		"keepCount":              run.KeepCount,
+		"actionSuccessCount":     actionSummary.Success,
+		"actionFailedCount":      actionSummary.Failed,
+		"actionSkippedCount":     actionSummary.Skipped,
+		"actionNeedsReviewCount": actionSummary.NeedsReview,
+		"actionErrors":           failedActionOutcomes(actionOutcomes),
+		"resultWriteFailedCount": resultWriteFailures,
+	}
+	if failedActions > 0 || actionSummary.NeedsReview > 0 || resultWriteFailures > 0 {
+		logger.warning(persistCtx, "凭证健康巡检完成", completionDetail)
+	} else {
+		logger.success(persistCtx, "凭证健康巡检完成", completionDetail)
+	}
+	return s.getRunWithResultFallback(persistCtx, run.ID, results, resultWriteFailures > 0)
 }
 
 func (s *Service) ListRuns(ctx context.Context, limit int) ([]model.CodexInspectionRun, error) {
@@ -383,16 +420,17 @@ func (s *Service) ExecuteManualActions(ctx context.Context, runID int64, req Exe
 		"requestedCount": len(req.ResultIDs),
 		"actionCount":    len(items),
 	})
-	for _, outcome := range preflightOutcomes {
-		logger.warning(persistCtx, "手动处理账号跳过", map[string]any{
-			"fileName":       outcome.FileName,
-			"displayAccount": outcome.DisplayAccount,
-			"action":         outcome.Action,
-			"reason":         outcome.Error,
-		})
-	}
+	logPreflightActionOutcomes(persistCtx, logger, "手动处理", preflightOutcomes)
 
-	validItems, validationOutcomes, err := s.validateManualActionItems(ctx, persistCtx, setup, items, logger)
+	validItems, validationOutcomes, err := s.validateActionItems(
+		ctx,
+		persistCtx,
+		setup,
+		items,
+		logger,
+		"手动处理",
+		func(item model.CodexInspectionResult) string { return item.Action },
+	)
 	if err != nil {
 		return ExecuteActionsResult{}, err
 	}
@@ -406,26 +444,41 @@ func (s *Service) ExecuteManualActions(ctx context.Context, runID int64, req Exe
 		return ExecuteActionsResult{}, ErrNoActionableResults
 	}
 	nextResults := applyActionOutcomes(detail.Results, outcomes)
-	for _, result := range nextResults {
-		result.RunID = detail.Run.ID
-		_, _ = s.store.InsertCodexInspectionResult(persistCtx, result)
-	}
+	resultWriteFailures := s.persistInspectionResults(persistCtx, detail.Run.ID, nextResults, logger)
 
 	run := summarizeRun(detail.Run, nextResults)
-	if failed := countFailedOutcomes(outcomes); failed > 0 {
-		run.Error = fmt.Sprintf("%d 个手动处理动作执行失败，详见巡检日志", failed)
-	} else {
-		run.Error = ""
+	outcomeSummary := summarizeActionOutcomes(outcomes)
+	failedActions := outcomeSummary.Failed
+	runErrors := make([]string, 0, 2)
+	if failedActions > 0 {
+		runErrors = append(runErrors, fmt.Sprintf("%d 个手动处理动作执行失败，详见巡检日志", failedActions))
 	}
+	if resultWriteFailures > 0 {
+		runErrors = append(runErrors, fmt.Sprintf("%d 个巡检结果写入失败，详见巡检日志", resultWriteFailures))
+	}
+	run.Error = strings.Join(runErrors, "；")
 	if err := s.store.UpdateCodexInspectionRun(persistCtx, run); err != nil {
 		return ExecuteActionsResult{}, err
 	}
-	logger.success(persistCtx, "手动处理账号完成", map[string]any{
-		"successCount": len(outcomes) - countFailedOutcomes(outcomes),
-		"failedCount":  countFailedOutcomes(outcomes),
-	})
+	completionDetail := map[string]any{
+		"successCount":           outcomeSummary.Success,
+		"failedCount":            outcomeSummary.Failed,
+		"skippedCount":           outcomeSummary.Skipped,
+		"needsReviewCount":       outcomeSummary.NeedsReview,
+		"resultWriteFailedCount": resultWriteFailures,
+	}
+	if failedActions > 0 || outcomeSummary.NeedsReview > 0 || resultWriteFailures > 0 {
+		logger.warning(persistCtx, "手动处理账号完成", completionDetail)
+	} else {
+		logger.success(persistCtx, "手动处理账号完成", completionDetail)
+	}
 
-	nextDetail, err := s.GetRun(persistCtx, detail.Run.ID)
+	nextDetail, err := s.getRunWithResultFallback(
+		persistCtx,
+		detail.Run.ID,
+		nextResults,
+		resultWriteFailures > 0,
+	)
 	if err != nil {
 		return ExecuteActionsResult{}, err
 	}
@@ -574,8 +627,10 @@ func (s *Service) inspectAccounts(
 				result.RunID = runID
 				if _, err := s.store.InsertCodexInspectionResult(ctx, result); err != nil {
 					logger.error(ctx, "写入巡检账号结果失败", map[string]any{
-						"fileName": item.FileName,
-						"error":    err.Error(),
+						"fileName":       item.FileName,
+						"displayAccount": item.DisplayAccount,
+						"retryScheduled": true,
+						"error":          err.Error(),
 					})
 				}
 				results <- result
@@ -708,7 +763,7 @@ func (s *Service) inspectSingleAccount(
 
 	level := "info"
 	switch decision.Action {
-	case "delete":
+	case "delete", "reauth":
 		level = "error"
 	case "disable":
 		level = "warning"
@@ -845,16 +900,101 @@ func (s *Service) executeAutoActions(
 	logger runLogger,
 ) []ActionOutcome {
 	mode := model.NormalizeCodexInspectionAutoActionMode(settings.AutoActionMode, model.CodexInspectionAutoActionNone)
-	items, preflightOutcomes := selectAutoActionItems(mode, settings.AutoRecoverEnabled, results)
-	if len(items) == 0 {
-		return preflightOutcomes
+	if mode == model.CodexInspectionAutoActionNone && !settings.AutoRecoverEnabled {
+		return nil
 	}
-	outcomes := make([]ActionOutcome, 0, len(preflightOutcomes)+len(items))
-	outcomes = append(outcomes, preflightOutcomes...)
-	outcomes = append(outcomes, s.executeActionItems(ctx, setup, settings, items, logger, "自动处理", true, func(item model.CodexInspectionResult) string {
+	items, preflightOutcomes := selectAutoActionItems(mode, settings.AutoRecoverEnabled, results)
+	logCtx := context.WithoutCancel(ctx)
+	requestedCount := len(items) + len(preflightOutcomes)
+	if requestedCount == 0 {
+		requestedCount = countSuggestedActionResults(results)
+	}
+	if requestedCount == 0 {
+		return nil
+	}
+	logger.info(logCtx, "自动处理账号开始", map[string]any{
+		"requestedCount": requestedCount,
+		"actionCount":    len(items),
+	})
+	logPreflightActionOutcomes(logCtx, logger, "自动处理", preflightOutcomes)
+	actionFor := func(item model.CodexInspectionResult) string {
 		return resolveExecutableAction(mode, item.Action)
-	})...)
+	}
+	validItems, validationOutcomes, validationErr := s.validateActionItems(
+		ctx,
+		logCtx,
+		setup,
+		items,
+		logger,
+		"自动处理",
+		actionFor,
+	)
+	if validationErr != nil {
+		validationOutcomes = completeCanceledActionOutcomes(
+			items,
+			validationOutcomes,
+			actionFor,
+			validationErr,
+			logger,
+			logCtx,
+			"自动处理",
+		)
+		validItems = nil
+	}
+	outcomes := make([]ActionOutcome, 0, len(preflightOutcomes)+len(validationOutcomes)+len(validItems))
+	outcomes = append(outcomes, preflightOutcomes...)
+	outcomes = append(outcomes, validationOutcomes...)
+	if len(validItems) > 0 {
+		outcomes = append(outcomes, s.executeActionItems(ctx, setup, settings, validItems, logger, "自动处理", true, actionFor)...)
+	}
+	summary := summarizeActionOutcomes(outcomes)
+	remainingCount := countPendingActionResults(results, outcomes)
+	completionDetail := map[string]any{
+		"successCount":     summary.Success,
+		"failedCount":      summary.Failed,
+		"skippedCount":     summary.Skipped,
+		"needsReviewCount": summary.NeedsReview,
+		"remainingCount":   remainingCount,
+	}
+	if summary.Failed > 0 || summary.NeedsReview > 0 || remainingCount > 0 {
+		logger.warning(logCtx, "自动处理账号完成", completionDetail)
+	} else {
+		logger.success(logCtx, "自动处理账号完成", completionDetail)
+	}
 	return outcomes
+}
+
+func countSuggestedActionResults(results []model.CodexInspectionResult) int {
+	count := 0
+	for _, result := range results {
+		if result.Action != "" && result.Action != "keep" {
+			count++
+		}
+	}
+	return count
+}
+
+func countPendingActionResults(results []model.CodexInspectionResult, outcomes []ActionOutcome) int {
+	terminal := make(map[string]struct{}, len(outcomes))
+	for _, outcome := range outcomes {
+		switch outcome.Status {
+		case model.CodexInspectionActionStatusSuccess,
+			model.CodexInspectionActionStatusSkipped,
+			model.CodexInspectionActionStatusNeedsReview:
+			terminal[outcome.AccountKey] = struct{}{}
+		}
+	}
+	count := 0
+	for _, result := range results {
+		if result.Action == "" || result.Action == "keep" {
+			continue
+		}
+		if _, ok := terminal[result.AccountKey]; ok {
+			continue
+		}
+		count++
+	}
+	return count
 }
 
 func (s *Service) executeActionItems(
@@ -867,6 +1007,7 @@ func (s *Service) executeActionItems(
 	automatic bool,
 	actionFor func(model.CodexInspectionResult) string,
 ) []ActionOutcome {
+	logCtx := context.WithoutCancel(ctx)
 	workers := settings.DeleteWorkers
 	if workers <= 0 {
 		workers = 1
@@ -901,13 +1042,14 @@ func (s *Service) executeActionItems(
 						FileName:       item.FileName,
 						DisplayAccount: item.DisplayAccount,
 						Action:         action,
+						CurrentDisabled: boolPointer(item.Disabled),
 					}
 					if err := s.executeAction(ctx, setup, actionItem, automatic); err != nil {
 						outcome.Success = false
 						outcome.Status = model.CodexInspectionActionStatusFailed
 						outcome.Error = err.Error()
 						outcomes <- outcome
-						logger.error(ctx, logPrefix+"账号失败", map[string]any{
+						logger.error(logCtx, logPrefix+"账号失败", map[string]any{
 							"fileName":       item.FileName,
 							"displayAccount": item.DisplayAccount,
 							"action":         action,
@@ -918,7 +1060,7 @@ func (s *Service) executeActionItems(
 					outcome.Success = true
 					outcome.Status = model.CodexInspectionActionStatusSuccess
 					outcomes <- outcome
-					logger.success(ctx, logPrefix+"账号成功", map[string]any{
+					logger.success(logCtx, logPrefix+"账号成功", map[string]any{
 						"fileName":       item.FileName,
 						"displayAccount": item.DisplayAccount,
 						"action":         action,
@@ -933,7 +1075,15 @@ func (s *Service) executeActionItems(
 			close(jobs)
 			wg.Wait()
 			close(outcomes)
-			return collectActionOutcomes(outcomes, len(items))
+			return completeCanceledActionOutcomes(
+				items,
+				collectActionOutcomes(outcomes, len(items)),
+				actionFor,
+				ctx.Err(),
+				logger,
+				logCtx,
+				logPrefix,
+			)
 		case jobs <- item:
 		}
 	}
@@ -941,7 +1091,15 @@ func (s *Service) executeActionItems(
 	wg.Wait()
 	close(outcomes)
 
-	return collectActionOutcomes(outcomes, len(items))
+	return completeCanceledActionOutcomes(
+		items,
+		collectActionOutcomes(outcomes, len(items)),
+		actionFor,
+		ctx.Err(),
+		logger,
+		logCtx,
+		logPrefix,
+	)
 }
 
 func collectActionOutcomes(outcomes <-chan ActionOutcome, capacity int) []ActionOutcome {
@@ -956,6 +1114,49 @@ func collectActionOutcomes(outcomes <-chan ActionOutcome, capacity int) []Action
 		return result[i].FileName < result[j].FileName
 	})
 	return result
+}
+
+func completeCanceledActionOutcomes(
+	items []model.CodexInspectionResult,
+	outcomes []ActionOutcome,
+	actionFor func(model.CodexInspectionResult) string,
+	cause error,
+	logger runLogger,
+	logCtx context.Context,
+	logPrefix string,
+) []ActionOutcome {
+	if cause == nil || len(outcomes) >= len(items) {
+		return outcomes
+	}
+	completed := make(map[string]struct{}, len(outcomes))
+	for _, outcome := range outcomes {
+		completed[outcome.AccountKey] = struct{}{}
+	}
+	for _, item := range items {
+		if _, ok := completed[item.AccountKey]; ok {
+			continue
+		}
+		action := item.Action
+		if actionFor != nil {
+			action = actionFor(item)
+		}
+		message := fmt.Sprintf("动作未执行：%v", cause)
+		outcome := failedActionOutcome(item, action, message)
+		outcomes = append(outcomes, outcome)
+		logger.error(logCtx, logPrefix+"账号失败", map[string]any{
+			"fileName":       item.FileName,
+			"displayAccount": item.DisplayAccount,
+			"action":         action,
+			"error":          message,
+		})
+	}
+	sort.Slice(outcomes, func(i, j int) bool {
+		if outcomes[i].FileName == outcomes[j].FileName {
+			return outcomes[i].Action < outcomes[j].Action
+		}
+		return outcomes[i].FileName < outcomes[j].FileName
+	})
+	return outcomes
 }
 
 func (s *Service) executeAction(ctx context.Context, setup store.Setup, item model.CodexInspectionResult, automatic bool) error {
@@ -1462,19 +1663,42 @@ func isExecutableInspectionAction(action string) bool {
 	return action == "delete" || action == "disable" || action == "enable"
 }
 
-func (s *Service) validateManualActionItems(
+func (s *Service) validateActionItems(
 	ctx context.Context,
 	logCtx context.Context,
 	setup store.Setup,
 	items []model.CodexInspectionResult,
 	logger runLogger,
+	logPrefix string,
+	actionFor func(model.CodexInspectionResult) string,
 ) ([]model.CodexInspectionResult, []ActionOutcome, error) {
 	if len(items) == 0 {
 		return nil, nil, nil
 	}
 	files, err := s.fetchAuthFiles(ctx, setup)
 	if err != nil {
-		return nil, nil, err
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, nil, ctxErr
+		}
+		message := fmt.Sprintf("刷新认证文件失败，已拒绝执行：%v", err)
+		outcomes := make([]ActionOutcome, 0, len(items))
+		for _, item := range items {
+			action := item.Action
+			if actionFor != nil {
+				action = actionFor(item)
+			}
+			outcome := failedActionOutcome(item, action, message)
+			outcomes = append(outcomes, outcome)
+			logger.error(logCtx, logPrefix+"账号校验失败", map[string]any{
+				"fileName":       item.FileName,
+				"displayAccount": item.DisplayAccount,
+				"action":         action,
+				"authIndex":      item.AuthIndex,
+				"accountId":      item.AccountID,
+				"error":          outcome.Error,
+			})
+		}
+		return nil, outcomes, nil
 	}
 	currentByFile := map[string][]account{}
 	for _, file := range files {
@@ -1485,37 +1709,45 @@ func (s *Service) validateManualActionItems(
 	validItems := make([]model.CodexInspectionResult, 0, len(items))
 	outcomes := make([]ActionOutcome, 0)
 	for _, item := range items {
+		action := item.Action
+		if actionFor != nil {
+			action = actionFor(item)
+		}
 		current, ok := matchCurrentAccount(currentByFile[item.FileName], item)
 		if !ok {
-			outcome := failedActionOutcome(item, item.Action, "认证文件不存在或账号标识已变化，已拒绝执行")
+			outcome := failedActionOutcome(item, action, "认证文件不存在或账号标识已变化，已拒绝执行")
 			outcomes = append(outcomes, outcome)
-			logger.warning(logCtx, "手动处理账号校验失败", map[string]any{
+			logger.error(logCtx, logPrefix+"账号校验失败", map[string]any{
 				"fileName":       item.FileName,
 				"displayAccount": item.DisplayAccount,
+				"action":         action,
 				"authIndex":      item.AuthIndex,
 				"accountId":      item.AccountID,
 				"error":          outcome.Error,
 			})
 			continue
 		}
-		if item.Action == "disable" && current.Disabled {
-			outcome := skippedActionOutcome(item, item.Action, "账号已是禁用状态，未重复执行")
+		item.Disabled = current.Disabled
+		if action == "disable" && current.Disabled {
+			outcome := skippedActionOutcome(item, action, "账号已是禁用状态，未重复执行")
+			outcome.CurrentDisabled = boolPointer(current.Disabled)
 			outcomes = append(outcomes, outcome)
-			logger.info(logCtx, "手动处理账号跳过", map[string]any{
+			logger.info(logCtx, logPrefix+"账号跳过", map[string]any{
 				"fileName":       item.FileName,
 				"displayAccount": item.DisplayAccount,
-				"action":         item.Action,
+				"action":         action,
 				"reason":         outcome.Error,
 			})
 			continue
 		}
-		if item.Action == "enable" && !current.Disabled {
-			outcome := skippedActionOutcome(item, item.Action, "账号已是启用状态，未重复执行")
+		if action == "enable" && !current.Disabled {
+			outcome := skippedActionOutcome(item, action, "账号已是启用状态，未重复执行")
+			outcome.CurrentDisabled = boolPointer(current.Disabled)
 			outcomes = append(outcomes, outcome)
-			logger.info(logCtx, "手动处理账号跳过", map[string]any{
+			logger.info(logCtx, logPrefix+"账号跳过", map[string]any{
 				"fileName":       item.FileName,
 				"displayAccount": item.DisplayAccount,
-				"action":         item.Action,
+				"action":         action,
 				"reason":         outcome.Error,
 			})
 			continue
@@ -1603,6 +1835,9 @@ func applyActionOutcomes(results []model.CodexInspectionResult, outcomes []Actio
 		if !ok {
 			continue
 		}
+		if outcome.CurrentDisabled != nil {
+			out[i].Disabled = *outcome.CurrentDisabled
+		}
 		status := model.NormalizeCodexInspectionActionStatus(outcome.Status, out[i].Action)
 		currentStatus := model.NormalizeCodexInspectionActionStatus(out[i].ActionStatus, out[i].Action)
 		if currentStatus == model.CodexInspectionActionStatusSuccess && status == model.CodexInspectionActionStatusSkipped {
@@ -1671,14 +1906,122 @@ func skippedActionOutcome(item model.CodexInspectionResult, action string, messa
 	}
 }
 
-func countFailedOutcomes(outcomes []ActionOutcome) int {
-	count := 0
+type actionOutcomeSummary struct {
+	Success     int
+	Failed      int
+	Skipped     int
+	NeedsReview int
+}
+
+func summarizeActionOutcomes(outcomes []ActionOutcome) actionOutcomeSummary {
+	summary := actionOutcomeSummary{}
 	for _, outcome := range outcomes {
-		if !outcome.Success {
-			count++
+		switch outcome.Status {
+		case model.CodexInspectionActionStatusSuccess:
+			summary.Success++
+		case model.CodexInspectionActionStatusFailed:
+			summary.Failed++
+		case model.CodexInspectionActionStatusSkipped:
+			summary.Skipped++
+		case model.CodexInspectionActionStatusNeedsReview:
+			summary.NeedsReview++
+		default:
+			if outcome.Success {
+				summary.Success++
+			} else {
+				summary.Failed++
+			}
 		}
 	}
-	return count
+	return summary
+}
+
+func logPreflightActionOutcomes(
+	ctx context.Context,
+	logger runLogger,
+	prefix string,
+	outcomes []ActionOutcome,
+) {
+	for _, outcome := range outcomes {
+		level := "info"
+		message := prefix + "账号跳过"
+		if outcome.Status == model.CodexInspectionActionStatusNeedsReview {
+			level = "warning"
+		}
+		if outcome.Status == model.CodexInspectionActionStatusFailed || !outcome.Success {
+			level = "error"
+			message = prefix + "账号失败"
+		}
+		logger.log(ctx, level, message, map[string]any{
+			"fileName":       outcome.FileName,
+			"displayAccount": outcome.DisplayAccount,
+			"action":         outcome.Action,
+			"status":         outcome.Status,
+			"reason":         outcome.Error,
+		})
+	}
+}
+
+func (s *Service) persistInspectionResults(
+	ctx context.Context,
+	runID int64,
+	results []model.CodexInspectionResult,
+	logger runLogger,
+) int {
+	failures := 0
+	for _, result := range results {
+		result.RunID = runID
+		if _, err := s.store.InsertCodexInspectionResult(ctx, result); err != nil {
+			failures++
+			logger.error(ctx, "写入巡检账号结果失败", map[string]any{
+				"fileName":       result.FileName,
+				"displayAccount": result.DisplayAccount,
+				"error":          err.Error(),
+			})
+		}
+	}
+	return failures
+}
+
+func (s *Service) getRunWithResultFallback(
+	ctx context.Context,
+	runID int64,
+	latestResults []model.CodexInspectionResult,
+	useFallback bool,
+) (RunDetail, error) {
+	detail, err := s.GetRun(ctx, runID)
+	if err != nil || !useFallback {
+		return detail, err
+	}
+	detail.Results = overlayInspectionResultSnapshots(runID, detail.Results, latestResults)
+	return detail, nil
+}
+
+func overlayInspectionResultSnapshots(
+	runID int64,
+	persisted []model.CodexInspectionResult,
+	latest []model.CodexInspectionResult,
+) []model.CodexInspectionResult {
+	persistedByAccount := make(map[string]model.CodexInspectionResult, len(persisted))
+	for _, result := range persisted {
+		persistedByAccount[result.AccountKey] = result
+	}
+
+	overlaid := make([]model.CodexInspectionResult, len(latest))
+	for index, result := range latest {
+		result.RunID = runID
+		result.ActionStatus = model.NormalizeCodexInspectionActionStatus(result.ActionStatus, result.Action)
+		if stored, ok := persistedByAccount[result.AccountKey]; ok {
+			if result.ID <= 0 {
+				result.ID = stored.ID
+			}
+			if result.CreatedAtMS <= 0 {
+				result.CreatedAtMS = stored.CreatedAtMS
+			}
+		}
+		overlaid[index] = result
+	}
+	return overlaid
 }
 
 func failedActionOutcomes(outcomes []ActionOutcome) []map[string]any {
@@ -2551,6 +2894,10 @@ func ptrFloat(value float64) *float64 {
 	return &value
 }
 
+func boolPointer(value bool) *bool {
+	return &value
+}
+
 func nullableFloat(value *float64) any {
 	if value == nil {
 		return nil
@@ -2605,6 +2952,9 @@ func redactValue(value any) any {
 
 func isSecretKey(key string) bool {
 	normalized := strings.ToLower(key)
+	if normalized == "triggerkey" {
+		return false
+	}
 	return strings.Contains(normalized, "token") ||
 		strings.Contains(normalized, "secret") ||
 		strings.Contains(normalized, "authorization") ||

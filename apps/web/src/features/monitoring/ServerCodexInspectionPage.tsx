@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/Input';
 import { Select, type SelectOption } from '@/components/ui/Select';
 import { ToggleSwitch } from '@/components/ui/ToggleSwitch';
 import { CodexInspectionConfigOverview } from '@/features/monitoring/components/CodexInspectionConfigOverview';
+import { CodexInspectionLogsPanel } from '@/features/monitoring/components/CodexInspectionLogsPanel';
 import { CodexInspectionModeTabs } from '@/features/monitoring/components/CodexInspectionModeTabs';
 import { Panel } from '@/features/monitoring/components/CodexInspectionPanels';
 import { CodexInspectionResultsPanel } from '@/features/monitoring/components/CodexInspectionResultsPanel';
@@ -31,17 +32,20 @@ import {
   countHandlingStates,
   filterInspectionResults,
   formatActionLabel,
+  formatInspectionLogsForClipboard,
   formatPercent,
-  formatServerCodexInspectionLogDetail,
   formatTimestamp,
   getActionFilterCounts,
   getCanonicalServerCodexInspectionActionIds,
   getMixedServerCodexInspectionActionIds,
   isActionableServerCodexInspectionResult,
+  isHandledServerCodexInspectionResult,
   isPendingServerReauthResult,
   normalizeServerCodexInspectionActionStatus,
+  toServerInspectionLogViewEntry,
   type ActionFilter,
   type HandlingFilter,
+  type InspectionLogLevelFilter,
   type StatusTone,
   validateInspectionConfigDraft,
   validateInspectionConfigFields,
@@ -56,7 +60,6 @@ import {
   getUsageServiceErrorCode,
   monitoringAnalyticsApi,
   usageServiceApi,
-  type CodexInspectionLog,
   type CodexInspectionResult,
   type CodexInspectionRun,
   type CodexInspectionRunDetail,
@@ -379,13 +382,6 @@ const statusToneClass: Record<StatusTone, string> = {
   bad: styles['tone-bad'],
 };
 
-const logLevelClass: Record<string, string> = {
-  info: styles.logInfo,
-  success: styles.logSuccess,
-  warning: styles.logWarning,
-  error: styles.logError,
-};
-
 function getRunTone(run?: CodexInspectionRun | null): StatusTone {
   switch (run?.status) {
     case 'completed':
@@ -626,8 +622,8 @@ function toServerResultItem(
       limitWindowSeconds: window.limitWindowSeconds ?? null,
     })),
     errorKind: item.errorKind,
-    errorDetail: item.actionError || item.errorDetail || '',
-    actionHandled: item.action === 'reauth' && !isPendingServerReauthResult(item),
+    errorDetail: item.errorDetail || '',
+    actionHandled: isHandledServerCodexInspectionResult(item),
     observedHeaderEvidence,
     observedHeaderAtMs: snapshot?.timestamp_ms ?? null,
   };
@@ -700,9 +696,7 @@ export function ServerCodexInspectionPage() {
   const [resultPageSize, setResultPageSize] = useState<number>(
     CODEX_INSPECTION_RESULT_PAGE_SIZE_OPTIONS[0]
   );
-  const [logLevelFilter, setLogLevelFilter] = useState<
-    'all' | 'info' | 'success' | 'warning' | 'error'
-  >('all');
+  const [logLevelFilter, setLogLevelFilter] = useState<InspectionLogLevelFilter>('all');
   const [executingResultIds, setExecutingResultIds] = useState<Set<number>>(() => new Set());
   const [executingAllActions, setExecutingAllActions] = useState(false);
   const [configDrawerOpen, setConfigDrawerOpen] = useState(false);
@@ -710,6 +704,16 @@ export function ServerCodexInspectionPage() {
   const [codexReauthTarget, setCodexReauthTarget] = useState<CodexReauthTarget | null>(null);
   const refreshInFlightRef = useRef(false);
   const actionInFlightRef = useRef(false);
+  const logListRef = useRef<HTMLDivElement | null>(null);
+  const previousServerLogCursorRef = useRef<{
+    runId: number | null;
+    latestLogId: number | null;
+  }>({ runId: null, latestLogId: null });
+  const serverLogEntries = useMemo(
+    () =>
+      (detail?.logs ?? []).map((entry) => toServerInspectionLogViewEntry(entry, detail?.run, t)),
+    [detail, t]
+  );
 
   const loadRunDetail = useCallback(
     async (base: string, id: number) => {
@@ -720,6 +724,10 @@ export function ServerCodexInspectionPage() {
     },
     [managementKey]
   );
+
+  useEffect(() => {
+    setLogLevelFilter('all');
+  }, [detail?.run.id]);
 
   const loadPageData = useCallback(async () => {
     setLoading(true);
@@ -1117,12 +1125,38 @@ export function ServerCodexInspectionPage() {
         );
         setRuns(runsResponse.items);
 
-        const failed = response.outcomes.filter((item) => !item.success);
-        if (failed.length > 0) {
+        const outcomeSummary = response.outcomes.reduce(
+          (summary, outcome) => {
+            switch (outcome.status) {
+              case 'success':
+                summary.success += 1;
+                break;
+              case 'skipped':
+                summary.skipped += 1;
+                break;
+              case 'needs_review':
+                summary.needsReview += 1;
+                break;
+              case 'failed':
+                summary.failed += 1;
+                break;
+              default:
+                if (outcome.success) summary.success += 1;
+                else summary.failed += 1;
+            }
+            return summary;
+          },
+          { success: 0, skipped: 0, needsReview: 0, failed: 0 }
+        );
+        const hasNonSuccessOutcome =
+          outcomeSummary.failed > 0 || outcomeSummary.skipped > 0 || outcomeSummary.needsReview > 0;
+        if (hasNonSuccessOutcome) {
           showNotification(
-            t('monitoring.server_codex_inspection_execute_partial', {
-              failed: failed.length,
-              total: response.outcomes.length,
+            t('monitoring.codex_inspection_log_manual_completed', {
+              success: outcomeSummary.success,
+              skipped: outcomeSummary.skipped,
+              review: outcomeSummary.needsReview,
+              failed: outcomeSummary.failed,
             }),
             'warning'
           );
@@ -1731,6 +1765,7 @@ export function ServerCodexInspectionPage() {
 
       const actionStatus = normalizeServerCodexInspectionActionStatus(source);
       const terminalStatusLabel = formatServerTerminalActionStatusLabel(source, t);
+      const actionError = source.actionError?.trim() ?? '';
       const needsReview = actionStatus === 'needs_review' || mixedActionIds.has(source.id);
       const hasFileLevelAction = isActionableServerCodexInspectionResult(source);
       const pendingReauth = isPendingServerReauthResult(source);
@@ -1747,6 +1782,11 @@ export function ServerCodexInspectionPage() {
         <div className={styles.serverResultOperation}>
           {terminalStatusLabel ? (
             <span className={styles.primaryReason}>{terminalStatusLabel}</span>
+          ) : null}
+          {actionError ? (
+            <small className={styles.primaryReason} title={actionError}>
+              {actionError}
+            </small>
           ) : null}
           {canonicalExecutableIds.has(source.id) ? (
             <Button
@@ -1841,146 +1881,41 @@ export function ServerCodexInspectionPage() {
     );
   };
 
-  const handleCopyLogs = useCallback(
-    async (logs: CodexInspectionLog[]) => {
-      if (!logs.length) return;
-      const lines = logs.map((entry) => {
-        const ts = new Date(entry.createdAtMs).toISOString();
-        const detail = entry.detail
-          ? ` ${formatServerCodexInspectionLogDetail(entry.detail, t)}`
-          : '';
-        const message = entry.message.startsWith('monitoring.') ? t(entry.message) : entry.message;
-        return `[${ts}] [${entry.level}] ${message}${detail}`;
-      });
-      try {
-        await navigator.clipboard.writeText(lines.join('\n'));
-        showNotification(t('monitoring.server_codex_inspection_logs_copied'), 'success');
-      } catch {
-        showNotification(t('monitoring.server_codex_inspection_logs_copy_failed'), 'error');
-      }
-    },
-    [showNotification, t]
-  );
+  const scrollLogsToBottom = useCallback(() => {
+    const element = logListRef.current;
+    if (!element) return;
+    element.scrollTop = element.scrollHeight;
+  }, []);
 
-  const renderLogsPanel = (logs: CodexInspectionLog[]) => {
-    const counts: Record<'all' | 'info' | 'success' | 'warning' | 'error', number> = {
-      all: logs.length,
-      info: 0,
-      success: 0,
-      warning: 0,
-      error: 0,
-    };
-    for (const entry of logs) {
-      if (
-        entry.level === 'info' ||
-        entry.level === 'success' ||
-        entry.level === 'warning' ||
-        entry.level === 'error'
-      ) {
-        counts[entry.level] += 1;
-      }
+  useEffect(() => {
+    if (logsCollapsed) return;
+    const runId = detail?.run.id ?? null;
+    const latestLogId = detail?.logs[detail.logs.length - 1]?.id ?? null;
+    const previous = previousServerLogCursorRef.current;
+    previousServerLogCursorRef.current = { runId, latestLogId };
+    if (latestLogId === null) return;
+    if (previous.runId === runId && previous.latestLogId === latestLogId) return;
+    scrollLogsToBottom();
+  }, [detail?.logs, detail?.run.id, logsCollapsed, scrollLogsToBottom]);
+
+  const handleJumpToLatestLog = useCallback(() => {
+    if (logsCollapsed) {
+      setLogsCollapsed(false);
+      requestAnimationFrame(scrollLogsToBottom);
+      return;
     }
-    const filterOptions: ReadonlyArray<{ value: typeof logLevelFilter; label: string }> = [
-      { value: 'all', label: t('monitoring.server_codex_inspection_filter_all') },
-      { value: 'info', label: t('monitoring.server_codex_inspection_log_level_info') },
-      { value: 'success', label: t('monitoring.server_codex_inspection_log_level_success') },
-      { value: 'warning', label: t('monitoring.server_codex_inspection_log_level_warning') },
-      { value: 'error', label: t('monitoring.server_codex_inspection_log_level_error') },
-    ];
-    const filtered =
-      logLevelFilter === 'all' ? logs : logs.filter((entry) => entry.level === logLevelFilter);
-    return (
-      <Panel
-        title={t('monitoring.codex_inspection_logs_title')}
-        extra={
-          <div className={styles.logToolbar}>
-            {logs.length > 0 ? (
-              <div
-                className={styles.logFilterGroup}
-                role="tablist"
-                aria-label={t('monitoring.codex_inspection_logs_title')}
-              >
-                <div className={styles.segmentedControl}>
-                  {filterOptions.map((opt) => {
-                    const active = logLevelFilter === opt.value;
-                    return (
-                      <button
-                        key={opt.value}
-                        type="button"
-                        role="tab"
-                        aria-selected={active}
-                        className={`${styles.segmentButton} ${active ? styles.segmentButtonActive : ''}`}
-                        onClick={() => setLogLevelFilter(opt.value)}
-                      >
-                        {opt.label}
-                        <span className={styles.segmentCount}>{counts[opt.value]}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            ) : (
-              <span />
-            )}
-            <div className={styles.logToolbarRight}>
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => void handleCopyLogs(logs)}
-                disabled={logs.length === 0}
-                aria-label={t('monitoring.server_codex_inspection_logs_copy')}
-              >
-                {t('monitoring.server_codex_inspection_logs_copy')}
-              </Button>
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => setLogsCollapsed((previous) => !previous)}
-                disabled={logs.length === 0}
-              >
-                {logsCollapsed
-                  ? t('monitoring.codex_inspection_expand_logs')
-                  : t('monitoring.codex_inspection_fold_logs')}
-              </Button>
-            </div>
-          </div>
-        }
-      >
-        {!logsCollapsed ? (
-          <div className={styles.logList}>
-            {filtered.length > 0 ? (
-              filtered.map((entry) => (
-                <div
-                  key={entry.id}
-                  className={`${styles.logRow} ${logLevelClass[entry.level] ?? styles.logInfo}`}
-                >
-                  <span className={styles.logTime}>
-                    {formatTimestamp(entry.createdAtMs, i18n.language)}
-                  </span>
-                  <span className={styles.logMessage}>
-                    {entry.message.startsWith('monitoring.') ? t(entry.message) : entry.message}
-                    {entry.detail ? (
-                      <small className={styles.serverLogDetail}>
-                        {formatServerCodexInspectionLogDetail(entry.detail, t)}
-                      </small>
-                    ) : null}
-                  </span>
-                </div>
-              ))
-            ) : (
-              <div className={styles.emptyBlockSmall}>
-                {t('monitoring.codex_inspection_logs_empty')}
-              </div>
-            )}
-          </div>
-        ) : (
-          <div className={styles.logCollapsedBar}>
-            <span>{t('monitoring.codex_inspection_logs_collapsed', { count: logs.length })}</span>
-          </div>
-        )}
-      </Panel>
-    );
-  };
+    scrollLogsToBottom();
+  }, [logsCollapsed, scrollLogsToBottom]);
+
+  const handleCopyLogs = useCallback(async () => {
+    if (serverLogEntries.length === 0) return;
+    try {
+      await navigator.clipboard.writeText(formatInspectionLogsForClipboard(serverLogEntries));
+      showNotification(t('monitoring.codex_inspection_logs_copied'), 'success');
+    } catch {
+      showNotification(t('monitoring.codex_inspection_logs_copy_failed'), 'error');
+    }
+  }, [serverLogEntries, showNotification, t]);
 
   return (
     <div className={styles.page}>
@@ -2011,7 +1946,18 @@ export function ServerCodexInspectionPage() {
             </div>
           ) : null}
           {renderResultsPanel()}
-          {renderLogsPanel(detail?.logs ?? [])}
+          <CodexInspectionLogsPanel
+            logs={serverLogEntries}
+            logsCollapsed={logsCollapsed}
+            levelFilter={logLevelFilter}
+            logListRef={logListRef}
+            locale={i18n.language}
+            t={t}
+            onLevelFilterChange={setLogLevelFilter}
+            onCopyLogs={() => void handleCopyLogs()}
+            onJumpToLatest={handleJumpToLatestLog}
+            onToggleCollapsed={() => setLogsCollapsed((previous) => !previous)}
+          />
         </div>
       </div>
       {renderConfigDrawer()}

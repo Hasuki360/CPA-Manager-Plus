@@ -231,7 +231,9 @@ export function CodexInspectionResultsPanel({
                 const planLabel = isXai ? null : getCodexPlanLabel(item.planType, t);
                 const quotaWindows = item.quotaWindows ?? [];
                 const errorText = item.errorDetail || item.error;
-                const errorSummary = summarizeInspectionError(item, t);
+                const errorSummary = summarizeInspectionError(item, t, {
+                  xaiInferenceEnabled,
+                });
                 const conclusionReason = item.actionReason?.startsWith('monitoring.')
                   ? t(item.actionReason)
                   : item.actionReason;

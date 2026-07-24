@@ -21,9 +21,12 @@ import type {
   CodexInspectionRunResult,
   CodexInspectionStoredLogEntry,
 } from '@/features/monitoring/codexInspection';
+import { formatActionLabel } from '@/features/monitoring/model/codexInspectionPresentation';
 import type { AuthFilesResponse } from '@/types/authFile';
 import type { PluginListResponse, PluginStoreResponse } from '@/types/plugin';
 import type { ModelInfo } from '@/utils/models';
+import { formatXaiProbeIssue } from '@/utils/quota/xaiPresentation';
+import type { TFunction } from 'i18next';
 import {
   DEMO_API_BASE,
   DEMO_SERVER_VERSION,
@@ -48,6 +51,7 @@ const now = () => Date.now();
 const minute = 60 * 1000;
 const hour = 60 * minute;
 const day = 24 * hour;
+const identityT = ((key: string) => key) as TFunction;
 
 const startOfLocalDayIso = (input = now()) => {
   const date = new Date(input);
@@ -3200,34 +3204,41 @@ const buildDemoInspectionResults = (baseNow: number): CodexInspectionResult[] =>
     runId: 1001,
     accountKey: 'codex-upgrade-demo-01',
     fileName: 'codex-upgrade-demo.json',
-    displayAccount: 'Upgrade Demo',
+    displayAccount: 'codex-upgrade-demo.json',
     authIndex: 'codex-upgrade-demo-01',
     accountId: 'acct_codex_upgrade_demo',
     provider: 'codex',
     disabled: false,
-    status: 'ok',
-    state: 'active',
+    status: 'healthy',
+    state: '',
     action: 'keep',
     actionReason: 'monitoring.codex_inspection_reason_healthy',
     actionStatus: 'none',
     statusCode: 200,
-    usedPercent: 63,
+    usedPercent: 42,
     isQuota: false,
     planType: 'free',
     quotaWindows: [
       {
-        id: 'primary',
+        id: 'five-hour',
         labelKey: 'codex_quota.primary_window',
         usedPercent: 63,
         resetLabel: '2h 18m',
         limitWindowSeconds: 18000,
       },
       {
-        id: 'secondary',
+        id: 'weekly',
         labelKey: 'codex_quota.secondary_window',
         usedPercent: 42,
         resetLabel: '2d 20h',
         limitWindowSeconds: 604800,
+      },
+      {
+        id: 'code-review-five-hour',
+        labelKey: 'codex_quota.code_review_primary_window',
+        usedPercent: 38,
+        resetLabel: '2h',
+        limitWindowSeconds: 18000,
       },
     ],
     createdAtMs: baseNow - 41 * minute,
@@ -3237,34 +3248,41 @@ const buildDemoInspectionResults = (baseNow: number): CodexInspectionResult[] =>
     runId: 1001,
     accountKey: 'codex-team-01',
     fileName: 'codex-team-01.json',
-    displayAccount: 'Platform Team',
+    displayAccount: 'codex-team-01.json',
     authIndex: 'codex-team-01',
     accountId: 'acct_codex_team',
     provider: 'codex',
     disabled: false,
-    status: 'ok',
-    state: 'active',
+    status: 'healthy',
+    state: '',
     action: 'keep',
     actionReason: 'monitoring.codex_inspection_reason_healthy',
     actionStatus: 'none',
     statusCode: 200,
-    usedPercent: 63,
+    usedPercent: 42,
     isQuota: false,
     planType: 'team',
     quotaWindows: [
       {
-        id: 'primary',
+        id: 'five-hour',
         labelKey: 'codex_quota.primary_window',
         usedPercent: 63,
         resetLabel: '2h 18m',
         limitWindowSeconds: 18000,
       },
       {
-        id: 'secondary',
+        id: 'weekly',
         labelKey: 'codex_quota.secondary_window',
         usedPercent: 42,
         resetLabel: '2d 20h',
         limitWindowSeconds: 604800,
+      },
+      {
+        id: 'code-review-five-hour',
+        labelKey: 'codex_quota.code_review_primary_window',
+        usedPercent: 38,
+        resetLabel: '2h',
+        limitWindowSeconds: 18000,
       },
     ],
     createdAtMs: baseNow - 41 * minute,
@@ -3279,15 +3297,15 @@ const buildDemoInspectionResults = (baseNow: number): CodexInspectionResult[] =>
     accountId: 'acct_codex_email',
     provider: 'codex',
     disabled: false,
-    status: 'unauthorized',
-    state: 'active',
+    status: 'healthy',
+    state: '',
     action: 'reauth',
     actionReason: 'monitoring.codex_inspection_reason_reauth',
-    actionStatus: 'pending',
+    actionStatus: 'none',
     statusCode: 401,
     isQuota: false,
     planType: 'plus',
-    errorKind: 'auth_invalid',
+    errorKind: 'http_status',
     errorDetail: 'Provided authentication token is expired',
     createdAtMs: baseNow - 41 * minute,
   },
@@ -3296,34 +3314,41 @@ const buildDemoInspectionResults = (baseNow: number): CodexInspectionResult[] =>
     runId: 1001,
     accountKey: 'codex-pro-20x-01',
     fileName: 'codex-pro-20x-01.json',
-    displayAccount: 'Pro 20x Workspace',
+    displayAccount: 'codex-pro-20x-01.json',
     authIndex: 'codex-pro-20x-01',
     accountId: 'acct_codex_pro_20x',
     provider: 'codex',
     disabled: false,
-    status: 'quota_warning',
-    state: 'active',
+    status: 'healthy',
+    state: '',
     action: 'disable',
     actionReason: 'monitoring.codex_inspection_reason_quota_threshold',
     actionStatus: 'pending',
     statusCode: 200,
     usedPercent: 96,
-    isQuota: false,
+    isQuota: true,
     planType: 'pro',
     quotaWindows: [
       {
-        id: 'primary',
+        id: 'five-hour',
         labelKey: 'codex_quota.primary_window',
         usedPercent: 84,
         resetLabel: '1h 42m',
         limitWindowSeconds: 18000,
       },
       {
-        id: 'secondary',
+        id: 'weekly',
         labelKey: 'codex_quota.secondary_window',
         usedPercent: 96,
         resetLabel: '2d 7h',
         limitWindowSeconds: 604800,
+      },
+      {
+        id: 'code-review-five-hour',
+        labelKey: 'codex_quota.code_review_primary_window',
+        usedPercent: 29,
+        resetLabel: '2h',
+        limitWindowSeconds: 18000,
       },
     ],
     createdAtMs: baseNow - 40 * minute,
@@ -3333,27 +3358,41 @@ const buildDemoInspectionResults = (baseNow: number): CodexInspectionResult[] =>
     runId: 1001,
     accountKey: 'codex-fallback-02',
     fileName: 'codex-fallback-02.json',
-    displayAccount: 'Automation Pool',
+    displayAccount: 'codex-fallback-02.json',
     authIndex: 'codex-fallback-02',
     accountId: 'acct_codex_auto',
     provider: 'codex',
     disabled: true,
-    status: 'recovered',
-    state: 'disabled',
+    status: 'cooldown',
+    state: '',
     action: 'enable',
     actionReason: 'monitoring.codex_inspection_reason_recovered',
     actionStatus: 'pending',
     statusCode: 200,
-    usedPercent: 24,
+    usedPercent: 18,
     isQuota: false,
     autoRecoverEligible: true,
     planType: 'team',
     quotaWindows: [
       {
-        id: 'primary',
+        id: 'five-hour',
         labelKey: 'codex_quota.primary_window',
         usedPercent: 24,
         resetLabel: '3h 36m',
+        limitWindowSeconds: 18000,
+      },
+      {
+        id: 'weekly',
+        labelKey: 'codex_quota.secondary_window',
+        usedPercent: 18,
+        resetLabel: '2d 20h',
+        limitWindowSeconds: 604800,
+      },
+      {
+        id: 'code-review-five-hour',
+        labelKey: 'codex_quota.code_review_primary_window',
+        usedPercent: 38,
+        resetLabel: '2h',
         limitWindowSeconds: 18000,
       },
     ],
@@ -3367,11 +3406,11 @@ const buildDemoInspectionResults = (baseNow: number): CodexInspectionResult[] =>
     displayAccount: 'oc0demo01@yijihwjw.com',
     authIndex: 'xai-ops-01',
     provider: 'xai',
-    disabled: false,
-    status: 'ok',
-    state: 'active',
+    disabled: true,
+    status: 'cooldown',
+    state: '',
     action: 'keep',
-    actionReason: 'monitoring.xai_inspection_reason_inference_healthy',
+    actionReason: 'monitoring.xai_inspection_reason_inference_manual_disable',
     actionStatus: 'none',
     statusCode: 200,
     usedPercent: 22,
@@ -3392,6 +3431,14 @@ const buildDemoInspectionResults = (baseNow: number): CodexInspectionResult[] =>
         resetLabel: new Date(baseNow + 19 * day).toISOString(),
         limitWindowSeconds: null,
       },
+      {
+        id: 'xai-product-0',
+        labelKey: 'xai_quota.product_usage',
+        labelParams: { product: 'Grok Build' },
+        usedPercent: 3,
+        resetLabel: new Date(baseNow + 6 * day).toISOString(),
+        limitWindowSeconds: null,
+      },
     ],
     errorKind: 'inference_healthy',
     createdAtMs: baseNow - 39 * minute,
@@ -3405,8 +3452,8 @@ const buildDemoInspectionResults = (baseNow: number): CodexInspectionResult[] =>
     authIndex: 'xai-email-user-01',
     provider: 'xai',
     disabled: false,
-    status: 'quota',
-    state: 'active',
+    status: 'healthy',
+    state: '',
     action: 'disable',
     actionReason: 'monitoring.xai_inspection_reason_spending_limit_disable',
     actionStatus: 'pending',
@@ -3418,6 +3465,21 @@ const buildDemoInspectionResults = (baseNow: number): CodexInspectionResult[] =>
       {
         id: 'xai-weekly',
         labelKey: 'xai_quota.weekly_limit',
+        usedPercent: 100,
+        resetLabel: new Date(baseNow + 6 * day).toISOString(),
+        limitWindowSeconds: null,
+      },
+      {
+        id: 'xai-monthly',
+        labelKey: 'xai_quota.monthly_limit',
+        usedPercent: 100,
+        resetLabel: new Date(baseNow + 19 * day).toISOString(),
+        limitWindowSeconds: null,
+      },
+      {
+        id: 'xai-product-0',
+        labelKey: 'xai_quota.product_usage',
+        labelParams: { product: 'Grok Build' },
         usedPercent: 100,
         resetLabel: new Date(baseNow + 6 * day).toISOString(),
         limitWindowSeconds: null,
@@ -3437,14 +3499,39 @@ const buildDemoInspectionResults = (baseNow: number): CodexInspectionResult[] =>
     authIndex: 'xai-expired-01',
     provider: 'xai',
     disabled: false,
-    status: 'unauthorized',
-    state: 'active',
+    status: 'warning',
+    state: '',
     action: 'reauth',
     actionReason: 'monitoring.xai_inspection_reason_auth_invalid',
-    actionStatus: 'pending',
+    actionStatus: 'none',
     statusCode: 401,
+    usedPercent: 12,
     isQuota: false,
     planType: null,
+    quotaWindows: [
+      {
+        id: 'xai-weekly',
+        labelKey: 'xai_quota.weekly_limit',
+        usedPercent: 12,
+        resetLabel: new Date(baseNow + 6 * day).toISOString(),
+        limitWindowSeconds: null,
+      },
+      {
+        id: 'xai-monthly',
+        labelKey: 'xai_quota.monthly_limit',
+        usedPercent: 12,
+        resetLabel: new Date(baseNow + 19 * day).toISOString(),
+        limitWindowSeconds: null,
+      },
+      {
+        id: 'xai-product-0',
+        labelKey: 'xai_quota.product_usage',
+        labelParams: { product: 'Grok Build' },
+        usedPercent: 12,
+        resetLabel: new Date(baseNow + 6 * day).toISOString(),
+        limitWindowSeconds: null,
+      },
+    ],
     errorKind: 'auth_invalid',
     errorDetail: 'invalid_token · The xAI OAuth credential has expired.',
     createdAtMs: baseNow - 39 * minute,
@@ -3454,18 +3541,184 @@ const buildDemoInspectionResults = (baseNow: number): CodexInspectionResult[] =>
 const countDemoInspectionActions = (results: CodexInspectionResult[], action: string) =>
   results.filter((item) => item.action === action).length;
 
+const normalizeDemoInspectionAction = (value: string): CodexInspectionAction => {
+  switch (value) {
+    case 'delete':
+    case 'disable':
+    case 'enable':
+    case 'reauth':
+      return value;
+    case 'keep':
+    default:
+      return 'keep';
+  }
+};
+
+const demoCodexInspectionLogLevel = (item: CodexInspectionResult): string => {
+  switch (item.action) {
+    case 'delete':
+    case 'reauth':
+      return 'error';
+    case 'disable':
+      return 'warning';
+    case 'enable':
+      return 'success';
+    default:
+      return 'info';
+  }
+};
+
+const demoXaiInspectionLogLevel = (item: CodexInspectionResult): string => {
+  switch (item.action) {
+    case 'delete':
+    case 'reauth':
+      return 'error';
+    case 'disable':
+      return 'warning';
+    case 'enable':
+      return 'success';
+  }
+  return ['', 'billing_healthy', 'official_api_healthy', 'inference_healthy'].includes(
+    item.errorKind ?? ''
+  )
+    ? 'info'
+    : 'warning';
+};
+
+const buildDemoCodexInspectionLogDetail = (
+  item: CodexInspectionResult
+): Record<string, unknown> => ({
+  fileName: item.fileName,
+  displayAccount: item.displayAccount,
+  action: item.action,
+  statusCode: item.statusCode,
+  usedPercent: item.usedPercent ?? null,
+  isQuota: item.isQuota,
+});
+
+const buildDemoXaiInspectionLogDetail = (
+  item: CodexInspectionResult,
+  inferenceEnabled: boolean
+): Record<string, unknown> => ({
+  provider: 'xai',
+  fileName: item.fileName,
+  displayAccount: item.displayAccount,
+  inspectionMode: inferenceEnabled
+    ? 'inference'
+    : item.errorKind === 'official_api_healthy'
+      ? 'identity'
+      : 'billing',
+  healthEvidence: item.errorKind ?? '',
+  billingAvailable: (item.quotaWindows?.length ?? 0) > 0,
+  billingPartial: item.errorKind === 'billing_partial',
+  inferenceEnabled,
+  action: item.action,
+  ...(item.statusCode !== undefined ? { statusCode: item.statusCode } : {}),
+  ...(item.usedPercent !== undefined ? { usedPercent: item.usedPercent } : {}),
+  ...(inferenceEnabled ? { inferenceHealthy: item.errorKind === 'inference_healthy' } : {}),
+});
+
+const buildDemoInspectionCompletionDetail = (
+  run: CodexInspectionRunDetail['run']
+): Record<string, unknown> => ({
+  deleteCount: run.deleteCount,
+  disableCount: run.disableCount,
+  enableCount: run.enableCount,
+  reauthCount: run.reauthCount,
+  keepCount: run.keepCount,
+  actionSuccessCount: 0,
+  actionFailedCount: 0,
+  actionSkippedCount: 0,
+  actionNeedsReviewCount: 0,
+  actionErrors: [],
+  resultWriteFailedCount: 0,
+});
+
+const buildDemoServerInspectionLogs = (
+  run: CodexInspectionRunDetail['run'],
+  results: CodexInspectionResult[]
+): CodexInspectionRunDetail['logs'] => {
+  let nextId = 9001;
+  const createLog = (level: string, message: string, detail: unknown, createdAtMs: number) => ({
+    id: nextId++,
+    runId: run.id,
+    level,
+    message,
+    detail,
+    createdAtMs,
+  });
+  const logs: CodexInspectionRunDetail['logs'] = [
+    createLog(
+      'info',
+      '凭证健康巡检开始',
+      {
+        triggerType: run.triggerType,
+        triggerKey: run.triggerKey,
+        targetTypes: run.settings?.targetTypes ?? ['codex', 'xai'],
+      },
+      run.startedAtMs
+    ),
+    createLog(
+      'info',
+      '凭证健康巡检集合已准备',
+      {
+        totalFiles: run.totalFiles,
+        probeSetCount: run.probeSetCount,
+        sampledCount: run.sampledCount,
+        targetTypes: run.settings?.targetTypes ?? ['codex', 'xai'],
+      },
+      run.startedAtMs + 500
+    ),
+  ];
+
+  results.forEach((item) => {
+    if (item.provider === 'xai') {
+      const inferenceEnabled = run.settings?.xaiInferenceEnabled === true;
+      logs.push(
+        createLog(
+          demoXaiInspectionLogLevel(item),
+          'monitoring.xai_inspection_log_server_complete',
+          buildDemoXaiInspectionLogDetail(item, inferenceEnabled),
+          item.createdAtMs
+        )
+      );
+      return;
+    }
+
+    logs.push(
+      createLog(
+        demoCodexInspectionLogLevel(item),
+        '账号探测完成',
+        buildDemoCodexInspectionLogDetail(item),
+        item.createdAtMs
+      )
+    );
+  });
+
+  logs.push(
+    createLog(
+      'success',
+      '凭证健康巡检完成',
+      buildDemoInspectionCompletionDetail(run),
+      run.finishedAtMs ?? run.updatedAtMs
+    )
+  );
+  return logs;
+};
+
 const demoInspectionRunDetail = (baseNow = now()): CodexInspectionRunDetail => {
   const results = buildDemoInspectionResults(baseNow);
   const targetFiles = demoAuthFiles.files.filter((file) =>
     ['codex', 'xai'].includes(String(file.provider ?? file.type ?? '').toLowerCase())
   );
-  return {
+  const startedAtMs = baseNow - 42 * minute;
+  const detail: CodexInspectionRunDetail = {
     run: {
       id: 1001,
       triggerType: 'scheduled',
-      triggerKey: 'interval:45m',
+      triggerKey: `interval:45:${Math.floor(startedAtMs / (45 * minute))}`,
       status: 'completed',
-      startedAtMs: baseNow - 42 * minute,
+      startedAtMs,
       finishedAtMs: baseNow - 39 * minute,
       totalFiles: demoAuthFiles.total ?? demoAuthFiles.files.length,
       probeSetCount: targetFiles.length,
@@ -3479,26 +3732,17 @@ const demoInspectionRunDetail = (baseNow = now()): CodexInspectionRunDetail => {
       keepCount: countDemoInspectionActions(results, 'keep'),
       createdAtMs: baseNow - 42 * minute,
       updatedAtMs: baseNow - 39 * minute,
-      settings: demoManagerConfig.config.codexInspection,
+      settings: {
+        ...demoManagerConfig.config.codexInspection,
+        autoActionMode: 'none',
+        autoRecoverEnabled: false,
+      },
     },
     results,
-    logs: [
-      {
-        id: 9001,
-        runId: 1001,
-        level: 'info',
-        message: `Inspection set prepared with ${targetFiles.length} Codex and xAI credentials`,
-        createdAtMs: baseNow - 42 * minute,
-      },
-      {
-        id: 9002,
-        runId: 1001,
-        level: 'success',
-        message: `Inspection completed with ${results.length} results`,
-        createdAtMs: baseNow - 39 * minute,
-      },
-    ],
+    logs: [],
   };
+  detail.logs = buildDemoServerInspectionLogs(detail.run, detail.results);
+  return detail;
 };
 
 const demoAccountCandidates: AccountActionCandidate[] = [
@@ -3874,20 +4118,8 @@ export const getDemoCodexInspectionRuns = (): CodexInspectionRunsResponse => {
   return { items: [detail.run] };
 };
 
-export const getDemoCodexInspectionRun = () => clone(demoInspectionRunDetail());
-
-const getDemoLocalInspectionReason = (item: CodexInspectionResult): string => {
-  if (item.errorKind === 'inference_healthy') {
-    return 'monitoring.xai_inspection_reason_inference_healthy';
-  }
-  if (item.errorKind === 'spending_limit') {
-    return 'monitoring.xai_inspection_reason_spending_limit_disable';
-  }
-  if (item.errorKind === 'auth_invalid') {
-    return 'monitoring.xai_inspection_reason_auth_invalid';
-  }
-  return item.actionReason;
-};
+export const getDemoCodexInspectionRun = (baseNow = now()) =>
+  clone(demoInspectionRunDetail(baseNow));
 
 export const getDemoCodexInspectionLocalRun = (baseNow = now()): CodexInspectionRunResult => {
   const detail = demoInspectionRunDetail(baseNow);
@@ -3915,7 +4147,7 @@ export const getDemoCodexInspectionLocalRun = (baseNow = now()): CodexInspection
       state: item.state ?? '',
       raw,
       action: item.action as CodexInspectionAction,
-      actionReason: getDemoLocalInspectionReason(item),
+      actionReason: item.actionReason,
       statusCode: item.statusCode ?? null,
       usedPercent: item.usedPercent ?? null,
       isQuota: item.isQuota,
@@ -3977,23 +4209,121 @@ export const getDemoCodexInspectionLocalRun = (baseNow = now()): CodexInspection
 };
 
 export const getDemoCodexInspectionLocalLogs = (
-  baseNow = now()
+  baseNow = now(),
+  t: TFunction = identityT
 ): CodexInspectionStoredLogEntry[] => {
-  const resultCount = buildDemoInspectionResults(baseNow).length;
-  return [
+  const detail = demoInspectionRunDetail(baseNow);
+  const actionLabel = (action: string) =>
+    formatActionLabel(normalizeDemoInspectionAction(action), t);
+  const percentLabel = (value?: number) => (value === undefined ? '--' : `${value.toFixed(1)}%`);
+  const targetTypes = detail.run.settings?.targetTypes ?? ['codex', 'xai'];
+  const providers = new Set(targetTypes.map((item) => item.trim().toLowerCase()));
+  const target =
+    providers.has('codex') && providers.has('xai')
+      ? t('monitoring.codex_inspection_target_codex_xai')
+      : providers.has('xai')
+        ? t('monitoring.codex_inspection_target_xai')
+        : t('monitoring.codex_inspection_target_codex');
+  const logs: CodexInspectionStoredLogEntry[] = [
     {
-      id: 'demo-inspection-start',
+      id: 'demo-inspection-loading',
       level: 'info',
-      message: `Loaded ${resultCount} Codex and xAI credentials for inspection`,
-      timestamp: baseNow - 42 * minute,
+      message: t('monitoring.codex_inspection_log_loading', { target }),
+      timestamp: detail.run.startedAtMs,
+      detail: {
+        triggerType: 'manual',
+        triggerKey: 'manual',
+        targetTypes: [...targetTypes],
+      },
     },
     {
-      id: 'demo-inspection-complete',
-      level: 'success',
-      message: `Credential health inspection completed with ${resultCount} results`,
-      timestamp: baseNow - 39 * minute,
+      id: 'demo-inspection-set-ready',
+      level: 'info',
+      message: t('monitoring.codex_inspection_log_set_ready', {
+        total: detail.run.probeSetCount,
+        sampled: detail.run.sampledCount,
+      }),
+      timestamp: detail.run.startedAtMs + 500,
+      detail: {
+        totalFiles: detail.run.totalFiles,
+        probeSetCount: detail.run.probeSetCount,
+        sampledCount: detail.run.sampledCount,
+        targetTypes: [...targetTypes],
+      },
     },
   ];
+
+  detail.results.forEach((item) => {
+    if (item.provider !== 'xai') {
+      logs.push({
+        id: `demo-inspection-result-${item.id}`,
+        level: demoCodexInspectionLogLevel(item) as CodexInspectionStoredLogEntry['level'],
+        message: t('monitoring.codex_inspection_log_result', {
+          account: item.displayAccount,
+          action: actionLabel(item.action),
+          status: item.statusCode ?? '--',
+          percent: percentLabel(item.usedPercent),
+        }),
+        timestamp: item.createdAtMs,
+        detail: buildDemoCodexInspectionLogDetail(item),
+      });
+      return;
+    }
+
+    const inferenceEnabled = detail.run.settings?.xaiInferenceEnabled === true;
+    const healthyEvidenceKeys: Record<string, string> = {
+      billing_healthy: 'monitoring.xai_inspection_evidence_billing_healthy',
+      billing_partial: 'monitoring.xai_inspection_evidence_billing_partial',
+      official_api_healthy: 'monitoring.xai_inspection_evidence_official_api_healthy',
+      inference_healthy: 'monitoring.xai_inspection_evidence_inference_healthy',
+    };
+    const evidenceKey = healthyEvidenceKeys[item.errorKind ?? ''];
+    const message = evidenceKey
+      ? t('monitoring.xai_inspection_log_result', {
+          account: item.displayAccount,
+          action: actionLabel(item.action),
+          evidence: t(evidenceKey),
+          percent: percentLabel(item.usedPercent),
+        })
+      : t('monitoring.xai_inspection_log_classified', {
+          account: item.displayAccount,
+          action: actionLabel(item.action),
+          surface: t(
+            inferenceEnabled
+              ? 'monitoring.xai_inspection_surface_inference'
+              : 'monitoring.xai_inspection_surface_billing'
+          ),
+          reason:
+            formatXaiProbeIssue(
+              item.errorKind ?? 'unknown',
+              t,
+              inferenceEnabled ? 'inference' : 'billing'
+            ) ?? t('xai_quota.diagnostic_unknown'),
+        });
+    logs.push({
+      id: `demo-inspection-result-${item.id}`,
+      level: demoXaiInspectionLogLevel(item) as CodexInspectionStoredLogEntry['level'],
+      message,
+      timestamp: item.createdAtMs,
+      detail: buildDemoXaiInspectionLogDetail(item, inferenceEnabled),
+    });
+  });
+
+  const completedAt = detail.run.finishedAtMs ?? detail.run.updatedAtMs;
+  logs.push({
+    id: 'demo-inspection-completed-summary',
+    level: 'success',
+    message: t('monitoring.codex_inspection_log_completed', {
+      delete: detail.run.deleteCount,
+      disable: detail.run.disableCount,
+      enable: detail.run.enableCount,
+      reauth: detail.run.reauthCount,
+      keep: detail.run.keepCount,
+    }),
+    timestamp: completedAt,
+    detail: buildDemoInspectionCompletionDetail(detail.run),
+  });
+  return logs;
 };
 
 export const getDemoAccountActionCandidates = () => ({
