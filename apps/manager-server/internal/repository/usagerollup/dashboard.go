@@ -69,7 +69,7 @@ func (r *repository) CatchUpDashboardHourly(ctx context.Context, limit int, nowM
 	}
 	defer r.releaseCatchUp()
 
-	tx, err := r.db.BeginTx(ctx, nil)
+	tx, err := beginRollupWriteTx(ctx, r.db, DashboardHourlyCheckpointName, nowMS)
 	if err != nil {
 		return CatchUpResult{}, err
 	}
