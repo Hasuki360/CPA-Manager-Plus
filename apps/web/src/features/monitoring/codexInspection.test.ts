@@ -709,6 +709,18 @@ describe('Server Codex inspection log details', () => {
       'monitoring.xai_inspection_evidence_inference_healthy': '真实推理健康',
       'monitoring.server_codex_inspection_log_message_run_started':
         'Credential health inspection started',
+      'monitoring.server_codex_inspection_log_message_interrupted':
+        'Credential health inspection interrupted',
+      'monitoring.server_codex_inspection_log_message_lifecycle_finalized':
+        'Credential health inspection lifecycle finalized',
+      'monitoring.server_codex_inspection_log_message_recovered_interrupted':
+        'Credential health inspection interrupted after restart or lease expiry',
+      'monitoring.server_codex_inspection_log_message_shutdown_before_start':
+        'Credential health inspection could not start because the service is shutting down',
+      'monitoring.server_codex_inspection_log_message_local_conflict_before_start':
+        'Credential health inspection could not start because of a local lifecycle conflict',
+      'monitoring.server_codex_inspection_log_message_ownership_cleanup_failed':
+        'Failed to clean up inspection disable ownership',
       'monitoring.server_codex_inspection_log_message_auto_started':
         'Automatic account processing started',
       'monitoring.server_codex_inspection_log_message_auto_validation_failed':
@@ -1280,6 +1292,24 @@ describe('Server Codex inspection log details', () => {
     );
     expect(formatServerCodexInspectionLogMessage('自动处理账号校验失败', t)).toBe(
       'Automatic account action validation failed'
+    );
+    expect(formatServerCodexInspectionLogMessage('凭证健康巡检已中断', t)).toBe(
+      'Credential health inspection interrupted'
+    );
+    expect(formatServerCodexInspectionLogMessage('凭证健康巡检生命周期已收尾', t)).toBe(
+      'Credential health inspection lifecycle finalized'
+    );
+    expect(formatServerCodexInspectionLogMessage('服务重启或任务租约过期，巡检已中断', t)).toBe(
+      'Credential health inspection interrupted after restart or lease expiry'
+    );
+    expect(formatServerCodexInspectionLogMessage('服务关闭导致巡检未能启动', t)).toBe(
+      'Credential health inspection could not start because the service is shutting down'
+    );
+    expect(formatServerCodexInspectionLogMessage('本地巡检状态冲突，任务未能启动', t)).toBe(
+      'Credential health inspection could not start because of a local lifecycle conflict'
+    );
+    expect(formatServerCodexInspectionLogMessage('清理巡检禁用所有权失败', t)).toBe(
+      'Failed to clean up inspection disable ownership'
     );
     expect(
       formatServerCodexInspectionLogMessage('monitoring.xai_inspection_log_server_complete', t)
@@ -2442,9 +2472,7 @@ describe('executeCodexInspectionActions', () => {
 
     await executeCodexInspectionActions({
       settings: createRunResult().settings,
-      items: [
-        enableItem,
-      ],
+      items: [enableItem],
       previousFiles: [],
       connectionFingerprint: scope,
       source: 'manual',

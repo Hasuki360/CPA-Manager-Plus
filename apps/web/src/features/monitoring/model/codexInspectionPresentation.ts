@@ -196,6 +196,13 @@ const SERVER_CODEX_INSPECTION_LOG_MESSAGE_KEYS: Record<string, string> = {
   加载认证文件列表失败: 'monitoring.server_codex_inspection_log_message_auth_files_failed',
   凭证健康巡检集合已准备: 'monitoring.server_codex_inspection_log_message_set_ready',
   凭证健康巡检已取消: 'monitoring.server_codex_inspection_log_message_cancelled',
+  凭证健康巡检已中断: 'monitoring.server_codex_inspection_log_message_interrupted',
+  凭证健康巡检生命周期已收尾: 'monitoring.server_codex_inspection_log_message_lifecycle_finalized',
+  '服务重启或任务租约过期，巡检已中断':
+    'monitoring.server_codex_inspection_log_message_recovered_interrupted',
+  服务关闭导致巡检未能启动: 'monitoring.server_codex_inspection_log_message_shutdown_before_start',
+  '本地巡检状态冲突，任务未能启动':
+    'monitoring.server_codex_inspection_log_message_local_conflict_before_start',
   凭证健康巡检完成: 'monitoring.server_codex_inspection_log_message_completed',
   自动处理账号开始: 'monitoring.server_codex_inspection_log_message_auto_started',
   自动处理账号完成: 'monitoring.server_codex_inspection_log_message_auto_completed',
@@ -217,6 +224,7 @@ const SERVER_CODEX_INSPECTION_LOG_MESSAGE_KEYS: Record<string, string> = {
   手动处理账号成功: 'monitoring.server_codex_inspection_log_message_manual_action_succeeded',
   '加载巡检禁用所有权失败，自动恢复将保持关闭':
     'monitoring.server_codex_inspection_log_message_ownership_failed',
+  清理巡检禁用所有权失败: 'monitoring.server_codex_inspection_log_message_ownership_cleanup_failed',
   手动处理账号校验失败: 'monitoring.server_codex_inspection_log_message_manual_validation_failed',
 };
 

@@ -12,6 +12,7 @@ import { CodexInspectionLogsPanel } from '@/features/monitoring/components/Codex
 import { CodexInspectionModeTabs } from '@/features/monitoring/components/CodexInspectionModeTabs';
 import { Panel } from '@/features/monitoring/components/CodexInspectionPanels';
 import { CodexInspectionResultsPanel } from '@/features/monitoring/components/CodexInspectionResultsPanel';
+import { CodexInspectionStopButton } from '@/features/monitoring/components/CodexInspectionStopButton';
 import { InspectionConfigDrawer } from '@/features/monitoring/components/InspectionConfigDrawer';
 import { InspectionConfigFields } from '@/features/monitoring/components/InspectionConfigFields';
 import {
@@ -55,6 +56,12 @@ import {
   codexInspectionTargetTypesToSelection,
   normalizeCodexInspectionTargetTypes,
 } from '@/features/monitoring/model/codexInspectionSettings';
+import {
+  findCancellableRun,
+  getRunStatusLabel,
+  hasActiveRun,
+  isActiveRun,
+} from '@/features/monitoring/model/serverCodexInspectionLifecycle';
 import { usePanelFeatureAvailability } from '@/hooks/usePanelFeatureAvailability';
 import {
   getUsageServiceErrorCode,
@@ -385,29 +392,17 @@ const statusToneClass: Record<StatusTone, string> = {
 function getRunTone(run?: CodexInspectionRun | null): StatusTone {
   switch (run?.status) {
     case 'completed':
+    case 'cancelled':
       return 'good';
     case 'failed':
       return 'bad';
     case 'running':
+    case 'cancelling':
       return 'info';
+    case 'interrupted':
+      return 'warn';
     default:
       return 'idle';
-  }
-}
-
-function getRunStatusLabel(
-  run: CodexInspectionRun | null | undefined,
-  t: ReturnType<typeof useTranslation>['t']
-) {
-  switch (run?.status) {
-    case 'completed':
-      return t('monitoring.codex_inspection_status_success');
-    case 'failed':
-      return t('monitoring.codex_inspection_status_error');
-    case 'running':
-      return t('monitoring.codex_inspection_status_running');
-    default:
-      return t('monitoring.codex_inspection_status_idle');
   }
 }
 
@@ -688,6 +683,7 @@ export function ServerCodexInspectionPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const [error, setError] = useState('');
   const [logsCollapsed, setLogsCollapsed] = useState(false);
   const [actionFilter, setActionFilter] = useState<ActionFilter>('all');
@@ -704,6 +700,9 @@ export function ServerCodexInspectionPage() {
   const [codexReauthTarget, setCodexReauthTarget] = useState<CodexReauthTarget | null>(null);
   const refreshInFlightRef = useRef(false);
   const actionInFlightRef = useRef(false);
+  const detailRequestGenerationRef = useRef(0);
+  const runListMutationGenerationRef = useRef(0);
+  const selectedRunIdRef = useRef<number | null>(null);
   const logListRef = useRef<HTMLDivElement | null>(null);
   const previousServerLogCursorRef = useRef<{
     runId: number | null;
@@ -715,11 +714,35 @@ export function ServerCodexInspectionPage() {
     [detail, t]
   );
 
+  const selectRunId = useCallback((id: number | null) => {
+    selectedRunIdRef.current = id;
+    detailRequestGenerationRef.current += 1;
+    setSelectedRunId(id);
+  }, []);
+
   const loadRunDetail = useCallback(
     async (base: string, id: number) => {
-      const nextDetail = await usageServiceApi.getCodexInspectionRun(base, managementKey, id);
+      if (selectedRunIdRef.current !== id) return null;
+      const requestGeneration = ++detailRequestGenerationRef.current;
+      let nextDetail: CodexInspectionRunDetail;
+      try {
+        nextDetail = await usageServiceApi.getCodexInspectionRun(base, managementKey, id);
+      } catch (error) {
+        if (
+          requestGeneration !== detailRequestGenerationRef.current ||
+          selectedRunIdRef.current !== id
+        ) {
+          return null;
+        }
+        throw error;
+      }
+      if (
+        requestGeneration !== detailRequestGenerationRef.current ||
+        selectedRunIdRef.current !== id
+      ) {
+        return null;
+      }
       setDetail(nextDetail);
-      setSelectedRunId(nextDetail.run.id);
       return nextDetail;
     },
     [managementKey]
@@ -756,17 +779,18 @@ export function ServerCodexInspectionPage() {
       setRuns(runsResponse.items);
       const nextSelectedId = runsResponse.items[0]?.id;
       if (nextSelectedId) {
+        selectRunId(nextSelectedId);
         await loadRunDetail(resolvedBase, nextSelectedId);
       } else {
         setDetail(null);
-        setSelectedRunId(null);
+        selectRunId(null);
       }
     } catch (error: unknown) {
       setError(getUsageServiceDisplayError(error, t));
       setRuns([]);
       setDetail(null);
       setHeaderSnapshots([]);
-      setSelectedRunId(null);
+      selectRunId(null);
     } finally {
       setLoading(false);
     }
@@ -775,6 +799,7 @@ export function ServerCodexInspectionPage() {
     featureAvailability.serverCodexInspectionAvailable,
     loadRunDetail,
     managementKey,
+    selectRunId,
     t,
   ]);
 
@@ -815,10 +840,10 @@ export function ServerCodexInspectionPage() {
     (!normalizedDraftConfig || !configsEquivalent(selectedConfig, normalizedDraftConfig))
   );
   const savedScheduleLabel = formatSchedule(selectedConfig, t);
-  const hasRunningRun =
-    runs.some((run) => run.status === 'running') || detail?.run.status === 'running';
+  const hasRunningRun = hasActiveRun(runs, detail?.run);
   const latestRun = runs[0] ?? null;
   const activeRun = detail?.run ?? latestRun;
+  const cancellableRun = findCancellableRun(runs, activeRun);
   const activeTone = getRunTone(activeRun);
 
   const resultRows = useMemo(() => detail?.results ?? [], [detail?.results]);
@@ -935,28 +960,36 @@ export function ServerCodexInspectionPage() {
         setError('');
       }
       try {
+        const mutationGeneration = runListMutationGenerationRef.current;
         const response = await usageServiceApi.listCodexInspectionRuns(
           serviceBase,
           managementKey,
           RUNS_LIMIT
         );
+        // A start/cancel response is newer than any list request that began
+        // before that lifecycle mutation completed. Discard the stale snapshot
+        // so it cannot resurrect a running action after cancellation.
+        if (mutationGeneration !== runListMutationGenerationRef.current) return;
         setRuns(response.items);
+        const currentSelectedRunId = selectedRunIdRef.current;
         const selectionStillValid =
-          selectedRunId != null && response.items.some((run) => run.id === selectedRunId);
+          currentSelectedRunId != null &&
+          response.items.some((run) => run.id === currentSelectedRunId);
         if (selectionStillValid) {
           // 静默轮询时保留用户正在查看的历史详情,避免每 30s 重建详情导致结果表/日志
           // 重渲染、打断操作;但正在运行的巡检或尚无详情时仍需刷新以获取最新进度。
-          const watchingRunning = detail?.run.status === 'running';
+          const watchingRunning = isActiveRun(detail?.run);
           if (!silent || !detail || watchingRunning) {
-            await loadRunDetail(serviceBase, selectedRunId);
+            await loadRunDetail(serviceBase, currentSelectedRunId);
           }
         } else {
           const fallbackId = response.items[0]?.id;
           if (fallbackId) {
+            selectRunId(fallbackId);
             await loadRunDetail(serviceBase, fallbackId);
           } else {
             setDetail(null);
-            setSelectedRunId(null);
+            selectRunId(null);
           }
         }
       } catch (error: unknown) {
@@ -966,18 +999,26 @@ export function ServerCodexInspectionPage() {
         refreshInFlightRef.current = false;
       }
     },
-    [detail, loadPageData, loadRunDetail, managementKey, selectedRunId, serviceBase, t]
+    [detail, loadPageData, loadRunDetail, managementKey, selectRunId, serviceBase, t]
   );
 
   useEffect(() => {
     if (!serviceBase || (!selectedConfig.enabled && !hasRunningRun)) return;
     const timer = window.setInterval(() => {
-      if (saving || running || actionInFlightRef.current) return;
+      if (saving || running || cancelling || actionInFlightRef.current) return;
       void refreshRuns({ silent: true });
     }, 30_000);
 
     return () => window.clearInterval(timer);
-  }, [hasRunningRun, refreshRuns, running, saving, selectedConfig.enabled, serviceBase]);
+  }, [
+    cancelling,
+    hasRunningRun,
+    refreshRuns,
+    running,
+    saving,
+    selectedConfig.enabled,
+    serviceBase,
+  ]);
 
   const handleSave = async () => {
     if (!serviceBase || !managerConfig) {
@@ -1045,15 +1086,32 @@ export function ServerCodexInspectionPage() {
     setError('');
     try {
       const nextDetail = await usageServiceApi.runCodexInspection(serviceBase, managementKey);
+      const mutationGeneration = ++runListMutationGenerationRef.current;
+      selectRunId(nextDetail.run.id);
       setDetail(nextDetail);
-      setSelectedRunId(nextDetail.run.id);
-      const response = await usageServiceApi.listCodexInspectionRuns(
-        serviceBase,
-        managementKey,
-        RUNS_LIMIT
-      );
-      setRuns(response.items);
-      showNotification(t('monitoring.server_codex_inspection_run_success'), 'success');
+      showNotification(t('monitoring.server_codex_inspection_run_started'), 'success');
+      try {
+        const response = await usageServiceApi.listCodexInspectionRuns(
+          serviceBase,
+          managementKey,
+          RUNS_LIMIT
+        );
+        if (mutationGeneration !== runListMutationGenerationRef.current) return;
+        setRuns(response.items);
+        const refreshedRun = response.items.find((item) => item.id === nextDetail.run.id);
+        if (refreshedRun) {
+          setDetail((current) =>
+            current?.run.id === refreshedRun.id ? { ...current, run: refreshedRun } : current
+          );
+        }
+        // A small inspection may finish between the asynchronous start response
+        // and this list refresh. Reload its detail so the page does not retain a
+        // synthetic running state with empty results after the run is terminal.
+        await loadRunDetail(serviceBase, nextDetail.run.id);
+      } catch {
+        // Starting already succeeded. Reconciliation failure must not be shown
+        // as a failed start; a later poll/manual refresh can retry it.
+      }
     } catch (error: unknown) {
       const message = getUsageServiceDisplayError(error, t);
       showNotification(
@@ -1064,7 +1122,7 @@ export function ServerCodexInspectionPage() {
     } finally {
       setRunning(false);
     }
-  }, [managementKey, refreshRuns, serviceBase, showNotification, t]);
+  }, [loadRunDetail, managementKey, refreshRuns, selectRunId, serviceBase, showNotification, t]);
 
   const handleRunNow = () => {
     showConfirmation({
@@ -1074,6 +1132,92 @@ export function ServerCodexInspectionPage() {
       cancelText: t('common.cancel'),
       variant: selectedConfig.autoActionMode === 'delete' ? 'danger' : 'primary',
       onConfirm: executeServerRun,
+    });
+  };
+
+  const executeServerCancel = useCallback(async () => {
+    if (!serviceBase || !cancellableRun) return;
+    const requestedRunId = cancellableRun.id;
+    // Keep a user's history selection stable while the cancel request is in
+    // flight. A response for the active run may update the detail view only
+    // when that same run is still selected; otherwise the user's history view
+    // must remain untouched.
+    setCancelling(true);
+    try {
+      const nextDetail = await usageServiceApi.cancelCodexInspectionRun(
+        serviceBase,
+        managementKey,
+        requestedRunId
+      );
+      ++runListMutationGenerationRef.current;
+      setRuns((current) => {
+        let found = false;
+        const updated = current.map((item) => {
+          if (item.id !== nextDetail.run.id) return item;
+          found = true;
+          return nextDetail.run;
+        });
+        return found ? updated : [nextDetail.run, ...updated];
+      });
+      if (selectedRunIdRef.current === requestedRunId) {
+        selectRunId(nextDetail.run.id);
+        setDetail(nextDetail);
+      }
+      showNotification(t('monitoring.server_codex_inspection_cancel_requested'), 'success');
+      await refreshRuns({ silent: true });
+    } catch (error: unknown) {
+      showNotification(
+        `${t('monitoring.server_codex_inspection_cancel_failed')}: ${getUsageServiceDisplayError(error, t)}`,
+        'error'
+      );
+      // A conflict normally means the worker committed a newer terminal state.
+      // Bypass the ordinary in-flight refresh guard so a pre-cancel poll cannot
+      // leave the page on a stale running snapshot.
+      const mutationGeneration = ++runListMutationGenerationRef.current;
+      try {
+        const response = await usageServiceApi.listCodexInspectionRuns(
+          serviceBase,
+          managementKey,
+          RUNS_LIMIT
+        );
+        if (mutationGeneration === runListMutationGenerationRef.current) {
+          setRuns(response.items);
+        }
+      } catch {
+        // The original cancellation error remains the user-facing failure. A
+        // later poll/manual refresh can retry list reconciliation.
+      }
+      if (selectedRunIdRef.current === requestedRunId) {
+        try {
+          await loadRunDetail(serviceBase, requestedRunId);
+        } catch {
+          // Keep the cancellation error as the primary notification.
+        }
+      }
+    } finally {
+      setCancelling(false);
+    }
+  }, [
+    cancellableRun,
+    loadRunDetail,
+    managementKey,
+    refreshRuns,
+    selectRunId,
+    selectedRunIdRef,
+    serviceBase,
+    showNotification,
+    t,
+  ]);
+
+  const handleCancelRun = () => {
+    if (!cancellableRun || cancellableRun.status === 'cancelling') return;
+    showConfirmation({
+      title: t('monitoring.server_codex_inspection_cancel_confirm_title'),
+      message: t('monitoring.server_codex_inspection_cancel_confirm_body'),
+      confirmText: t('monitoring.server_codex_inspection_stop'),
+      cancelText: t('common.cancel'),
+      variant: 'danger',
+      onConfirm: executeServerCancel,
     });
   };
 
@@ -1115,8 +1259,8 @@ export function ServerCodexInspectionPage() {
             ? resultIds.map((resultId) => ({ resultId, action: 'delete' as const }))
             : []
         );
+        selectRunId(response.detail.run.id);
         setDetail(response.detail);
-        setSelectedRunId(response.detail.run.id);
 
         const runsResponse = await usageServiceApi.listCodexInspectionRuns(
           serviceBase,
@@ -1174,7 +1318,7 @@ export function ServerCodexInspectionPage() {
         setExecutingAllActions(false);
       }
     },
-    [detail, managementKey, serviceBase, showNotification, t]
+    [detail, managementKey, selectRunId, serviceBase, showNotification, t]
   );
 
   const handleExecuteServerActions = useCallback(
@@ -1262,7 +1406,7 @@ export function ServerCodexInspectionPage() {
 
   const handleSelectRun = async (runID: number) => {
     if (!serviceBase || runID === selectedRunId) return;
-    setSelectedRunId(runID);
+    selectRunId(runID);
     try {
       await loadRunDetail(serviceBase, runID);
     } catch (error: unknown) {
@@ -1344,10 +1488,16 @@ export function ServerCodexInspectionPage() {
               size="sm"
               onClick={handleRunNow}
               loading={running}
-              disabled={!serviceBase || running}
+              disabled={!serviceBase || running || hasRunningRun}
             >
               {t('monitoring.server_codex_inspection_run_now')}
             </Button>
+            <CodexInspectionStopButton
+              run={cancellableRun}
+              busy={cancelling}
+              onClick={handleCancelRun}
+              t={t}
+            />
           </div>
         </div>
 

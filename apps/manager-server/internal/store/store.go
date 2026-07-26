@@ -37,6 +37,7 @@ type CodexInspectionRun = model.CodexInspectionRun
 type CodexInspectionResult = model.CodexInspectionResult
 type CodexInspectionLog = model.CodexInspectionLog
 type CodexInspectionDisableOwnership = model.CodexInspectionDisableOwnership
+type CodexInspectionLease = model.CodexInspectionLease
 type InsertResult = model.InsertResult
 type ModelPrice = model.ModelPrice
 type ModelPriceSyncResult = model.ModelPriceSyncResult
@@ -261,6 +262,42 @@ func (s *Store) CreateCodexInspectionRun(ctx context.Context, run CodexInspectio
 
 func (s *Store) UpdateCodexInspectionRun(ctx context.Context, run CodexInspectionRun) error {
 	return s.CodexInspections.UpdateRun(ctx, run)
+}
+
+func (s *Store) UpdateCodexInspectionRunProgress(ctx context.Context, run CodexInspectionRun, ownerID string) error {
+	return s.CodexInspections.UpdateRunProgress(ctx, run, ownerID)
+}
+
+func (s *Store) AcquireCodexInspectionRun(ctx context.Context, run CodexInspectionRun, ownerID string, leaseDuration time.Duration) (codexinspection.AcquireRunResult, error) {
+	return s.CodexInspections.AcquireRun(ctx, run, ownerID, leaseDuration)
+}
+
+func (s *Store) HeartbeatCodexInspectionRun(ctx context.Context, runID int64, ownerID string, leaseDuration time.Duration) error {
+	return s.CodexInspections.HeartbeatRun(ctx, runID, ownerID, leaseDuration)
+}
+
+func (s *Store) MarkCodexInspectionRunCancelling(ctx context.Context, runID int64, ownerID string, reason string) (bool, error) {
+	return s.CodexInspections.MarkRunCancelling(ctx, runID, ownerID, reason)
+}
+
+func (s *Store) FinalizeCodexInspectionRun(ctx context.Context, run CodexInspectionRun, ownerID string, finalLog *CodexInspectionLog) error {
+	return s.CodexInspections.FinalizeRun(ctx, run, ownerID, finalLog)
+}
+
+func (s *Store) ForceFinalizeCodexInspectionRun(ctx context.Context, run CodexInspectionRun, ownerID string, finalLog *CodexInspectionLog) error {
+	return s.CodexInspections.ForceFinalizeRun(ctx, run, ownerID, finalLog)
+}
+
+func (s *Store) GetActiveCodexInspectionLease(ctx context.Context, nowMS int64) (CodexInspectionLease, bool, error) {
+	return s.CodexInspections.GetActiveLease(ctx, nowMS)
+}
+
+func (s *Store) RecoverStaleCodexInspectionRuns(ctx context.Context, nowMS int64, reason string) ([]CodexInspectionRun, error) {
+	return s.CodexInspections.RecoverStaleRuns(ctx, nowMS, reason)
+}
+
+func (s *Store) GetLatestCodexInspectionRunByTriggerType(ctx context.Context, triggerType string) (CodexInspectionRun, bool, error) {
+	return s.CodexInspections.GetLatestRunByTriggerType(ctx, triggerType)
 }
 
 func (s *Store) InsertCodexInspectionResult(ctx context.Context, result CodexInspectionResult) (CodexInspectionResult, error) {

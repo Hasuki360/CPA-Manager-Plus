@@ -331,6 +331,18 @@ func Migrate(db *sql.DB) error {
 		`create index if not exists idx_codex_inspection_runs_started_at on codex_inspection_runs(started_at_ms)`,
 		`create index if not exists idx_codex_inspection_runs_status on codex_inspection_runs(status)`,
 		`create index if not exists idx_codex_inspection_runs_trigger on codex_inspection_runs(trigger_type, trigger_key)`,
+		// A single row is the database-level fencing point for all Manager Server
+		// instances sharing this database. run_id is nullable so an expired lease
+		// can be claimed before the replacement run is inserted in the same tx.
+		`create table if not exists codex_inspection_leases (
+			id integer primary key check (id = 1),
+			run_id integer,
+			owner_id text not null,
+			heartbeat_at_ms integer not null,
+			lease_expires_at_ms integer not null,
+			foreign key(run_id) references codex_inspection_runs(id) on delete set null
+		)`,
+		`create index if not exists idx_codex_inspection_leases_expiry on codex_inspection_leases(lease_expires_at_ms)`,
 		`create table if not exists codex_inspection_results (
 			id integer primary key autoincrement,
 			run_id integer not null,

@@ -18,9 +18,12 @@ const (
 	CodexInspectionAutoActionDisable = "disable"
 	CodexInspectionAutoActionDelete  = "delete"
 
-	CodexInspectionStatusRunning   = "running"
-	CodexInspectionStatusCompleted = "completed"
-	CodexInspectionStatusFailed    = "failed"
+	CodexInspectionStatusRunning     = "running"
+	CodexInspectionStatusCompleted   = "completed"
+	CodexInspectionStatusFailed      = "failed"
+	CodexInspectionStatusCancelling  = "cancelling"
+	CodexInspectionStatusCancelled   = "cancelled"
+	CodexInspectionStatusInterrupted = "interrupted"
 
 	CodexInspectionTriggerManual    = "manual"
 	CodexInspectionTriggerScheduled = "scheduled"
@@ -91,6 +94,48 @@ type CodexInspectionRun struct {
 	SettingsJSON  string                       `json:"-"`
 	CreatedAtMS   int64                        `json:"createdAtMs"`
 	UpdatedAtMS   int64                        `json:"updatedAtMs"`
+	// Active and Cancellable are derived compatibility fields. They are always
+	// emitted so clients can distinguish a truly active run from a stale row
+	// whose historical status still says running or cancelling.
+	Active      bool `json:"active"`
+	Cancellable bool `json:"cancellable"`
+}
+
+type CodexInspectionLease struct {
+	RunID            int64  `json:"runId"`
+	OwnerID          string `json:"ownerId"`
+	HeartbeatAtMS    int64  `json:"heartbeatAtMs"`
+	LeaseExpiresAtMS int64  `json:"leaseExpiresAtMs"`
+}
+
+func IsCodexInspectionRunActive(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case CodexInspectionStatusRunning, CodexInspectionStatusCancelling:
+		return true
+	default:
+		return false
+	}
+}
+
+func IsCodexInspectionRunCancellable(status string) bool {
+	return IsCodexInspectionRunActive(status)
+}
+
+func NormalizeCodexInspectionRunStatus(status string) string {
+	trimmed := strings.ToLower(strings.TrimSpace(status))
+	switch trimmed {
+	case CodexInspectionStatusRunning,
+		CodexInspectionStatusCompleted,
+		CodexInspectionStatusFailed,
+		CodexInspectionStatusCancelling,
+		CodexInspectionStatusCancelled,
+		CodexInspectionStatusInterrupted:
+		return trimmed
+	default:
+		// Preserve unknown values for forward compatibility instead of silently
+		// presenting them as a successful or failed run.
+		return strings.TrimSpace(status)
+	}
 }
 
 type CodexInspectionQuotaWindow struct {

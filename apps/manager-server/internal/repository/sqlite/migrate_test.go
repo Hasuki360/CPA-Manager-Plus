@@ -116,6 +116,12 @@ func TestCodexInspectionAutoRecoverySchema(t *testing.T) {
 			t.Fatalf("ownership columns = %#v, missing %s", ownershipColumns, column)
 		}
 	}
+	leaseColumns := migrationTableColumns(t, db, "codex_inspection_leases")
+	for _, column := range []string{"id", "run_id", "owner_id", "heartbeat_at_ms", "lease_expires_at_ms"} {
+		if !leaseColumns[column] {
+			t.Fatalf("lease columns = %#v, missing %s", leaseColumns, column)
+		}
+	}
 	accountActionColumns := migrationTableColumns(t, db, "account_action_candidates")
 	for _, column := range []string{"reason_code", "auto_disable_eligible", "auto_disabled_at_ms"} {
 		if !accountActionColumns[column] {
