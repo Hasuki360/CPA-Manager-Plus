@@ -48,6 +48,7 @@ import type {
   ProviderKeyConfig,
 } from '@/types';
 import { createConfigMutationLock } from './model/configMutationLock';
+import { buildProviderDeleteSecondConfirmation } from './model/deleteConfirmation';
 import styles from './AiProvidersPage.module.scss';
 
 /** 公益站检测时间统一按东八区展示（后端存 UTC RFC3339）。 */
@@ -1334,14 +1335,19 @@ export function AiProvidersPage() {
   };
 
   // 删除（按 provider 分派，沿用既有 API 契约）
-  const deleteGemini = (index: number) => {
+  const deleteGemini = (index: number, target: string) => {
     const entry = geminiKeys[index];
     if (!entry) return;
     showConfirmation({
       title: t('ai_providers.gemini_delete_title', { defaultValue: 'Delete Gemini Key' }),
       message: t('ai_providers.gemini_delete_confirm'),
       variant: 'danger',
-      confirmText: t('common.confirm'),
+      confirmText: t('common.next'),
+      secondConfirmation: buildProviderDeleteSecondConfirmation(
+        t,
+        PROVIDER_KIND_LABELS.gemini,
+        target
+      ),
       onConfirm: async () => {
         try {
           await providersApi.deleteGeminiKey(entry.apiKey, entry.baseUrl);
@@ -1358,14 +1364,19 @@ export function AiProvidersPage() {
     });
   };
 
-  const deleteInteractions = (index: number) => {
+  const deleteInteractions = (index: number, target: string) => {
     const entry = interactionsKeys[index];
     if (!entry) return;
     showConfirmation({
       title: t('ai_providers.interactions_delete_title'),
       message: t('ai_providers.interactions_delete_confirm'),
       variant: 'danger',
-      confirmText: t('common.confirm'),
+      confirmText: t('common.next'),
+      secondConfirmation: buildProviderDeleteSecondConfirmation(
+        t,
+        PROVIDER_KIND_LABELS.interactions,
+        target
+      ),
       onConfirm: async () => {
         try {
           await providersApi.deleteInteractionsKey(entry.apiKey, entry.baseUrl);
@@ -1382,7 +1393,7 @@ export function AiProvidersPage() {
     });
   };
 
-  const deleteProviderEntry = (type: 'codex' | 'xai' | 'claude', index: number) => {
+  const deleteProviderEntry = (type: 'codex' | 'xai' | 'claude', index: number, target: string) => {
     const source = type === 'codex' ? codexConfigs : type === 'xai' ? xaiConfigs : claudeConfigs;
     const entry = source[index];
     if (!entry) return;
@@ -1392,7 +1403,12 @@ export function AiProvidersPage() {
       }),
       message: t(`ai_providers.${type}_delete_confirm`),
       variant: 'danger',
-      confirmText: t('common.confirm'),
+      confirmText: t('common.next'),
+      secondConfirmation: buildProviderDeleteSecondConfirmation(
+        t,
+        PROVIDER_KIND_LABELS[type],
+        target
+      ),
       onConfirm: async () => {
         try {
           if (type === 'codex') {
@@ -1425,14 +1441,19 @@ export function AiProvidersPage() {
     });
   };
 
-  const deleteVertex = (index: number) => {
+  const deleteVertex = (index: number, target: string) => {
     const entry = vertexConfigs[index];
     if (!entry) return;
     showConfirmation({
       title: t('ai_providers.vertex_delete_title', { defaultValue: 'Delete Vertex Config' }),
       message: t('ai_providers.vertex_delete_confirm'),
       variant: 'danger',
-      confirmText: t('common.confirm'),
+      confirmText: t('common.next'),
+      secondConfirmation: buildProviderDeleteSecondConfirmation(
+        t,
+        PROVIDER_KIND_LABELS.vertex,
+        target
+      ),
       onConfirm: async () => {
         try {
           await providersApi.deleteVertexConfig(entry.apiKey, entry.baseUrl);
@@ -1449,14 +1470,19 @@ export function AiProvidersPage() {
     });
   };
 
-  const deleteOpenai = (index: number) => {
+  const deleteOpenai = (index: number, target: string) => {
     const entry = openaiProviders[index];
     if (!entry) return;
     showConfirmation({
       title: t('ai_providers.openai_delete_title', { defaultValue: 'Delete OpenAI Provider' }),
       message: t('ai_providers.openai_delete_confirm'),
       variant: 'danger',
-      confirmText: t('common.confirm'),
+      confirmText: t('common.next'),
+      secondConfirmation: buildProviderDeleteSecondConfirmation(
+        t,
+        PROVIDER_KIND_LABELS.openai,
+        target
+      ),
       onConfirm: async () => {
         try {
           await providersApi.deleteOpenAIProvider(entry.name);
@@ -1517,16 +1543,17 @@ export function AiProvidersPage() {
 
   const handleRowDelete = (row: ProviderRow) => {
     setDetailRowKey(null);
+    const target = row.label || row.sortName || row.baseUrl;
     if (row.kind === 'gemini') {
-      deleteGemini(row.originalIndex);
+      deleteGemini(row.originalIndex, target);
     } else if (row.kind === 'interactions') {
-      deleteInteractions(row.originalIndex);
+      deleteInteractions(row.originalIndex, target);
     } else if (row.kind === 'codex' || row.kind === 'xai' || row.kind === 'claude') {
-      deleteProviderEntry(row.kind, row.originalIndex);
+      deleteProviderEntry(row.kind, row.originalIndex, target);
     } else if (row.kind === 'vertex') {
-      deleteVertex(row.originalIndex);
+      deleteVertex(row.originalIndex, target);
     } else {
-      deleteOpenai(row.originalIndex);
+      deleteOpenai(row.originalIndex, target);
     }
   };
 

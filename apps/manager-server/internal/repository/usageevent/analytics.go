@@ -3,6 +3,7 @@ package usageevent
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strconv"
@@ -2517,11 +2518,8 @@ func analyticsWhere(filter AnalyticsFilter) (string, []any) {
 		if len(normalized) == 0 {
 			return
 		}
-		placeholders := strings.TrimRight(strings.Repeat("?,", len(normalized)), ",")
-		conditions = append(conditions, fmt.Sprintf("coalesce(%s, '') in (%s)", column, placeholders))
-		for _, value := range normalized {
-			args = append(args, value)
-		}
+		conditions = append(conditions, fmt.Sprintf("coalesce(%s, '') in (select value from json_each(?))", column))
+		args = append(args, encodeJSONFilterValues(normalized))
 	}
 	addInCondition("model", filter.Models)
 	addProviderCondition(filter.Providers, &conditions, &args)
@@ -2572,16 +2570,14 @@ func addProviderCondition(values []string, conditions *[]string, args *[]any) {
 	if len(normalized) == 0 {
 		return
 	}
-	placeholders := strings.TrimRight(strings.Repeat("?,", len(normalized)), ",")
+	encoded := encodeJSONFilterValues(normalized)
 	providerConditions := []string{
-		fmt.Sprintf("lower(coalesce(provider, '')) in (%s)", placeholders),
-		fmt.Sprintf("lower(coalesce(auth_provider_snapshot, '')) in (%s)", placeholders),
+		"lower(coalesce(provider, '')) in (select value from json_each(?))",
+		"lower(coalesce(auth_provider_snapshot, '')) in (select value from json_each(?))",
 	}
 	*conditions = append(*conditions, "("+strings.Join(providerConditions, " or ")+")")
 	for range providerConditions {
-		for _, value := range normalized {
-			*args = append(*args, value)
-		}
+		*args = append(*args, encoded)
 	}
 }
 
@@ -2590,19 +2586,22 @@ func addAccountCondition(values []string, conditions *[]string, args *[]any) {
 	if len(normalized) == 0 {
 		return
 	}
-	placeholders := strings.TrimRight(strings.Repeat("?,", len(normalized)), ",")
+	encoded := encodeJSONFilterValues(normalized)
 	accountConditions := []string{
-		fmt.Sprintf("lower(coalesce(account_snapshot, '')) in (%s)", placeholders),
-		fmt.Sprintf("lower(coalesce(auth_label_snapshot, '')) in (%s)", placeholders),
-		fmt.Sprintf("lower(coalesce(source, '')) in (%s)", placeholders),
-		fmt.Sprintf("lower(coalesce(auth_index, '')) in (%s)", placeholders),
+		"lower(coalesce(account_snapshot, '')) in (select value from json_each(?))",
+		"lower(coalesce(auth_label_snapshot, '')) in (select value from json_each(?))",
+		"lower(coalesce(source, '')) in (select value from json_each(?))",
+		"lower(coalesce(auth_index, '')) in (select value from json_each(?))",
 	}
 	*conditions = append(*conditions, "("+strings.Join(accountConditions, " or ")+")")
 	for range accountConditions {
-		for _, value := range normalized {
-			*args = append(*args, value)
-		}
+		*args = append(*args, encoded)
 	}
+}
+
+func encodeJSONFilterValues(values []string) string {
+	encoded, _ := json.Marshal(values)
+	return string(encoded)
 }
 
 func normalizeFilterValues(values []string) []string {

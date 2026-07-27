@@ -649,7 +649,13 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
         title: t('auth_files.delete_title', { defaultValue: 'Delete File' }),
         message: `${t('auth_files.delete_confirm')} "${name}" ?`,
         variant: 'danger',
-        confirmText: t('common.confirm'),
+        confirmText: t('common.next'),
+        secondConfirmation: {
+          title: t('auth_files.delete_second_title'),
+          message: t('auth_files.delete_second_confirm', { name }),
+          variant: 'danger',
+          confirmText: t('auth_files.delete_second_action'),
+        },
         onConfirm: async () => {
           setDeleting(name);
           try {
@@ -697,6 +703,12 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
       const isHealthyOnly = healthyOnly === true;
       const usesProvidedFilteredFiles = Array.isArray(filteredFiles);
       const isFilteredResult = usesProvidedFilteredFiles || isDisabledOnly || isHealthyOnly;
+      const deletesAllFiles =
+        !isFiltered &&
+        !isProblemOnly &&
+        !isDisabledOnly &&
+        !isHealthyOnly &&
+        !usesProvidedFilteredFiles;
       const typeLabel = isFiltered ? getTypeLabel(t, normalizedFilter) : t('auth_files.filter_all');
       let confirmMessage = t('auth_files.delete_all_confirm');
       if (isFilteredResult) {
@@ -709,124 +721,139 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
         confirmMessage = t('auth_files.delete_filtered_confirm', { type: typeLabel });
       }
 
+      const eligibleRows = (
+        usesProvidedFilteredFiles
+          ? filteredFiles
+          : files.filter((file) => {
+              if (
+                isFiltered &&
+                normalizeProviderKey(String(file.type ?? file.provider ?? '')) !== normalizedFilter
+              ) {
+                return false;
+              }
+              if (isProblemOnly && !hasAuthFileStatusMessage(file)) return false;
+              if (isDisabledOnly && file.disabled !== true) return false;
+              if (isHealthyOnly && !isHealthyAuthFile(file)) return false;
+              return true;
+            })
+      ).filter((file) => !isRuntimeOnlyAuthFile(file));
+      const filesToDelete = getWholeAuthFileDeleteCandidates(files, eligibleRows);
+
+      if (filesToDelete.length === 0) {
+        let emptyMessage = t('auth_files.delete_filtered_none', { type: typeLabel });
+        if (isFilteredResult) {
+          emptyMessage = t('auth_files.delete_filtered_result_none');
+        } else if (isProblemOnly) {
+          emptyMessage = isFiltered
+            ? t('auth_files.delete_problem_filtered_none', { type: typeLabel })
+            : t('auth_files.delete_problem_none');
+        }
+        showNotification(emptyMessage, 'info');
+        return;
+      }
+
+      const fileNames = filesToDelete.map((file) => file.name);
+      let deleteScope = t('auth_files.delete_scope_all');
+      if (isFilteredResult) {
+        deleteScope = t('auth_files.delete_scope_filtered_result');
+      } else if (isProblemOnly) {
+        deleteScope = isFiltered
+          ? t('auth_files.delete_scope_problem_provider', { type: typeLabel })
+          : t('auth_files.delete_scope_problem');
+      } else if (isFiltered) {
+        deleteScope = t('auth_files.delete_scope_provider', { type: typeLabel });
+      }
+
       showConfirmation({
         title: t('auth_files.delete_all_title', { defaultValue: 'Delete All Files' }),
         message: confirmMessage,
         variant: 'danger',
-        confirmText: t('common.confirm'),
+        confirmText: t('common.next'),
+        secondConfirmation: {
+          title: t('auth_files.delete_many_second_title'),
+          message: t('auth_files.delete_many_second_confirm', {
+            count: fileNames.length,
+            scope: deleteScope,
+          }),
+          variant: 'danger',
+          confirmText: t('auth_files.delete_second_action'),
+        },
         onConfirm: async () => {
           setDeletingAll(true);
           try {
-            if (
-              !isFiltered &&
-              !isProblemOnly &&
-              !isDisabledOnly &&
-              !isHealthyOnly &&
-              !usesProvidedFilteredFiles
-            ) {
+            if (deletesAllFiles) {
               await authFilesApi.deleteAll();
               showNotification(t('auth_files.delete_all_success'), 'success');
               setFiles((prev) => prev.filter((file) => isRuntimeOnlyAuthFile(file)));
               deselectAll();
-            } else {
-              const eligibleRows = (
-                usesProvidedFilteredFiles
-                  ? filteredFiles
-                  : files.filter((file) => {
-                      if (
-                        isFiltered &&
-                        normalizeProviderKey(String(file.type ?? file.provider ?? '')) !==
-                          normalizedFilter
-                      ) {
-                        return false;
-                      }
-                      if (isProblemOnly && !hasAuthFileStatusMessage(file)) return false;
-                      if (isDisabledOnly && file.disabled !== true) return false;
-                      if (isHealthyOnly && !isHealthyAuthFile(file)) return false;
-                      return true;
-                    })
-              ).filter((file) => !isRuntimeOnlyAuthFile(file));
-              const filesToDelete = getWholeAuthFileDeleteCandidates(files, eligibleRows);
-
-              if (filesToDelete.length === 0) {
-                let emptyMessage = t('auth_files.delete_filtered_none', { type: typeLabel });
-                if (isFilteredResult) {
-                  emptyMessage = t('auth_files.delete_filtered_result_none');
-                } else if (isProblemOnly) {
-                  emptyMessage = isFiltered
-                    ? t('auth_files.delete_problem_filtered_none', { type: typeLabel })
-                    : t('auth_files.delete_problem_none');
-                }
-                showNotification(emptyMessage, 'info');
-                setDeletingAll(false);
-                return;
-              }
-
-              const result = await authFilesApi.deleteFiles(filesToDelete.map((file) => file.name));
-              const success = result.deleted;
-              const failed = result.failed.length;
-
-              applyDeletedFiles(result.files);
-
-              if (failed === 0 && isFilteredResult) {
-                showNotification(
-                  t('auth_files.delete_filtered_result_success', { count: success }),
-                  'success'
-                );
-              } else if (failed === 0 && isProblemOnly) {
-                showNotification(
-                  isFiltered
-                    ? t('auth_files.delete_problem_filtered_success', {
-                        count: success,
-                        type: typeLabel,
-                      })
-                    : t('auth_files.delete_problem_success', { count: success }),
-                  'success'
-                );
-              } else if (failed === 0) {
-                showNotification(
-                  t('auth_files.delete_filtered_success', { count: success, type: typeLabel }),
-                  'success'
-                );
-              } else if (isFilteredResult) {
-                showNotification(
-                  t('auth_files.delete_filtered_result_partial', { success, failed }),
-                  'warning'
-                );
-              } else if (isProblemOnly) {
-                showNotification(
-                  isFiltered
-                    ? t('auth_files.delete_problem_filtered_partial', {
-                        success,
-                        failed,
-                        type: typeLabel,
-                      })
-                    : t('auth_files.delete_problem_partial', { success, failed }),
-                  'warning'
-                );
-              } else {
-                showNotification(
-                  t('auth_files.delete_filtered_partial', { success, failed, type: typeLabel }),
-                  'warning'
-                );
-              }
-
-              if (isFiltered) {
-                onResetFilterToAll();
-              }
-              if (isProblemOnly) {
-                onResetProblemOnly();
-              }
-              if (isDisabledOnly) {
-                onResetDisabledOnly();
-              }
-              if (isHealthyOnly) {
-                onResetHealthyOnly();
-              }
-              if (usesProvidedFilteredFiles) {
-                onResetResultFilters?.();
-              }
+              return;
             }
+
+            const result = await authFilesApi.deleteFiles(fileNames);
+            const success = result.deleted;
+            const failed = result.failed.length;
+
+            applyDeletedFiles(result.files);
+
+            if (failed === 0 && isFilteredResult) {
+              showNotification(
+                t('auth_files.delete_filtered_result_success', { count: success }),
+                'success'
+              );
+            } else if (failed === 0 && isProblemOnly) {
+              showNotification(
+                isFiltered
+                  ? t('auth_files.delete_problem_filtered_success', {
+                      count: success,
+                      type: typeLabel,
+                    })
+                  : t('auth_files.delete_problem_success', { count: success }),
+                'success'
+              );
+            } else if (failed === 0) {
+              showNotification(
+                t('auth_files.delete_filtered_success', { count: success, type: typeLabel }),
+                'success'
+              );
+            } else if (isFilteredResult) {
+              showNotification(
+                t('auth_files.delete_filtered_result_partial', { success, failed }),
+                'warning'
+              );
+            } else if (isProblemOnly) {
+              showNotification(
+                isFiltered
+                  ? t('auth_files.delete_problem_filtered_partial', {
+                      success,
+                      failed,
+                      type: typeLabel,
+                    })
+                  : t('auth_files.delete_problem_partial', { success, failed }),
+                'warning'
+              );
+            } else {
+              showNotification(
+                t('auth_files.delete_filtered_partial', { success, failed, type: typeLabel }),
+                'warning'
+              );
+            }
+
+            if (isFiltered) {
+              onResetFilterToAll();
+            }
+            if (isProblemOnly) {
+              onResetProblemOnly();
+            }
+            if (isDisabledOnly) {
+              onResetDisabledOnly();
+            }
+            if (isHealthyOnly) {
+              onResetHealthyOnly();
+            }
+            if (usesProvidedFilteredFiles) {
+              onResetResultFilters?.();
+            }
+            deselectAll();
           } catch (err: unknown) {
             const errorMessage = err instanceof Error ? err.message : '';
             showNotification(`${t('notification.delete_failed')}: ${errorMessage}`, 'error');
@@ -1185,7 +1212,16 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
         title: t('auth_files.batch_delete_title'),
         message: t('auth_files.batch_delete_confirm', { count: uniqueNames.length }),
         variant: 'danger',
-        confirmText: t('common.confirm'),
+        confirmText: t('common.next'),
+        secondConfirmation: {
+          title: t('auth_files.delete_many_second_title'),
+          message: t('auth_files.delete_many_second_confirm', {
+            count: uniqueNames.length,
+            scope: t('auth_files.delete_scope_selected'),
+          }),
+          variant: 'danger',
+          confirmText: t('auth_files.delete_second_action'),
+        },
         onConfirm: async () => {
           try {
             const result = await authFilesApi.deleteFiles(uniqueNames);
