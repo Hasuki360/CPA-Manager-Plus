@@ -112,7 +112,7 @@ func (r *repository) CatchUpAccountHistory(ctx context.Context, limit int, nowMS
 	}
 	defer r.releaseCatchUp()
 
-	tx, err := beginRollupWriteTx(ctx, r.db, AccountHistoryCheckpointName, nowMS)
+	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return CatchUpResult{}, err
 	}
@@ -276,29 +276,6 @@ order by account_key, last_seen_ms desc`, args...)
 		result = append(result, row)
 	}
 	return result, rows.Err()
-}
-
-func beginRollupWriteTx(ctx context.Context, db *sql.DB, checkpointName string, nowMS int64) (*sql.Tx, error) {
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	// Ensure the checkpoint row exists, then acquire SQLite's writer slot before
-	// reading it. In WAL mode, starting with a deferred read snapshot and
-	// upgrading it after a concurrent usage insert can fail with SQLITE_BUSY_SNAPSHOT.
-	if _, err := tx.ExecContext(ctx, `insert or ignore into usage_rollup_checkpoints (
-		name, last_event_id, updated_at_ms, last_run_started_at_ms
-	) values (?, 0, ?, ?)`, checkpointName, nowMS, nowMS); err != nil {
-		_ = tx.Rollback()
-		return nil, err
-	}
-	if _, err := tx.ExecContext(ctx, `update usage_rollup_checkpoints set
-		last_run_started_at_ms = ?
-	where name = ?`, nowMS, checkpointName); err != nil {
-		_ = tx.Rollback()
-		return nil, err
-	}
-	return tx, nil
 }
 
 func checkpointQuery(ctx context.Context, db *sql.DB, name string) (Checkpoint, error) {
