@@ -3,11 +3,14 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -15,12 +18,16 @@ import (
 	collectorpkg "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/collector"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/config"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/model"
+	quotacooldownrepo "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/quotacooldown"
+	accountactionsvc "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/accountaction"
 	collectorservice "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/collector"
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/cpaauthfiles"
+	managerconfigsvc "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/managerconfig"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/store"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usage"
 )
 
-func TestQuotaAutoDisableCandidateRequiresStrictQuotaUsageLimit(t *testing.T) {
+func TestQuotaAutoDisableCandidateRequiresStrictCodexUsageLimit(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	base := usage.Event{
 		EventHash:        "evt-1",
@@ -37,7 +44,7 @@ func TestQuotaAutoDisableCandidateRequiresStrictQuotaUsageLimit(t *testing.T) {
 	if !ok {
 		t.Fatalf("candidate not detected")
 	}
-	if candidate.FileName != "codex-auth.json" || candidate.AuthIndex != "auth-1" || candidate.DisplayAccount != "user@example.com" {
+	if candidate.FileName != "codex-auth.json" || candidate.AuthIndex != "auth-1" || candidate.DisplayAccount != "user@example.com" || candidate.AccountSnapshot != "user@example.com" {
 		t.Fatalf("candidate identity = %#v", candidate)
 	}
 	if got := candidate.ResetAt.Unix(); got != 1_700_000_060 {
@@ -45,23 +52,6 @@ func TestQuotaAutoDisableCandidateRequiresStrictQuotaUsageLimit(t *testing.T) {
 	}
 	if candidate.ReasonCode != quotaReasonCodexUsageLimit || candidate.WindowKind != quotaWindowUnknown {
 		t.Fatalf("candidate metadata = %#v", candidate)
-	}
-
-	antigravity := base
-	antigravity.EventHash = "evt-antigravity"
-	antigravity.Provider = "antigravity"
-	antigravity.AuthFileSnapshot = "antigravity-auth.json"
-	antigravity.FailBody = `{"error":{"code":429,"message":"Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 39h49m8s.","status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"QUOTA_EXHAUSTED","domain":"cloudcode-pa.googleapis.com","metadata":{"uiMessage":"true","model":"gemini-3-flash-agent","quotaResetDelay":"39h49m8.445762022s","quotaResetTimeStamp":"2026-07-11T07:00:30Z"}},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"143348.445762022s"}]}}`
-	candidate, ok = quotaAutoDisableCandidateFromEvent(antigravity, "http://cpa", "key", now)
-	if !ok {
-		t.Fatalf("antigravity candidate not detected")
-	}
-	if candidate.Provider != "antigravity" || candidate.FileName != "antigravity-auth.json" {
-		t.Fatalf("antigravity candidate = %#v", candidate)
-	}
-	// 2026-07-11T07:00:30Z is unix 1783753230
-	if candidate.ResetAt.Unix() != 1783753230 {
-		t.Fatalf("antigravity reset time = %v, want 1783753230", candidate.ResetAt.Unix())
 	}
 
 	cases := []struct {
@@ -366,28 +356,6 @@ func TestXAIResetMatchesSharedFixture(t *testing.T) {
 	}
 }
 
-func TestQuotaAutoDisableCandidateRejectsXAIAuth401(t *testing.T) {
-	now := time.Unix(1_700_000_000, 0)
-	for _, provider := range []string{"xai", "x-ai", "grok"} {
-		t.Run(provider, func(t *testing.T) {
-			event := usage.Event{
-				EventHash:        "evt-xai-401-" + provider,
-				Failed:           true,
-				FailStatusCode:   http.StatusUnauthorized,
-				FailBody:         `{"error":"token is expired"}`,
-				FailSummary:      "token is expired",
-				AuthFileSnapshot: "xai-auth.json",
-				AuthIndex:        "auth-xai-1",
-				AccountSnapshot:  "user@x.ai",
-				Provider:         provider,
-			}
-			if _, ok := quotaAutoDisableCandidateFromEvent(event, "http://cpa", "key", now); ok {
-				t.Fatal("xAI/Grok 401 must not enter provider quota cooldown")
-			}
-		})
-	}
-}
-
 func TestQuotaAutoDisableCandidateAcceptsXAIIncludedFreeUsageExhaustedAliasesAndNestedCode(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	cases := []struct {
@@ -548,6 +516,357 @@ func TestExtendExistingCooldownKeepsEvidenceForLaterRecovery(t *testing.T) {
 	}
 }
 
+func TestExtendExistingCooldownKeepsWinningRecoveryMetadata(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	ctx := context.Background()
+	now := time.Now()
+	existingRecoverAt := now.Add(12 * time.Hour)
+	if _, err := st.UpsertQuotaCooldown(ctx, store.QuotaCooldownUpsert{
+		AuthFileName: "codex-auth.json",
+		AuthIndex:    "auth-codex-1",
+		Provider:     "codex",
+		ReasonCode:   "weekly_limit",
+		WindowKind:   "weekly",
+		RecoverAtMS:  existingRecoverAt.UnixMilli(),
+		Owner:        model.QuotaCooldownOwnerUsage429,
+		EventHash:    "evt-weekly",
+		DisabledAtMS: now.Add(-time.Hour).UnixMilli(),
+	}); err != nil {
+		t.Fatalf("seed cooldown: %v", err)
+	}
+
+	worker := NewRateLimitAutoDisableWorker(st)
+	candidate := quotaAutoDisableCandidate{
+		FileName:   "codex-auth.json",
+		AuthIndex:  "auth-codex-1",
+		Provider:   "codex",
+		Owner:      model.QuotaCooldownOwnerUsage429,
+		ReasonCode: "five_hour_limit",
+		WindowKind: "five_hour",
+		ResetAt:    now.Add(6 * time.Hour),
+		EventHash:  "evt-five-hour",
+	}
+	if !worker.extendExistingCooldown(ctx, candidate, authFile{
+		Name:      candidate.FileName,
+		AuthIndex: candidate.AuthIndex,
+		Provider:  candidate.Provider,
+		Disabled:  true,
+	}) {
+		t.Fatal("existing cooldown was not updated")
+	}
+
+	active, err := st.QuotaCooldowns.ListActive(ctx)
+	if err != nil {
+		t.Fatalf("list active cooldowns: %v", err)
+	}
+	if len(active) != 1 || active[0].RecoverAtMS != existingRecoverAt.UnixMilli() || active[0].ReasonCode != "weekly_limit" || active[0].WindowKind != "weekly" || active[0].EventHash != "evt-weekly" {
+		t.Fatalf("active cooldown = %#v", active)
+	}
+}
+
+func TestExtendExistingCooldownUsesAuthIndexWhenDisplayAccountChanges(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	ctx := context.Background()
+	now := time.Now()
+	if _, err := st.UpsertQuotaCooldown(ctx, store.QuotaCooldownUpsert{
+		AuthFileName:    "shared.json",
+		AuthIndex:       "auth-1",
+		AccountSnapshot: "old-label@example.com",
+		Provider:        "codex",
+		RecoverAtMS:     now.Add(time.Hour).UnixMilli(),
+		Owner:           model.QuotaCooldownOwnerUsage429,
+		DisabledAtMS:    now.Add(-time.Hour).UnixMilli(),
+	}); err != nil {
+		t.Fatalf("seed cooldown: %v", err)
+	}
+
+	worker := NewRateLimitAutoDisableWorker(st)
+	candidate := quotaAutoDisableCandidate{
+		FileName:       "shared.json",
+		AuthIndex:      "auth-1",
+		DisplayAccount: "new-label@example.com",
+		Provider:       "codex",
+		Owner:          model.QuotaCooldownOwnerUsage429,
+		ResetAt:        now.Add(2 * time.Hour),
+	}
+	if !worker.extendExistingCooldown(ctx, candidate, authFile{
+		Name:            candidate.FileName,
+		AuthIndex:       candidate.AuthIndex,
+		Provider:        candidate.Provider,
+		AccountSnapshot: candidate.DisplayAccount,
+		Disabled:        true,
+	}) {
+		t.Fatal("stable auth_index cooldown was not extended after display account changed")
+	}
+
+	active, err := st.QuotaCooldowns.ListActive(ctx)
+	if err != nil {
+		t.Fatalf("list active cooldowns: %v", err)
+	}
+	if len(active) != 1 || active[0].RecoverAtMS != candidate.ResetAt.UnixMilli() ||
+		active[0].AuthIndex != candidate.AuthIndex || active[0].AccountSnapshot != candidate.DisplayAccount {
+		t.Fatalf("active cooldown = %#v", active)
+	}
+}
+
+func TestExtendExistingCooldownRejectsDifferentFallbackIdentity(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	ctx := context.Background()
+	now := time.Now()
+	if _, err := st.UpsertQuotaCooldown(ctx, store.QuotaCooldownUpsert{
+		AuthFileName:    "shared.json",
+		AccountSnapshot: "original@example.com",
+		Provider:        "codex",
+		RecoverAtMS:     now.Add(time.Hour).UnixMilli(),
+		Owner:           model.QuotaCooldownOwnerUsage429,
+		DisabledAtMS:    now.Add(-time.Hour).UnixMilli(),
+	}); err != nil {
+		t.Fatalf("seed cooldown: %v", err)
+	}
+
+	worker := NewRateLimitAutoDisableWorker(st)
+	candidate := quotaAutoDisableCandidate{
+		FileName:        "shared.json",
+		DisplayAccount:  "replacement@example.com",
+		AccountSnapshot: "replacement@example.com",
+		Provider:        "codex",
+		Owner:           model.QuotaCooldownOwnerUsage429,
+		ResetAt:         now.Add(2 * time.Hour),
+	}
+	if worker.extendExistingCooldown(ctx, candidate, authFile{
+		Name:            candidate.FileName,
+		Provider:        "codex",
+		AccountSnapshot: candidate.DisplayAccount,
+		Disabled:        true,
+	}) {
+		t.Fatal("replacement credential inherited an existing fallback cooldown")
+	}
+
+	active, err := st.QuotaCooldowns.ListActive(ctx)
+	if err != nil {
+		t.Fatalf("list active cooldowns: %v", err)
+	}
+	if len(active) != 1 || active[0].AccountSnapshot != "original@example.com" {
+		t.Fatalf("active cooldown = %#v, want original identity unchanged", active)
+	}
+}
+
+func TestExtendExistingCooldownSelectsMatchingSharedFileIdentity(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	ctx := context.Background()
+	now := time.Now()
+	for _, item := range []store.QuotaCooldownUpsert{
+		{
+			AuthFileName:    "shared.json",
+			AccountSnapshot: "alice@example.com",
+			Provider:        "codex",
+			RecoverAtMS:     now.Add(time.Hour).UnixMilli(),
+			Owner:           model.QuotaCooldownOwnerUsage429,
+			DisabledAtMS:    now.Add(-time.Hour).UnixMilli(),
+		},
+		{
+			AuthFileName:    "shared.json",
+			AccountSnapshot: "bob@example.com",
+			Provider:        "codex",
+			RecoverAtMS:     now.Add(2 * time.Hour).UnixMilli(),
+			Owner:           model.QuotaCooldownOwnerUsage429,
+			DisabledAtMS:    now.Add(-time.Hour).UnixMilli(),
+		},
+	} {
+		if _, err := st.UpsertQuotaCooldown(ctx, item); err != nil {
+			t.Fatalf("seed cooldown: %v", err)
+		}
+	}
+
+	worker := NewRateLimitAutoDisableWorker(st)
+	candidate := quotaAutoDisableCandidate{
+		FileName:        "shared.json",
+		DisplayAccount:  "bob@example.com",
+		AccountSnapshot: "bob@example.com",
+		Provider:        "codex",
+		Owner:           model.QuotaCooldownOwnerUsage429,
+		ResetAt:         now.Add(3 * time.Hour),
+	}
+	if !worker.extendExistingCooldown(ctx, candidate, authFile{
+		Name:            candidate.FileName,
+		Provider:        candidate.Provider,
+		AccountSnapshot: candidate.DisplayAccount,
+		Disabled:        true,
+	}) {
+		t.Fatal("matching shared-file cooldown was not extended")
+	}
+
+	active, err := st.QuotaCooldowns.ListActive(ctx)
+	if err != nil {
+		t.Fatalf("list active cooldowns: %v", err)
+	}
+	if len(active) != 2 {
+		t.Fatalf("active cooldowns = %#v, want two identities", active)
+	}
+	recoverAtByAccount := map[string]int64{}
+	for _, item := range active {
+		recoverAtByAccount[item.AccountSnapshot] = item.RecoverAtMS
+	}
+	if recoverAtByAccount["alice@example.com"] != now.Add(time.Hour).UnixMilli() || recoverAtByAccount["bob@example.com"] != candidate.ResetAt.UnixMilli() {
+		t.Fatalf("recoveries = %#v", recoverAtByAccount)
+	}
+}
+
+func TestRateLimitAutoDisableWorkerSkipsOwnershipWithoutStableIdentity(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	patchCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/v0/management/auth-files" && r.Method == http.MethodGet:
+			_ = json.NewEncoder(w).Encode([]map[string]any{{
+				"id":       "runtime-auth",
+				"name":     "auth.json",
+				"provider": "codex",
+				"disabled": false,
+			}})
+		case r.URL.Path == "/v0/management/auth-files/status" && r.Method == http.MethodPatch:
+			patchCalls++
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	NewRateLimitAutoDisableWorker(st).handleCandidate(context.Background(), quotaAutoDisableCandidate{
+		BaseURL:        server.URL,
+		ManagementKey:  "mgmt",
+		FileName:       "auth.json",
+		DisplayAccount: "auth.json",
+		Provider:       "codex",
+		ResetAt:        time.Now().Add(time.Hour),
+	})
+
+	if patchCalls != 0 {
+		t.Fatalf("patch calls = %d, want 0", patchCalls)
+	}
+	active, err := st.QuotaCooldowns.ListActive(context.Background())
+	if err != nil {
+		t.Fatalf("list active cooldowns: %v", err)
+	}
+	if len(active) != 0 {
+		t.Fatalf("active cooldowns = %#v, want none", active)
+	}
+}
+
+func TestRateLimitAutoDisableWorkerPersistsVerifiedFallbackSnapshot(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/v0/management/auth-files" && r.Method == http.MethodGet:
+			_ = json.NewEncoder(w).Encode([]map[string]any{{
+				"id":       "runtime-auth",
+				"name":     "auth.json",
+				"provider": "codex",
+				"account":  "verified@example.com",
+				"disabled": false,
+			}})
+		case r.URL.Path == "/v0/management/auth-files/status" && r.Method == http.MethodPatch:
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	NewRateLimitAutoDisableWorker(st).handleCandidate(context.Background(), quotaAutoDisableCandidate{
+		BaseURL:        server.URL,
+		ManagementKey:  "mgmt",
+		FileName:       "auth.json",
+		DisplayAccount: "auth.json",
+		ResetAt:        time.Now().Add(time.Hour),
+	})
+
+	active, err := st.QuotaCooldowns.ListActive(context.Background())
+	if err != nil {
+		t.Fatalf("list active cooldowns: %v", err)
+	}
+	if len(active) != 1 || active[0].AuthIndex != "" || active[0].AccountSnapshot != "verified@example.com" || active[0].Provider != "codex" {
+		t.Fatalf("active cooldowns = %#v, want verified provider/account fallback identity", active)
+	}
+}
+
+func TestRateLimitAutoDisableWorkerRejectsFallbackIdentityWithoutProvider(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	patchCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/v0/management/auth-files" && r.Method == http.MethodGet:
+			_ = json.NewEncoder(w).Encode([]map[string]any{{
+				"id":       "runtime-auth",
+				"name":     "auth.json",
+				"account":  "verified@example.com",
+				"disabled": false,
+			}})
+		case r.URL.Path == "/v0/management/auth-files/status" && r.Method == http.MethodPatch:
+			patchCalls++
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	NewRateLimitAutoDisableWorker(st).handleCandidate(context.Background(), quotaAutoDisableCandidate{
+		BaseURL:        server.URL,
+		ManagementKey:  "mgmt",
+		FileName:       "auth.json",
+		DisplayAccount: "verified@example.com",
+		ResetAt:        time.Now().Add(time.Hour),
+	})
+
+	if patchCalls != 0 {
+		t.Fatalf("patch calls = %d, want 0", patchCalls)
+	}
+	active, err := st.QuotaCooldowns.ListActive(context.Background())
+	if err != nil {
+		t.Fatalf("list active cooldowns: %v", err)
+	}
+	if len(active) != 0 {
+		t.Fatalf("active cooldowns = %#v, want none", active)
+	}
+}
+
 func TestMergeXAIProviderUsageEvidenceKeepsPrimaryRecoveryAndFillsUsage(t *testing.T) {
 	primaryRecoverAt := int64(2_000_000_000_000)
 	primary := fmt.Sprintf(
@@ -702,169 +1021,707 @@ func TestQuotaAutoDisableCandidateIgnoresGenericRetryAfterHeader(t *testing.T) {
 	}
 }
 
-func TestAntigravityQuota404NotFoundUsesQuotaSummary(t *testing.T) {
-	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
-	weeklyReset := now.Add(6*24*time.Hour + 8*time.Hour)
-	body := fmt.Sprintf(`{"groups":[{"displayName":"Gemini","buckets":[{"remainingFraction":0,"resetTime":%q}]}]}`, weeklyReset.Format(time.RFC3339))
+func TestRateLimitAutoDisableWorkerRejectsAmbiguousStatusMutationScope(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	patchCalls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer test-management-key" {
-			http.Error(w, "missing auth", http.StatusUnauthorized)
-			return
-		}
-		switch r.URL.Path {
-		case "/v0/management/auth-files":
-			_ = json.NewEncoder(w).Encode([]map[string]any{{
-				"name":       "antigravity-free-shami66505.json",
-				"auth_index": "ag-404",
-				"provider":   "antigravity",
-				"project_id": "numeric-symbol-qm2jp",
-			}})
-		case "/v0/management/api-call":
-			_ = json.NewEncoder(w).Encode(map[string]any{"status_code": 200, "body": json.RawMessage(body)})
+		switch {
+		case r.URL.Path == "/v0/management/auth-files" && r.Method == http.MethodGet:
+			_ = json.NewEncoder(w).Encode([]map[string]any{
+				{"id": "shared.json", "name": "shared.json", "auth_index": "auth-1", "provider": "codex", "account": "user@example.com", "disabled": false},
+				{"id": "runtime-auth-2", "name": "shared.json", "auth_index": "auth-2", "provider": "codex", "disabled": false},
+			})
+		case r.URL.Path == "/v0/management/auth-files/status" && r.Method == http.MethodPatch:
+			patchCalls++
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
 		default:
 			http.NotFound(w, r)
 		}
 	}))
 	defer server.Close()
 
-	event := usage.Event{
-		EventHash:        "evt-antigravity-404",
-		Failed:           true,
-		FailStatusCode:   http.StatusNotFound,
-		FailBody:         `{"error":{"code":404,"message":"Requested entity was not found.","status":"NOT_FOUND"}}`,
-		AuthFileSnapshot: "antigravity-free-shami66505.json",
-		AuthIndex:        "ag-404",
-		Provider:         "antigravity",
+	ctx := context.Background()
+	worker := NewRateLimitAutoDisableWorker(st, collectorpkg.RuntimeConfig{
+		CPAUpstreamURL: server.URL,
+		ManagementKey:  "mgmt",
+	})
+	worker.handleCandidate(ctx, quotaAutoDisableCandidate{
+		BaseURL:        server.URL,
+		ManagementKey:  "mgmt",
+		FileName:       "shared.json",
+		AuthIndex:      "auth-1",
+		DisplayAccount: "user@example.com",
+		Provider:       "codex",
+		ResetAt:        time.Now().Add(time.Hour),
+		EventHash:      "evt-ambiguous-disable",
+	})
+
+	if patchCalls != 0 {
+		t.Fatalf("patch calls = %d, want 0", patchCalls)
 	}
-	worker := NewRateLimitAutoDisableWorker(nil)
-	candidate, ok := worker.quotaAutoDisableCandidateFromEvent(context.Background(), event, collectorpkg.RuntimeConfig{}, server.URL, "test-management-key", now)
-	if !ok {
-		t.Fatal("Antigravity quota 404 candidate not detected")
+	active, err := st.QuotaCooldowns.ListActive(ctx)
+	if err != nil {
+		t.Fatalf("list active cooldowns: %v", err)
 	}
-	if !candidate.ResetAt.Equal(weeklyReset) || candidate.HTTPStatusCode != http.StatusNotFound {
-		t.Fatalf("candidate = %#v, want resetAt %s and status 404", candidate, weeklyReset)
+	if len(active) != 0 {
+		t.Fatalf("active cooldowns = %#v, want none", active)
 	}
 }
 
-func TestAntigravityOrdinary404IsIgnored(t *testing.T) {
-	event := usage.Event{
-		EventHash:        "evt-antigravity-model-404",
-		Failed:           true,
-		FailStatusCode:   http.StatusNotFound,
-		FailBody:         `{"error":{"code":404,"message":"Model gemini-missing was not found","status":"NOT_FOUND"}}`,
-		AuthFileSnapshot: "antigravity.json",
-		AuthIndex:        "ag-1",
-		Provider:         "antigravity",
+func TestRateLimitAutoDisableWorkerRejectsSamePathReplacementIdentity(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
 	}
-	if isAntigravityQuotaNotFound(event, "antigravity") {
-		t.Fatal("ordinary model 404 must not be treated as quota exhaustion")
-	}
-}
+	defer st.Close()
 
-func TestAntigravityQuotaCheckPrefersExhaustedWeeklyReset(t *testing.T) {
-	now := time.Date(2026, 7, 10, 10, 0, 0, 0, time.UTC)
-	weeklyReset := now.Add(6 * 24 * time.Hour)
-	body := fmt.Sprintf(`{
-		"groups":[{
-			"displayName":"Gemini",
-			"buckets":[
-				{"displayName":"5 小时限额","window":"5h","remainingFraction":0.45,"resetTime":%q},
-				{"displayName":"周限额","window":"weekly","remainingFraction":0,"resetTime":%q}
-			]
-		}]
-	}`, now.Add(3*time.Hour).Format(time.RFC3339), weeklyReset.Format(time.RFC3339))
-
+	patchCalls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer test-management-key" {
-			http.Error(w, "missing auth", http.StatusUnauthorized)
-			return
-		}
-		switch r.URL.Path {
-		case "/v0/management/auth-files":
+		switch {
+		case r.URL.Path == "/v0/management/auth-files" && r.Method == http.MethodGet:
 			_ = json.NewEncoder(w).Encode([]map[string]any{{
-				"name":       "antigravity-auth.json",
-				"auth_index": "ag-1",
-				"provider":   "antigravity",
-				"project_id": "project-weekly",
+				"id":         "runtime-replacement",
+				"name":       "codex-auth.json",
+				"auth_index": "auth-1",
+				"provider":   "codex",
+				"account":    "replacement@example.com",
+				"disabled":   false,
 			}})
-		case "/v0/management/api-call":
-			var payload map[string]any
+		case r.URL.Path == "/v0/management/auth-files/status" && r.Method == http.MethodPatch:
+			patchCalls++
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	worker := NewRateLimitAutoDisableWorker(st)
+	worker.handleCandidate(context.Background(), quotaAutoDisableCandidate{
+		BaseURL:         server.URL,
+		ManagementKey:   "mgmt",
+		FileName:        "codex-auth.json",
+		AuthIndex:       "auth-1",
+		DisplayAccount:  "original@example.com",
+		AccountSnapshot: "original@example.com",
+		Provider:        "codex",
+		ResetAt:         time.Now().Add(time.Hour),
+		EventHash:       "evt-replacement",
+	})
+
+	if patchCalls != 0 {
+		t.Fatalf("patch calls = %d, want 0", patchCalls)
+	}
+	active, err := st.QuotaCooldowns.ListActive(context.Background())
+	if err != nil {
+		t.Fatalf("list active cooldowns: %v", err)
+	}
+	if len(active) != 0 {
+		t.Fatalf("active cooldowns = %#v, want none", active)
+	}
+}
+
+func TestRateLimitAutoDisableWorkerDoesNotRollbackSamePathReplacementAfterPersistenceFailure(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	getCalls := 0
+	patchStates := make([]bool, 0, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/v0/management/auth-files" && r.Method == http.MethodGet:
+			getCalls++
+			account := "original@example.com"
+			runtimeID := "runtime-original"
+			if getCalls > 1 {
+				account = "replacement@example.com"
+				runtimeID = "runtime-replacement"
+			}
+			_ = json.NewEncoder(w).Encode([]map[string]any{{
+				"id":         runtimeID,
+				"name":       "codex-auth.json",
+				"auth_index": "auth-1",
+				"provider":   "codex",
+				"account":    account,
+				"disabled":   getCalls > 1,
+			}})
+		case r.URL.Path == "/v0/management/auth-files/status" && r.Method == http.MethodPatch:
+			var payload struct {
+				Disabled bool `json:"disabled"`
+			}
 			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-				t.Fatalf("decode api-call payload: %v", err)
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
 			}
-			if payload["authIndex"] != "ag-1" {
-				t.Fatalf("api-call authIndex = %v", payload["authIndex"])
+			patchStates = append(patchStates, payload.Disabled)
+			if payload.Disabled {
+				_ = st.Close()
 			}
-			if payload["data"] != `{"project":"project-weekly"}` {
-				t.Fatalf("api-call data = %v", payload["data"])
-			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"status_code": 200, "body": body})
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
 		default:
 			http.NotFound(w, r)
 		}
 	}))
 	defer server.Close()
 
-	event := usage.Event{
-		EventHash:        "evt-antigravity-weekly",
-		Failed:           true,
-		FailStatusCode:   http.StatusTooManyRequests,
-		FailBody:         `{"error":{"code":429,"status":"RESOURCE_EXHAUSTED","details":[{"metadata":{"quotaResetTimeStamp":"2026-07-10T13:00:00Z"}}]}}`,
-		AuthFileSnapshot: "antigravity-auth.json",
-		AuthIndex:        "ag-1",
-		AccountSnapshot:  "ag@example.com",
-		Provider:         "antigravity",
+	NewRateLimitAutoDisableWorker(st).handleCandidate(context.Background(), quotaAutoDisableCandidate{
+		BaseURL:        server.URL,
+		ManagementKey:  "mgmt",
+		FileName:       "codex-auth.json",
+		AuthIndex:      "auth-1",
+		DisplayAccount: "original@example.com",
+		Provider:       "codex",
+		ResetAt:        time.Now().Add(time.Hour),
+		EventHash:      "evt-persist-failure-replacement",
+	})
+
+	if getCalls != 2 {
+		t.Fatalf("auth file reads = %d, want initial and rollback verification", getCalls)
 	}
-	worker := NewRateLimitAutoDisableWorker(nil)
-	candidate, ok := worker.quotaAutoDisableCandidateFromEvent(context.Background(), event, collectorpkg.RuntimeConfig{}, server.URL, "test-management-key", now)
-	if !ok {
-		t.Fatal("candidate not detected")
-	}
-	if !candidate.ResetAt.Equal(weeklyReset) {
-		t.Fatalf("resetAt = %s, want weekly %s", candidate.ResetAt, weeklyReset)
+	if len(patchStates) != 1 || !patchStates[0] {
+		t.Fatalf("patch states = %#v, replacement must not be enabled", patchStates)
 	}
 }
 
-func TestAntigravityQuotaCheckFallsBackToErrorBodyWhenUnavailable(t *testing.T) {
-	now := time.Date(2026, 7, 10, 10, 0, 0, 0, time.UTC)
-	fallbackReset := now.Add(3 * time.Hour)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer test-management-key" {
-			http.Error(w, "missing auth", http.StatusUnauthorized)
-			return
+func TestRateLimitAutoDisableWorkerCompensatesAfterParentCancellation(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	getCalls := 0
+	patchStates := make([]bool, 0, 2)
+	client := &http.Client{Transport: workerRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		switch r.Method + " " + r.URL.Path {
+		case http.MethodGet + " /v0/management/auth-files":
+			getCalls++
+			disabled := len(patchStates) > 0 && patchStates[len(patchStates)-1]
+			body := fmt.Sprintf(
+				`[{"id":"runtime-codex-7","name":"codex-auth.json","auth_index":"auth-1","provider":"codex","account":"user@example.com","disabled":%t}]`,
+				disabled,
+			)
+			return workerHTTPResponse(r, io.NopCloser(strings.NewReader(body))), nil
+		case http.MethodPatch + " /v0/management/auth-files/status":
+			var payload struct {
+				Disabled bool `json:"disabled"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				return nil, err
+			}
+			patchStates = append(patchStates, payload.Disabled)
+			body := io.ReadCloser(io.NopCloser(strings.NewReader(`{"ok":true}`)))
+			if payload.Disabled {
+				body = &cancelAtEOFReadCloser{reader: strings.NewReader(`{"ok":true}`), cancel: cancel}
+			}
+			return workerHTTPResponse(r, body), nil
+		default:
+			return workerHTTPResponse(r, io.NopCloser(strings.NewReader(`{"error":"not found"}`))), nil
 		}
-		switch r.URL.Path {
-		case "/v0/management/auth-files":
-			_ = json.NewEncoder(w).Encode([]map[string]any{{
-				"name":       "antigravity-auth.json",
-				"auth_index": "ag-1",
-				"provider":   "antigravity",
-			}})
-		case "/v0/management/api-call":
-			_ = json.NewEncoder(w).Encode(map[string]any{"status_code": 500, "body": map[string]any{"error": "temporary"}})
+	})}
+	worker := NewRateLimitAutoDisableWorker(st)
+	worker.client = client
+	worker.handleCandidate(ctx, quotaAutoDisableCandidate{
+		BaseURL:         "http://cpa.test",
+		ManagementKey:   "mgmt",
+		FileName:        "codex-auth.json",
+		AuthIndex:       "auth-1",
+		DisplayAccount:  "user@example.com",
+		AccountSnapshot: "user@example.com",
+		Provider:        "codex",
+		ResetAt:         time.Now().Add(time.Hour),
+		EventHash:       "evt-parent-canceled",
+	})
+
+	if ctx.Err() != context.Canceled {
+		t.Fatalf("parent context error = %v, want context.Canceled", ctx.Err())
+	}
+	if getCalls != 2 {
+		t.Fatalf("auth file reads = %d, want initial and compensation verification", getCalls)
+	}
+	if len(patchStates) != 2 || !patchStates[0] || patchStates[1] {
+		t.Fatalf("patch states = %#v, want [true false]", patchStates)
+	}
+}
+
+func TestRateLimitAutoDisableWorkerCompensationHasTotalTimeout(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	getCalls := 0
+	rollbackCanceled := make(chan error, 1)
+	client := &http.Client{Transport: workerRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		switch r.Method + " " + r.URL.Path {
+		case http.MethodGet + " /v0/management/auth-files":
+			getCalls++
+			if getCalls > 1 {
+				<-r.Context().Done()
+				rollbackCanceled <- r.Context().Err()
+				return nil, r.Context().Err()
+			}
+			return workerHTTPResponse(r, io.NopCloser(strings.NewReader(
+				`[{"id":"runtime-codex-7","name":"codex-auth.json","auth_index":"auth-1","provider":"codex","account":"user@example.com","disabled":false}]`,
+			))), nil
+		case http.MethodPatch + " /v0/management/auth-files/status":
+			_ = st.Close()
+			return workerHTTPResponse(r, io.NopCloser(strings.NewReader(`{"ok":true}`))), nil
+		default:
+			return workerHTTPResponse(r, io.NopCloser(strings.NewReader(`{"error":"not found"}`))), nil
+		}
+	})}
+	worker := NewRateLimitAutoDisableWorker(st)
+	worker.client = client
+	worker.compensationTimeout = 25 * time.Millisecond
+	started := time.Now()
+	worker.handleCandidate(context.Background(), quotaAutoDisableCandidate{
+		BaseURL:         "http://cpa.test",
+		ManagementKey:   "mgmt",
+		FileName:        "codex-auth.json",
+		AuthIndex:       "auth-1",
+		DisplayAccount:  "user@example.com",
+		AccountSnapshot: "user@example.com",
+		Provider:        "codex",
+		ResetAt:         time.Now().Add(time.Hour),
+		EventHash:       "evt-compensation-timeout",
+	})
+	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+		t.Fatalf("bounded compensation elapsed = %s, want <= 500ms", elapsed)
+	}
+	select {
+	case err := <-rollbackCanceled:
+		if err != context.DeadlineExceeded {
+			t.Fatalf("rollback context error = %v, want context.DeadlineExceeded", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("rollback request did not observe the compensation deadline")
+	}
+}
+
+func TestSharedMutationCoordinatorSerializesAccountActionAndQuotaWorker(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+	if err := st.SaveSetup(ctx, store.Setup{
+		CPAUpstreamURL: "http://cpa.test",
+		ManagementKey:  "mgmt",
+	}); err != nil {
+		t.Fatalf("save setup: %v", err)
+	}
+	candidate, err := st.UpsertAccountActionCandidate(ctx, model.AccountActionCandidateUpsert{
+		ActionType:        model.AccountActionTypeDelete,
+		Provider:          "codex",
+		AuthFileName:      "shared.json",
+		AuthIndex:         "auth-1",
+		AccountSnapshot:   "user@example.com",
+		AccountIDSnapshot: "acct-123",
+		Reason:            "token revoked",
+	})
+	if err != nil {
+		t.Fatalf("upsert account action candidate: %v", err)
+	}
+
+	var stateMu sync.Mutex
+	getCalls := 0
+	disabled := true
+	patchStates := make([]bool, 0, 2)
+	firstGetStarted := make(chan struct{})
+	releaseFirstGet := make(chan struct{})
+	client := &http.Client{Transport: workerRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		switch r.Method + " " + r.URL.Path {
+		case http.MethodGet + " /v0/management/auth-files":
+			stateMu.Lock()
+			getCalls++
+			call := getCalls
+			currentDisabled := disabled
+			stateMu.Unlock()
+			if call == 1 {
+				close(firstGetStarted)
+				<-releaseFirstGet
+			}
+			body := fmt.Sprintf(
+				`[{"id":"runtime-auth-1","name":"shared.json","auth_index":"auth-1","provider":"codex","account":"user@example.com","account_id":"acct-123","disabled":%t}]`,
+				currentDisabled,
+			)
+			return workerHTTPResponse(r, io.NopCloser(strings.NewReader(body))), nil
+		case http.MethodPatch + " /v0/management/auth-files/status":
+			var payload struct {
+				Disabled bool `json:"disabled"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				return nil, err
+			}
+			stateMu.Lock()
+			disabled = payload.Disabled
+			patchStates = append(patchStates, payload.Disabled)
+			stateMu.Unlock()
+			return workerHTTPResponse(r, io.NopCloser(strings.NewReader(`{"ok":true}`))), nil
+		default:
+			return workerHTTPResponse(r, io.NopCloser(strings.NewReader(`{"error":"not found"}`))), nil
+		}
+	})}
+	coordinator := cpaauthfiles.NewMutationCoordinator()
+	accountService := accountactionsvc.NewWithMutationCoordinator(
+		st,
+		managerconfigsvc.New(config.Config{}, st, collectorservice.New(nil)),
+		coordinator,
+		client,
+	)
+	quotaWorker := NewRateLimitAutoDisableWorkerWithMutationCoordinator(st, coordinator)
+	quotaWorker.client = client
+
+	accountDone := make(chan error, 1)
+	go func() {
+		_, enableErr := accountService.Enable(ctx, candidate.ID)
+		accountDone <- enableErr
+	}()
+	select {
+	case <-firstGetStarted:
+	case <-time.After(time.Second):
+		t.Fatal("account action did not start auth file verification")
+	}
+
+	quotaDone := make(chan struct{})
+	go func() {
+		quotaWorker.handleCandidate(ctx, quotaAutoDisableCandidate{
+			BaseURL:         "http://cpa.test",
+			ManagementKey:   "mgmt",
+			FileName:        "shared.json",
+			AuthIndex:       "auth-1",
+			DisplayAccount:  "user@example.com",
+			AccountSnapshot: "user@example.com",
+			Provider:        "codex",
+			ResetAt:         time.Now().Add(time.Hour),
+			EventHash:       "evt-shared-coordinator",
+		})
+		close(quotaDone)
+	}()
+
+	time.Sleep(25 * time.Millisecond)
+	stateMu.Lock()
+	concurrentGetCalls := getCalls
+	stateMu.Unlock()
+	if concurrentGetCalls != 1 {
+		close(releaseFirstGet)
+		t.Fatalf("auth file reads before first mutation release = %d, want 1", concurrentGetCalls)
+	}
+	close(releaseFirstGet)
+	select {
+	case err := <-accountDone:
+		if err != nil {
+			t.Fatalf("enable account action: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("account action did not complete")
+	}
+	select {
+	case <-quotaDone:
+	case <-time.After(time.Second):
+		t.Fatal("quota worker did not complete")
+	}
+
+	stateMu.Lock()
+	defer stateMu.Unlock()
+	if getCalls != 2 {
+		t.Fatalf("auth file reads = %d, want one per serialized mutation", getCalls)
+	}
+	if len(patchStates) != 2 || patchStates[0] || !patchStates[1] {
+		t.Fatalf("patch states = %#v, want [false true]", patchStates)
+	}
+}
+
+func TestRateLimitAutoDisableWorkerDoesNotRecoverAmbiguousStatusMutationScope(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	patchCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/v0/management/auth-files" && r.Method == http.MethodGet:
+			_ = json.NewEncoder(w).Encode([]map[string]any{
+				{"id": "shared.json", "name": "shared.json", "auth_index": "auth-1", "provider": "codex", "account": "user@example.com", "disabled": true},
+				{"id": "runtime-auth-2", "name": "shared.json", "auth_index": "auth-2", "provider": "codex", "disabled": true},
+			})
+		case r.URL.Path == "/v0/management/auth-files/status" && r.Method == http.MethodPatch:
+			patchCalls++
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
 		default:
 			http.NotFound(w, r)
 		}
 	}))
 	defer server.Close()
 
-	event := usage.Event{
-		EventHash:        "evt-antigravity-fallback",
-		Failed:           true,
-		FailStatusCode:   http.StatusTooManyRequests,
-		FailBody:         fmt.Sprintf(`{"error":{"code":429,"status":"RESOURCE_EXHAUSTED","details":[{"metadata":{"quotaResetTimeStamp":%q}}]}}`, fallbackReset.Format(time.RFC3339)),
-		AuthFileSnapshot: "antigravity-auth.json",
-		AuthIndex:        "ag-1",
-		AccountSnapshot:  "ag@example.com",
-		Provider:         "antigravity",
+	ctx := context.Background()
+	now := time.Now()
+	if _, err := st.UpsertQuotaCooldown(ctx, store.QuotaCooldownUpsert{
+		AuthFileName:     "shared.json",
+		AuthIndex:        "auth-1",
+		AccountSnapshot:  "user@example.com",
+		Provider:         "codex",
+		RecoverAtMS:      now.Add(-time.Minute).UnixMilli(),
+		Owner:            model.QuotaCooldownOwnerUsage429,
+		EventHash:        "evt-ambiguous-recovery",
+		PreDisabledState: false,
+		DisabledAtMS:     now.Add(-time.Hour).UnixMilli(),
+	}); err != nil {
+		t.Fatalf("upsert cooldown: %v", err)
 	}
-	worker := NewRateLimitAutoDisableWorker(nil)
-	candidate, ok := worker.quotaAutoDisableCandidateFromEvent(context.Background(), event, collectorpkg.RuntimeConfig{}, server.URL, "test-management-key", now)
-	if !ok {
-		t.Fatal("candidate not detected")
+
+	worker := NewRateLimitAutoDisableWorker(st, collectorpkg.RuntimeConfig{
+		CPAUpstreamURL: server.URL,
+		ManagementKey:  "mgmt",
+	})
+	worker.enableDue(ctx, now)
+
+	if patchCalls != 0 {
+		t.Fatalf("patch calls = %d, want 0", patchCalls)
 	}
-	if !candidate.ResetAt.Equal(fallbackReset) {
-		t.Fatalf("resetAt = %s, want fallback %s", candidate.ResetAt, fallbackReset)
+	active, err := st.QuotaCooldowns.ListActive(ctx)
+	if err != nil {
+		t.Fatalf("list active cooldowns: %v", err)
+	}
+	if len(active) != 1 || !strings.Contains(active[0].LastError, "scope is ambiguous") {
+		t.Fatalf("active cooldowns = %#v, want retained ambiguous failure", active)
+	}
+}
+
+func TestRateLimitAutoDisableWorkerSkipsRecoveryAfterCredentialIdentityChanges(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	patchCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/v0/management/auth-files" && r.Method == http.MethodGet:
+			_ = json.NewEncoder(w).Encode([]map[string]any{{
+				"id":         "runtime-replacement",
+				"name":       "codex-auth.json",
+				"auth_index": "auth-1",
+				"provider":   "codex",
+				"account":    "replacement@example.com",
+				"disabled":   true,
+			}})
+		case r.URL.Path == "/v0/management/auth-files/status" && r.Method == http.MethodPatch:
+			patchCalls++
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	now := time.Now()
+	if _, err := st.UpsertQuotaCooldown(ctx, store.QuotaCooldownUpsert{
+		AuthFileName:     "codex-auth.json",
+		AuthIndex:        "auth-1",
+		AccountSnapshot:  "original@example.com",
+		Provider:         "codex",
+		RecoverAtMS:      now.Add(-time.Minute).UnixMilli(),
+		Owner:            model.QuotaCooldownOwnerUsage429,
+		PreDisabledState: false,
+		DisabledAtMS:     now.Add(-time.Hour).UnixMilli(),
+	}); err != nil {
+		t.Fatalf("upsert cooldown: %v", err)
+	}
+
+	worker := NewRateLimitAutoDisableWorker(st, collectorpkg.RuntimeConfig{
+		CPAUpstreamURL: server.URL,
+		ManagementKey:  "mgmt",
+	})
+	worker.enableDue(ctx, now)
+
+	if patchCalls != 0 {
+		t.Fatalf("patch calls = %d, want 0", patchCalls)
+	}
+	active, err := st.QuotaCooldowns.ListActive(ctx)
+	if err != nil {
+		t.Fatalf("list active cooldowns: %v", err)
+	}
+	if len(active) != 0 {
+		t.Fatalf("active cooldowns = %#v, want stale identity skipped", active)
+	}
+}
+
+func TestRateLimitAutoDisableWorkerSkipsRecoveryWithoutStableIdentity(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	requestCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCalls++
+		http.Error(w, "unexpected request", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	now := time.Now()
+	if _, err := st.UpsertQuotaCooldown(ctx, store.QuotaCooldownUpsert{
+		AuthFileName:     "replaceable.json",
+		AccountSnapshot:  "legacy@example.com",
+		RecoverAtMS:      now.Add(-time.Minute).UnixMilli(),
+		Owner:            model.QuotaCooldownOwnerUsage429,
+		PreDisabledState: false,
+		DisabledAtMS:     now.Add(-time.Hour).UnixMilli(),
+	}); err != nil {
+		t.Fatalf("upsert cooldown: %v", err)
+	}
+
+	worker := NewRateLimitAutoDisableWorker(st, collectorpkg.RuntimeConfig{
+		CPAUpstreamURL: server.URL,
+		ManagementKey:  "mgmt",
+	})
+	worker.enableDue(ctx, now)
+
+	if requestCalls != 0 {
+		t.Fatalf("request calls = %d, want 0", requestCalls)
+	}
+	active, err := st.QuotaCooldowns.ListActive(ctx)
+	if err != nil {
+		t.Fatalf("list active cooldowns: %v", err)
+	}
+	if len(active) != 0 {
+		t.Fatalf("active cooldowns = %#v, want skipped", active)
+	}
+}
+
+func TestRateLimitAutoDisableWorkerSerializesRecoveryAndCooldownExtension(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	ctx := context.Background()
+	now := time.Now()
+	if _, err := st.UpsertQuotaCooldown(ctx, store.QuotaCooldownUpsert{
+		AuthFileName:     "codex-auth.json",
+		AuthIndex:        "auth-1",
+		AccountSnapshot:  "user@example.com",
+		Provider:         "codex",
+		RecoverAtMS:      now.Add(-time.Minute).UnixMilli(),
+		Owner:            model.QuotaCooldownOwnerUsage429,
+		PreDisabledState: false,
+		DisabledAtMS:     now.Add(-time.Hour).UnixMilli(),
+	}); err != nil {
+		t.Fatalf("upsert cooldown: %v", err)
+	}
+
+	var stateMu sync.Mutex
+	disabled := true
+	getCalls := 0
+	firstGetStarted := make(chan struct{})
+	releaseFirstGet := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/v0/management/auth-files" && r.Method == http.MethodGet:
+			stateMu.Lock()
+			getCalls++
+			call := getCalls
+			currentDisabled := disabled
+			stateMu.Unlock()
+			if call == 1 {
+				close(firstGetStarted)
+				<-releaseFirstGet
+			}
+			_ = json.NewEncoder(w).Encode([]map[string]any{{
+				"id":         "runtime-auth-1",
+				"name":       "codex-auth.json",
+				"auth_index": "auth-1",
+				"provider":   "codex",
+				"account":    "user@example.com",
+				"disabled":   currentDisabled,
+			}})
+		case r.URL.Path == "/v0/management/auth-files/status" && r.Method == http.MethodPatch:
+			var payload struct {
+				Disabled bool `json:"disabled"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			stateMu.Lock()
+			disabled = payload.Disabled
+			stateMu.Unlock()
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	worker := NewRateLimitAutoDisableWorker(st, collectorpkg.RuntimeConfig{
+		CPAUpstreamURL: server.URL,
+		ManagementKey:  "mgmt",
+	})
+	recoveryDone := make(chan struct{})
+	go func() {
+		worker.enableDue(ctx, now)
+		close(recoveryDone)
+	}()
+	<-firstGetStarted
+
+	extensionDone := make(chan struct{})
+	go func() {
+		worker.handleCandidate(ctx, quotaAutoDisableCandidate{
+			BaseURL:        server.URL,
+			ManagementKey:  "mgmt",
+			FileName:       "codex-auth.json",
+			AuthIndex:      "auth-1",
+			DisplayAccount: "user@example.com",
+			Provider:       "codex",
+			ResetAt:        now.Add(time.Hour),
+			EventHash:      "evt-extended",
+		})
+		close(extensionDone)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	stateMu.Lock()
+	concurrentGetCalls := getCalls
+	stateMu.Unlock()
+	if concurrentGetCalls != 1 {
+		close(releaseFirstGet)
+		t.Fatalf("auth file reads before recovery release = %d, want serialized single read", concurrentGetCalls)
+	}
+	close(releaseFirstGet)
+	<-recoveryDone
+	<-extensionDone
+
+	stateMu.Lock()
+	finalDisabled := disabled
+	stateMu.Unlock()
+	if !finalDisabled {
+		t.Fatal("credential was left enabled after a concurrent later cooldown event")
+	}
+	active, err := st.QuotaCooldowns.ListActive(ctx)
+	if err != nil {
+		t.Fatalf("list active cooldowns: %v", err)
+	}
+	if len(active) != 1 || active[0].RecoverAtMS != now.Add(time.Hour).UnixMilli() {
+		t.Fatalf("active cooldowns = %#v, want later cooldown preserved", active)
 	}
 }
 
@@ -893,8 +1750,10 @@ func TestRateLimitAutoDisableWorkerRecoversDueCooldownFromManagerRuntimeConfigAf
 			currentDisabled := disabled
 			mu.Unlock()
 			_ = json.NewEncoder(w).Encode([]map[string]any{{
+				"id":         "runtime-codex-auth-1",
 				"name":       "codex-auth.json",
 				"auth_index": "auth-1",
+				"provider":   "codex",
 				"disabled":   currentDisabled,
 			}})
 		case "/v0/management/auth-files/status":
@@ -989,7 +1848,7 @@ func TestRateLimitAutoDisableWorkerXAIEventDisablesAndRecoversEndToEnd(t *testin
 		}
 		switch {
 		case r.URL.Path == "/v0/management/auth-files" && r.Method == http.MethodGet:
-			_ = json.NewEncoder(w).Encode([]map[string]any{{"name": "xai-auth.json", "authIndex": "auth-xai-1", "disabled": disabled}})
+			_ = json.NewEncoder(w).Encode([]map[string]any{{"id": "runtime-xai-auth-1", "name": "xai-auth.json", "authIndex": "auth-xai-1", "provider": "xai", "disabled": disabled}})
 		case r.URL.Path == "/v0/management/auth-files/status" && r.Method == http.MethodPatch:
 			var item struct {
 				Disabled bool `json:"disabled"`
@@ -1066,7 +1925,7 @@ func TestRateLimitAutoDisableWorkerRecoversXAICooldownWithoutTouchingManualDisab
 		case r.URL.Path == "/v0/management/auth-files" && r.Method == http.MethodGet:
 			files := []map[string]any{}
 			for name, state := range states {
-				files = append(files, map[string]any{"name": name, "authIndex": name, "disabled": state.disabled})
+				files = append(files, map[string]any{"id": name, "name": name, "authIndex": name, "provider": "xai", "disabled": state.disabled})
 			}
 			_ = json.NewEncoder(w).Encode(files)
 		case r.URL.Path == "/v0/management/auth-files/status" && r.Method == http.MethodPatch:
@@ -1110,6 +1969,84 @@ func TestRateLimitAutoDisableWorkerRecoversXAICooldownWithoutTouchingManualDisab
 	}
 }
 
+func TestRateLimitAutoDisableWorkerRollsBackEnableWhenRecoveryPersistenceFails(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	baseRepository := st.QuotaCooldowns
+	st.QuotaCooldowns = &failMarkRecoveredQuotaCooldownRepository{
+		Repository: baseRepository,
+		remaining:  1,
+		err:        errors.New("forced recovered marker failure"),
+	}
+
+	disabled := true
+	patches := make([]bool, 0, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/v0/management/auth-files" && r.Method == http.MethodGet:
+			_ = json.NewEncoder(w).Encode([]map[string]any{{
+				"id":         "runtime-auth-1",
+				"name":       "shared.json",
+				"auth_index": "auth-1",
+				"provider":   "codex",
+				"account":    "user@example.com",
+				"disabled":   disabled,
+			}})
+		case r.URL.Path == "/v0/management/auth-files/status" && r.Method == http.MethodPatch:
+			var payload struct {
+				Disabled bool `json:"disabled"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			disabled = payload.Disabled
+			patches = append(patches, payload.Disabled)
+			w.WriteHeader(http.StatusOK)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	now := time.Now()
+	if _, err := st.UpsertQuotaCooldown(ctx, store.QuotaCooldownUpsert{
+		AuthFileName:     "shared.json",
+		AuthIndex:        "auth-1",
+		AccountSnapshot:  "user@example.com",
+		Provider:         "codex",
+		RecoverAtMS:      now.Add(-time.Minute).UnixMilli(),
+		Owner:            model.QuotaCooldownOwnerUsage429,
+		EventHash:        "recovery-persistence-failure",
+		PreDisabledState: false,
+		DisabledAtMS:     now.Add(-time.Hour).UnixMilli(),
+	}); err != nil {
+		t.Fatalf("upsert cooldown: %v", err)
+	}
+
+	worker := NewRateLimitAutoDisableWorker(st, collectorpkg.RuntimeConfig{
+		CPAUpstreamURL: server.URL,
+		ManagementKey:  "test-management-key",
+	})
+	worker.enableDue(ctx, now)
+
+	if !disabled || len(patches) != 2 || patches[0] || !patches[1] {
+		t.Fatalf("disabled=%v patches=%v, want enable followed by rollback disable", disabled, patches)
+	}
+	active, err := st.QuotaCooldowns.ListActive(ctx)
+	if err != nil {
+		t.Fatalf("list active cooldowns: %v", err)
+	}
+	if len(active) != 1 || !strings.Contains(active[0].LastError, "recovery marker persistence failed") {
+		t.Fatalf("active cooldown = %#v, want retained ownership with failure evidence", active)
+	}
+}
+
 func TestRateLimitAutoDisableWorkerPersistsAndRecoversAfterRestart(t *testing.T) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
 	if err != nil {
@@ -1139,8 +2076,11 @@ func TestRateLimitAutoDisableWorkerPersistsAndRecoversAfterRestart(t *testing.T)
 			currentDisabled := disabled
 			mu.Unlock()
 			_ = json.NewEncoder(w).Encode([]map[string]any{{
+				"id":        "runtime-codex-auth-1",
 				"name":      "codex-auth.json",
 				"authIndex": "auth-1",
+				"provider":  "codex",
+				"account":   "user@example.com",
 				"disabled":  currentDisabled,
 			}})
 		case http.MethodPatch:
@@ -1178,7 +2118,7 @@ func TestRateLimitAutoDisableWorkerPersistsAndRecoversAfterRestart(t *testing.T)
 	})
 
 	mu.Lock()
-	if len(actions) != 1 || actions[0].Name != "codex-auth.json" || !actions[0].Disabled || !disabled {
+	if len(actions) != 1 || actions[0].Name != "runtime-codex-auth-1" || !actions[0].Disabled || !disabled {
 		t.Fatalf("disable actions = %#v disabled=%v", actions, disabled)
 	}
 	mu.Unlock()
@@ -1202,8 +2142,62 @@ func TestRateLimitAutoDisableWorkerPersistsAndRecoversAfterRestart(t *testing.T)
 	if len(actions) != 2 {
 		t.Fatalf("actions = %#v, want disable and enable", actions)
 	}
-	if actions[1].Name != "codex-auth.json" || actions[1].Disabled || disabled {
+	if actions[1].Name != "runtime-codex-auth-1" || actions[1].Disabled || disabled {
 		t.Fatalf("enable action = %#v disabled=%v", actions[1], disabled)
+	}
+}
+
+func TestRateLimitAutoDisableWorkerTargetsSameNameCredentialWithoutAuthIndex(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	patchedName := ""
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/v0/management/auth-files" && r.Method == http.MethodGet:
+			_ = json.NewEncoder(w).Encode([]map[string]any{
+				{"id": "runtime-first", "name": "shared.json", "provider": "codex", "account": "first@example.com", "disabled": false},
+				{"id": "runtime-second", "name": "shared.json", "provider": "codex", "account": "second@example.com", "disabled": false},
+			})
+		case r.URL.Path == "/v0/management/auth-files/status" && r.Method == http.MethodPatch:
+			var payload struct {
+				Name string `json:"name"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			patchedName = payload.Name
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	NewRateLimitAutoDisableWorker(st).handleCandidate(context.Background(), quotaAutoDisableCandidate{
+		BaseURL:         server.URL,
+		ManagementKey:   "mgmt",
+		FileName:        "shared.json",
+		DisplayAccount:  "second@example.com",
+		AccountSnapshot: "second@example.com",
+		Provider:        "codex",
+		ResetAt:         time.Now().Add(time.Hour),
+		EventHash:       "evt-no-auth-index",
+	})
+
+	if patchedName != "runtime-second" {
+		t.Fatalf("patched name = %q, want runtime-second", patchedName)
+	}
+	active, err := st.QuotaCooldowns.ListActive(context.Background())
+	if err != nil {
+		t.Fatalf("list active cooldowns: %v", err)
+	}
+	if len(active) != 1 || active[0].AuthIndex != "" || active[0].AccountSnapshot != "second@example.com" {
+		t.Fatalf("active cooldowns = %#v, want second credential snapshot identity", active)
 	}
 }
 
@@ -1217,4 +2211,137 @@ func waitForWorkerTest(t *testing.T, condition func() bool) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("condition was not met before deadline")
+}
+
+type failMarkRecoveredQuotaCooldownRepository struct {
+	quotacooldownrepo.Repository
+	remaining int
+	err       error
+}
+
+func (r *failMarkRecoveredQuotaCooldownRepository) MarkRecovered(ctx context.Context, id int64, recoveredAtMS int64) error {
+	if r.remaining > 0 {
+		r.remaining--
+		return r.err
+	}
+	return r.Repository.MarkRecovered(ctx, id, recoveredAtMS)
+}
+
+func TestAntigravityQuota404NotFoundUsesQuotaSummary(t *testing.T) {
+	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
+	weeklyReset := now.Add(6*24*time.Hour + 8*time.Hour)
+	body := fmt.Sprintf(`{"groups":[{"displayName":"Gemini","buckets":[{"remainingFraction":0,"resetTime":%q}]}]}`, weeklyReset.Format(time.RFC3339))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer test-management-key" {
+			http.Error(w, "missing auth", http.StatusUnauthorized)
+			return
+		}
+		switch r.URL.Path {
+		case "/v0/management/auth-files", "/v0/management/auth-files/status":
+			_ = json.NewEncoder(w).Encode([]map[string]any{{
+				"id":         "antigravity-free-shami66505.json",
+				"name":       "antigravity-free-shami66505.json",
+				"auth_index": "ag-404",
+				"provider":   "antigravity",
+				"project_id": "numeric-symbol-qm2jp",
+			}})
+		case "/v0/management/api-call":
+			_ = json.NewEncoder(w).Encode(map[string]any{"status_code": 200, "body": body})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	event := usage.Event{
+		EventHash:        "evt-antigravity-404",
+		Failed:           true,
+		FailStatusCode:   http.StatusNotFound,
+		FailBody:         `{"error":{"code":404,"message":"Requested entity was not found.","status":"NOT_FOUND"}}`,
+		AuthFileSnapshot: "antigravity-free-shami66505.json",
+		AuthIndex:        "ag-404",
+		Provider:         "antigravity",
+	}
+	worker := NewRateLimitAutoDisableWorker(nil)
+	candidate, ok := worker.quotaAutoDisableCandidateFromEvent(context.Background(), event, collectorpkg.RuntimeConfig{}, server.URL, "test-management-key", now)
+	if !ok {
+		t.Fatal("Antigravity quota 404 candidate not detected")
+	}
+	if !candidate.ResetAt.Equal(weeklyReset) || candidate.HTTPStatusCode != http.StatusNotFound {
+		t.Fatalf("candidate = %#v, want resetAt %s and status 404", candidate, weeklyReset)
+	}
+}
+
+func TestAntigravityOrdinary404IsIgnored(t *testing.T) {
+	event := usage.Event{
+		EventHash:        "evt-antigravity-model-404",
+		Failed:           true,
+		FailStatusCode:   http.StatusNotFound,
+		FailBody:         `{"error":{"code":404,"message":"Model gemini-missing was not found","status":"NOT_FOUND"}}`,
+		AuthFileSnapshot: "antigravity.json",
+		AuthIndex:        "ag-1",
+		Provider:         "antigravity",
+	}
+	if isAntigravityQuotaNotFound(event, "antigravity") {
+		t.Fatal("ordinary model 404 must not be treated as quota exhaustion")
+	}
+}
+
+func TestAntigravityQuotaCheckPrefersExhaustedWeeklyReset(t *testing.T) {
+	now := time.Date(2026, 7, 10, 10, 0, 0, 0, time.UTC)
+	weeklyReset := now.Add(6 * 24 * time.Hour)
+	body := fmt.Sprintf(`{
+		"groups":[{
+			"displayName":"Gemini",
+			"buckets":[
+				{"displayName":"5 小时限额","window":"5h","remainingFraction":0.45,"resetTime":%q},
+				{"displayName":"周限额","window":"weekly","remainingFraction":0,"resetTime":%q}
+			]
+		}]
+	}`, now.Add(3*time.Hour).Format(time.RFC3339), weeklyReset.Format(time.RFC3339))
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer test-management-key" {
+			http.Error(w, "missing auth", http.StatusUnauthorized)
+			return
+		}
+		switch r.URL.Path {
+		case "/v0/management/auth-files", "/v0/management/auth-files/status":
+			_ = json.NewEncoder(w).Encode([]map[string]any{{
+				"id":         "antigravity-auth.json",
+				"name":       "antigravity-auth.json",
+				"auth_index": "ag-1",
+				"provider":   "antigravity",
+				"project_id": "project-weekly",
+			}})
+		case "/v0/management/api-call":
+			var payload map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode api-call payload: %v", err)
+			}
+			if payload["authIndex"] != "ag-1" {
+				t.Fatalf("api-call authIndex = %v", payload["authIndex"])
+			}
+			if payload["data"] != `{"project":"project-weekly"}` {
+				t.Fatalf("api-call data = %v", payload["data"])
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"status_code": 200, "body": body})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	worker := NewRateLimitAutoDisableWorker(nil)
+	resetAt, ok := worker.antigravityQuotaResetTime(context.Background(), server.URL, "test-management-key", usage.Event{
+		AuthFileSnapshot: "antigravity-auth.json",
+		AuthIndex:        "ag-1",
+		Provider:         "antigravity",
+	}, "antigravity-auth.json", now)
+	if !ok {
+		t.Fatal("failed to resolve antigravity quota reset time")
+	}
+	if !resetAt.Equal(weeklyReset) {
+		t.Fatalf("resetAt = %s, want %s", resetAt, weeklyReset)
+	}
 }

@@ -29,14 +29,14 @@ import { formatPercent } from '@/features/monitoring/components/accountOverviewP
 import { buildRealtimeSourceDisplay } from '@/features/monitoring/realtimeSourceDisplay';
 import type { MonitoringEventRow } from '@/features/monitoring/hooks/useMonitoringData';
 import type { AccountDisplayMode } from '@/features/monitoring/accountOverviewState';
-import { useNotificationStore } from '@/stores';
-import { copyToClipboard } from '@/utils/clipboard';
-import { maskSensitiveText, truncateText } from '@/utils/format';
-import { formatCompactNumber, formatUsd } from '@/utils/usage';
 import {
   DEFAULT_MONITORING_REALTIME_VISIBLE_COLUMNS,
   type MonitoringRealtimeVisibleColumnKey,
 } from '@/features/monitoring/monitoringCenterUiState';
+import { useNotificationStore } from '@/stores';
+import { copyToClipboard } from '@/utils/clipboard';
+import { maskSensitiveText, truncateText } from '@/utils/format';
+import { formatCompactNumber, formatUsd } from '@/utils/usage';
 import styles from '../MonitoringCenterPage.module.scss';
 
 type RealtimeLogRow = MonitoringEventRow & {
@@ -99,8 +99,8 @@ const FAILURE_TOOLTIP_OFFSET = 8;
 const FAILURE_TOOLTIP_MAX_WIDTH = 420;
 const FAILURE_TOOLTIP_MAX_HEIGHT = 240;
 const FAILURE_TOOLTIP_CLOSE_DELAY_MS = 120;
-
-type FailureTooltipPlacement = 'above' | 'below';
+const USAGE_TOOLTIP_WIDTH = 184;
+const USAGE_TOOLTIP_ESTIMATED_HEIGHT = 170;
 
 export type RealtimeVisibleColumnKey = MonitoringRealtimeVisibleColumnKey;
 
@@ -136,8 +136,17 @@ const buildRealtimeTableStyle = (visibleColumns: RealtimeVisibleColumnKey[]): CS
   } as CSSProperties;
 };
 
+type FailureTooltipPlacement = 'above' | 'below';
+
 type FailureTooltipPosition = {
   placement: FailureTooltipPlacement;
+  style: CSSProperties;
+};
+
+type UsageTooltipPlacement = 'left-above' | 'left-below';
+
+type UsageTooltipPosition = {
+  placement: UsageTooltipPlacement;
   style: CSSProperties;
 };
 
@@ -166,50 +175,6 @@ const formatShortHash = (value: string | null | undefined) => {
   const trimmed = formatReadableText(value);
   return trimmed ? `#${trimmed.slice(0, 8)}` : '';
 };
-
-const buildRealtimeColumnOptions = (t: TFunction) =>
-  [
-    {
-      key: 'reasoning',
-      label: shortLabel(t, 'monitoring.reasoning_effort_short', 'monitoring.reasoning_effort'),
-    },
-    {
-      key: 'recent',
-      label: shortLabel(t, 'monitoring.recent_status_short', 'monitoring.recent_status'),
-    },
-    {
-      key: 'successRate',
-      label: shortLabel(
-        t,
-        'monitoring.column_success_rate_short',
-        'monitoring.column_success_rate'
-      ),
-    },
-    {
-      key: 'calls',
-      label: shortLabel(t, 'monitoring.total_calls_short', 'monitoring.total_calls', 'Calls'),
-    },
-    {
-      key: 'tps',
-      label: t('monitoring.column_output_tps'),
-    },
-    {
-      key: 'latency',
-      label: `${t('monitoring.ttft_short')} / ${t('monitoring.elapsed_short')}`,
-    },
-    {
-      key: 'time',
-      label: t('monitoring.column_time'),
-    },
-    {
-      key: 'usage',
-      label: shortLabel(t, 'monitoring.this_call_usage_short', 'monitoring.this_call_usage'),
-    },
-    {
-      key: 'cost',
-      label: shortLabel(t, 'monitoring.this_call_cost_short', 'monitoring.this_call_cost'),
-    },
-  ] satisfies Array<{ key: RealtimeVisibleColumnKey; label: string }>;
 
 const clampNumber = (value: number, min: number, max: number) =>
   Math.min(Math.max(value, min), max);
@@ -265,6 +230,53 @@ const resolveFailureTooltipPosition = (anchor: HTMLElement): FailureTooltipPosit
       };
 };
 
+const resolveUsageTooltipPosition = (anchor: HTMLElement): UsageTooltipPosition | null => {
+  if (typeof window === 'undefined') return null;
+
+  const rect = anchor.getBoundingClientRect();
+  const viewportWidth = window.innerWidth;
+  const viewportHeight = window.innerHeight;
+  const maxWidth = Math.max(0, viewportWidth - FAILURE_TOOLTIP_VIEWPORT_MARGIN * 2);
+  const availableLeftWidth = Math.max(
+    0,
+    rect.left - FAILURE_TOOLTIP_VIEWPORT_MARGIN - FAILURE_TOOLTIP_OFFSET
+  );
+  const width = Math.min(USAGE_TOOLTIP_WIDTH, maxWidth, availableLeftWidth);
+  const spaceBelow =
+    viewportHeight - rect.bottom - FAILURE_TOOLTIP_VIEWPORT_MARGIN - FAILURE_TOOLTIP_OFFSET;
+  const spaceAbove = rect.top - FAILURE_TOOLTIP_VIEWPORT_MARGIN - FAILURE_TOOLTIP_OFFSET;
+  const placement: UsageTooltipPlacement =
+    spaceAbove >= USAGE_TOOLTIP_ESTIMATED_HEIGHT || spaceAbove >= spaceBelow
+      ? 'left-above'
+      : 'left-below';
+  const availableHeight = Math.max(0, placement === 'left-above' ? spaceAbove : spaceBelow);
+  const left = Math.max(
+    FAILURE_TOOLTIP_VIEWPORT_MARGIN,
+    rect.left - FAILURE_TOOLTIP_OFFSET - width
+  );
+  const baseStyle: CSSProperties = {
+    left,
+    width,
+    maxHeight: Math.min(USAGE_TOOLTIP_ESTIMATED_HEIGHT, availableHeight),
+  };
+
+  return placement === 'left-below'
+    ? {
+        placement,
+        style: {
+          ...baseStyle,
+          top: rect.bottom + FAILURE_TOOLTIP_OFFSET,
+        },
+      }
+    : {
+        placement,
+        style: {
+          ...baseStyle,
+          bottom: viewportHeight - rect.top + FAILURE_TOOLTIP_OFFSET,
+        },
+      };
+};
+
 const buildRealtimeApiKeyDisplay = (row: MonitoringEventRow, t: TFunction) => {
   const label = formatReadableText(row.apiKeyLabel);
   const masked = formatReadableText(row.apiKeyMasked);
@@ -304,24 +316,6 @@ const formatTokensPerSecond = (value: number | null | undefined, locale: string)
   } catch {
     return value.toFixed(maximumFractionDigits);
   }
-};
-
-const formatRealtimeUsageNumber = (value: number, locale: string) => {
-  const num = Number(value);
-  if (!Number.isFinite(num)) return '0';
-  const normalizedLocale = locale.toLowerCase();
-  if (!normalizedLocale.startsWith('zh')) {
-    return formatCompactNumber(num);
-  }
-
-  const abs = Math.abs(num);
-  const formatUnit = (threshold: number, suffix: string) => {
-    const formatted = (num / threshold).toFixed(1).replace(/\.0$/, '');
-    return `${formatted}${suffix}`;
-  };
-  if (abs >= 100_000_000) return formatUnit(100_000_000, '亿');
-  if (abs >= 10_000) return formatUnit(10_000, '万');
-  return abs >= 1 ? num.toFixed(0) : num.toFixed(2);
 };
 
 const formatRealtimeCompactDuration = (value: number | null | undefined, locale: string) => {
@@ -567,14 +561,14 @@ const buildRequestDiagnosticMetaText = (row: MonitoringEventRow, t: TFunction, l
 };
 
 const buildRequestDiagnosticDetails = (row: MonitoringEventRow, t: TFunction, locale: string) => {
-  const summary = row.failed ? maskSensitiveText(row.failSummary || '') : '';
+  if (!row.failed) return null;
+
+  const summary = maskSensitiveText(row.failSummary || '');
   const diagnostics = buildHeaderDiagnosticParts(row, t, locale);
-  if (!row.failed && diagnostics.length === 0) return null;
-  if (row.failed && !row.failStatusCode && !summary && diagnostics.length === 0) return null;
-  const statusText =
-    row.failed && row.failStatusCode
-      ? `${shortLabel(t, 'monitoring.fail_status_code_short', 'monitoring.fail_status_code')} ${row.failStatusCode}`
-      : t(row.failed ? 'monitoring.result_failed' : 'monitoring.result_success');
+  if (!row.failStatusCode && !summary && diagnostics.length === 0) return null;
+  const statusText = row.failStatusCode
+    ? `${shortLabel(t, 'monitoring.fail_status_code_short', 'monitoring.fail_status_code')} ${row.failStatusCode}`
+    : t('monitoring.result_failed');
   return {
     failed: row.failed,
     statusCode: row.failStatusCode,
@@ -705,7 +699,6 @@ function RealtimeRequestDiagnosticStatus({
   const placement = tooltipPosition?.placement ?? 'below';
   const tooltipClassName = [
     styles.realtimeFailureTooltip,
-    !details.failed ? styles.realtimeSuccessDiagnosticTooltip : '',
     placement === 'above' ? styles.realtimeFailureTooltipAbove : styles.realtimeFailureTooltipBelow,
     open ? styles.realtimeFailureTooltipOpen : '',
   ]
@@ -774,41 +767,251 @@ function RealtimeRequestDiagnosticStatus({
   );
 }
 
-const buildRealtimeTokenSummary = (row: MonitoringEventRow, t: TFunction, locale: string) => {
-  const primary = [
-    `I ${formatRealtimeUsageNumber(row.inputTokens, locale)}`,
-    `O ${formatRealtimeUsageNumber(row.outputTokens, locale)}`,
-  ];
-  if (row.reasoningTokens > 0) {
-    primary.push(`R ${formatRealtimeUsageNumber(row.reasoningTokens, locale)}`);
+const formatRealtimeUsageNumber = (value: number, locale: string) => {
+  if (value <= 0) return '0';
+  if (value >= 100_000_000) {
+    return `${(value / 100_000_000).toLocaleString(locale, { maximumFractionDigits: 1 })}${locale.startsWith('zh') ? '亿' : 'M'}`;
   }
-  const cache: string[] = [];
-  const cacheTitle: string[] = [];
-  if (row.cachedTokens > 0) {
-    cache.push(`C ${formatRealtimeUsageNumber(row.cachedTokens, locale)}`);
-    cacheTitle.push(
-      `${t('monitoring.cached_tokens')}: ${formatRealtimeUsageNumber(row.cachedTokens, locale)}`
-    );
+  if (value >= 10_000) {
+    return `${(value / 10_000).toLocaleString(locale, { maximumFractionDigits: 1 })}${locale.startsWith('zh') ? '万' : 'k'}`;
   }
-  if (row.cacheReadTokens > 0) {
-    cache.push(`CR ${formatRealtimeUsageNumber(row.cacheReadTokens, locale)}`);
-    cacheTitle.push(
-      `${t('monitoring.cache_read_tokens')}: ${formatRealtimeUsageNumber(row.cacheReadTokens, locale)}`
-    );
-  }
-  if (row.cacheCreationTokens > 0) {
-    cache.push(`CW ${formatRealtimeUsageNumber(row.cacheCreationTokens, locale)}`);
-    cacheTitle.push(
-      `${t('monitoring.cache_creation_tokens')}: ${formatRealtimeUsageNumber(row.cacheCreationTokens, locale)}`
-    );
-  }
-  return {
-    primary: primary.join(' · '),
-    cache: cache.join(' · '),
-    cacheTitle: cacheTitle.join('\n'),
-    cacheAriaLabel: cacheTitle.join(', '),
-  };
+  return value.toLocaleString(locale);
 };
+
+type RealtimeTokenUsageDetails = {
+  total: string;
+  input: string;
+  output: string;
+  fields: Array<{ label: string; value: string }>;
+  ariaLabel: string;
+};
+
+const buildRealtimeTokenUsageDetails = (row: MonitoringEventRow, t: TFunction, locale: string = 'en') => {
+  const fields = [
+    { label: t('monitoring.realtime_usage_total_label'), value: formatCompactNumber(row.totalTokens) },
+    { label: t('monitoring.realtime_usage_input_label'), value: formatCompactNumber(row.inputTokens) },
+    { label: t('monitoring.realtime_usage_output_label'), value: formatCompactNumber(row.outputTokens) },
+    {
+      label: t('monitoring.realtime_usage_reasoning_label'),
+      value: formatCompactNumber(row.reasoningTokens),
+    },
+    { label: t('monitoring.realtime_usage_cached_label'), value: formatCompactNumber(row.cachedTokens) },
+    {
+      label: t('monitoring.realtime_usage_cache_read_label'),
+      value: formatCompactNumber(row.cacheReadTokens),
+    },
+    {
+      label: t('monitoring.realtime_usage_cache_creation_label'),
+      value: formatCompactNumber(row.cacheCreationTokens),
+    },
+  ];
+
+  return {
+    total: formatRealtimeUsageNumber(row.totalTokens, locale),
+    input: formatRealtimeUsageNumber(row.inputTokens, locale),
+    output: formatRealtimeUsageNumber(row.outputTokens, locale),
+    fields,
+    ariaLabel: fields.map((field) => `${field.label}: ${field.value}`).join(', '),
+  } satisfies RealtimeTokenUsageDetails;
+};
+
+type RealtimeTokenUsageProps = {
+  details: RealtimeTokenUsageDetails;
+  tooltipId: string;
+};
+
+function RealtimeTokenUsage({ details, tooltipId }: RealtimeTokenUsageProps) {
+  const triggerRef = useRef<HTMLDivElement | null>(null);
+  const tooltipRef = useRef<HTMLDivElement | null>(null);
+  const closeTimerRef = useRef<number | null>(null);
+  const rafRef = useRef<number | null>(null);
+  const [open, setOpen] = useState(false);
+  const [tooltipPosition, setTooltipPosition] = useState<UsageTooltipPosition | null>(null);
+  const isBrowser = typeof document !== 'undefined';
+
+  const clearCloseTimer = useCallback(() => {
+    if (closeTimerRef.current === null || typeof window === 'undefined') return;
+    window.clearTimeout(closeTimerRef.current);
+    closeTimerRef.current = null;
+  }, []);
+
+  const updateTooltipPosition = useCallback(() => {
+    if (!triggerRef.current) return;
+    const nextPosition = resolveUsageTooltipPosition(triggerRef.current);
+    if (nextPosition) {
+      setTooltipPosition(nextPosition);
+    }
+  }, []);
+
+  const scheduleTooltipPositionUpdate = useCallback(() => {
+    if (typeof window === 'undefined') return;
+    if (rafRef.current !== null) {
+      window.cancelAnimationFrame(rafRef.current);
+    }
+    rafRef.current = window.requestAnimationFrame(() => {
+      rafRef.current = null;
+      updateTooltipPosition();
+    });
+  }, [updateTooltipPosition]);
+
+  const showTooltip = useCallback(() => {
+    clearCloseTimer();
+    updateTooltipPosition();
+    setOpen(true);
+  }, [clearCloseTimer, updateTooltipPosition]);
+
+  const requestHideTooltip = useCallback(() => {
+    clearCloseTimer();
+    if (typeof window === 'undefined') {
+      setOpen(false);
+      return;
+    }
+    closeTimerRef.current = window.setTimeout(() => {
+      closeTimerRef.current = null;
+      setOpen(false);
+    }, FAILURE_TOOLTIP_CLOSE_DELAY_MS);
+  }, [clearCloseTimer]);
+
+  const handleBlur = useCallback(
+    (event: FocusEvent<HTMLElement>) => {
+      const nextTarget = event.relatedTarget;
+      if (
+        isNodeInside(triggerRef.current, nextTarget) ||
+        isNodeInside(tooltipRef.current, nextTarget)
+      ) {
+        return;
+      }
+      requestHideTooltip();
+    },
+    [requestHideTooltip]
+  );
+
+  const handleKeyDown = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== 'Escape') return;
+    event.preventDefault();
+    setOpen(false);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      clearCloseTimer();
+      if (rafRef.current !== null && typeof window !== 'undefined') {
+        window.cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+    };
+  }, [clearCloseTimer]);
+
+  useEffect(() => {
+    if (!open || typeof window === 'undefined') return undefined;
+
+    scheduleTooltipPositionUpdate();
+    window.addEventListener('resize', scheduleTooltipPositionUpdate);
+    window.addEventListener('scroll', scheduleTooltipPositionUpdate, true);
+
+    return () => {
+      window.removeEventListener('resize', scheduleTooltipPositionUpdate);
+      window.removeEventListener('scroll', scheduleTooltipPositionUpdate, true);
+    };
+  }, [open, scheduleTooltipPositionUpdate]);
+
+  const placement = tooltipPosition?.placement ?? 'left-below';
+  const tooltip = (
+    <div
+      id={tooltipId}
+      ref={tooltipRef}
+      role="tooltip"
+      className={[
+        styles.realtimeUsageTooltip,
+        placement === 'left-above'
+          ? styles.realtimeUsageTooltipLeftAbove
+          : styles.realtimeUsageTooltipLeftBelow,
+        open ? styles.realtimeUsageTooltipOpen : '',
+      ]
+        .filter(Boolean)
+        .join(' ')}
+      style={isBrowser ? tooltipPosition?.style : undefined}
+      onMouseEnter={clearCloseTimer}
+      onMouseLeave={requestHideTooltip}
+    >
+      {details.fields.map((field) => (
+        <span key={field.label} className={styles.realtimeUsageTooltipLine}>
+          <span className={styles.realtimeUsageTooltipLabel}>{field.label}</span>
+          <span className={styles.realtimeUsageTooltipValue}>{field.value}</span>
+        </span>
+      ))}
+    </div>
+  );
+
+  return (
+    <div
+      ref={triggerRef}
+      className={styles.realtimeUsageCell}
+      tabIndex={0}
+      aria-describedby={tooltipId}
+      aria-label={details.ariaLabel}
+      onMouseEnter={showTooltip}
+      onMouseLeave={requestHideTooltip}
+      onFocus={showTooltip}
+      onBlur={handleBlur}
+      onKeyDown={handleKeyDown}
+    >
+      <span className={styles.realtimeUsageTotal}>{details.total}</span>
+      <span className={styles.realtimeUsageFlow}>
+        <span className={styles.realtimeUsageMetric}>
+          <span aria-hidden="true">↑</span>
+          {details.input}
+        </span>
+        <span className={styles.realtimeUsageMetric}>
+          <span aria-hidden="true">↓</span>
+          {details.output}
+        </span>
+      </span>
+      {!isBrowser ? tooltip : null}
+      {isBrowser && open ? createPortal(tooltip, document.body) : null}
+    </div>
+  );
+}
+
+const buildRealtimeColumnOptions = (t: TFunction) =>
+  [
+    {
+      key: 'reasoning',
+      label: shortLabel(t, 'monitoring.reasoning_effort_short', 'monitoring.reasoning_effort'),
+    },
+    {
+      key: 'recent',
+      label: shortLabel(t, 'monitoring.recent_status_short', 'monitoring.column_recent_status'),
+    },
+    {
+      key: 'successRate',
+      label: shortLabel(t, 'monitoring.column_success_rate_short', 'monitoring.column_success_rate'),
+    },
+    {
+      key: 'calls',
+      label: shortLabel(t, 'monitoring.column_calls_short', 'monitoring.column_calls'),
+    },
+    {
+      key: 'tps',
+      label: shortLabel(t, 'monitoring.column_output_tps_short', 'monitoring.column_output_tps'),
+    },
+    {
+      key: 'latency',
+      label: shortLabel(t, 'monitoring.elapsed_short', 'monitoring.column_latency'),
+    },
+    {
+      key: 'time',
+      label: shortLabel(t, 'monitoring.column_time_short', 'monitoring.column_time'),
+    },
+    {
+      key: 'usage',
+      label: shortLabel(t, 'monitoring.column_usage_short', 'monitoring.column_usage'),
+    },
+    {
+      key: 'cost',
+      label: shortLabel(t, 'monitoring.column_cost_short', 'monitoring.column_cost'),
+    },
+  ] satisfies Array<{ key: RealtimeVisibleColumnKey; label: string }>;
 
 export function RealtimeEventsPanelActions({
   rowCount,
@@ -821,27 +1024,8 @@ export function RealtimeEventsPanelActions({
   visibleColumns,
   onVisibleColumnsChange,
 }: RealtimeEventsPanelActionsProps) {
-  const columnMenuRef = useRef<HTMLDivElement | null>(null);
   const [columnMenuOpen, setColumnMenuOpen] = useState(false);
-  const nextAccountDisplayMode: AccountDisplayMode =
-    accountDisplayMode === 'masked' ? 'full' : 'masked';
-  const AccountDisplayIcon = accountDisplayMode === 'masked' ? IconEyeOff : IconEye;
-  const logRowsLabel = shortLabel(t, 'monitoring.log_rows_short', 'monitoring.log_rows');
-  const recentFailuresLabel = shortLabel(
-    t,
-    'monitoring.recent_failures_short',
-    'monitoring.recent_failures'
-  );
-  const failedOnlyLabel = shortLabel(
-    t,
-    'monitoring.filter_status_failed_short',
-    'monitoring.filter_status_failed'
-  );
-  const accountDisplayHint = t(
-    accountDisplayMode === 'masked'
-      ? 'monitoring.account_overview_show_full_accounts_hint'
-      : 'monitoring.account_overview_show_masked_accounts_hint'
-  );
+  const columnMenuRef = useRef<HTMLDivElement | null>(null);
   const columnOptions = buildRealtimeColumnOptions(t);
 
   useEffect(() => {
@@ -872,6 +1056,26 @@ export function RealtimeEventsPanelActions({
       DEFAULT_REALTIME_VISIBLE_COLUMNS.filter((columnKey) => next.includes(columnKey))
     );
   };
+
+  const nextAccountDisplayMode: AccountDisplayMode =
+    accountDisplayMode === 'masked' ? 'full' : 'masked';
+  const AccountDisplayIcon = accountDisplayMode === 'masked' ? IconEyeOff : IconEye;
+  const logRowsLabel = shortLabel(t, 'monitoring.log_rows_short', 'monitoring.log_rows');
+  const recentFailuresLabel = shortLabel(
+    t,
+    'monitoring.recent_failures_short',
+    'monitoring.recent_failures'
+  );
+  const failedOnlyLabel = shortLabel(
+    t,
+    'monitoring.filter_status_failed_short',
+    'monitoring.filter_status_failed'
+  );
+  const accountDisplayHint = t(
+    accountDisplayMode === 'masked'
+      ? 'monitoring.account_overview_show_full_accounts_hint'
+      : 'monitoring.account_overview_show_masked_accounts_hint'
+  );
 
   return (
     <div className={`${styles.inlineMetrics} ${styles.realtimeHeaderActions}`}>
@@ -984,11 +1188,7 @@ export function RealtimeEventsPanel({
     'monitoring.column_source_api_key_short',
     'monitoring.column_source_api_key'
   );
-  const reasoningEffortLabel = shortLabel(
-    t,
-    'monitoring.reasoning_effort_short',
-    'monitoring.reasoning_effort'
-  );
+  const reasoningServiceLabel = t('monitoring.reasoning_service_short');
   const recentStatusLabel = shortLabel(
     t,
     'monitoring.recent_status_short',
@@ -1061,26 +1261,28 @@ export function RealtimeEventsPanel({
             <tr>
               <th>{sourceApiKeyLabel}</th>
               <th>{t('monitoring.column_model')}</th>
-              {isColumnVisible('reasoning') ? <th>{reasoningEffortLabel}</th> : null}
-              {isColumnVisible('recent') ? <th>{recentStatusLabel}</th> : null}
-              <th>{requestStatusLabel}</th>
-              {isColumnVisible('successRate') ? <th>{successRateLabel}</th> : null}
-              {isColumnVisible('calls') ? <th>{totalCallsLabel}</th> : null}
+              {isColumnVisible('reasoning') ? (
+                <th className={styles.realtimeSettingsColumn}>{reasoningServiceLabel}</th>
+              ) : null}
+              {isColumnVisible('recent') ? (
+                <th className={styles.realtimeCenteredColumn}>{recentStatusLabel}</th>
+              ) : null}
+              <th className={styles.realtimeCenteredColumn}>{requestStatusLabel}</th>
+              {isColumnVisible('successRate') ? (
+                <th className={styles.realtimeCenteredColumn}>{successRateLabel}</th>
+              ) : null}
+              {isColumnVisible('calls') ? (
+                <th className={styles.realtimeCenteredColumn}>{totalCallsLabel}</th>
+              ) : null}
               {isColumnVisible('tps') ? (
                 <th className={styles.realtimeTpsColumn}>{t('monitoring.column_output_tps')}</th>
               ) : null}
               {isColumnVisible('latency') ? (
-                <th className={styles.realtimeLatencyColumn}>
-                <span className={styles.realtimeLatencyHeader}>
-                  <span className={styles.realtimeMetricLeft}>{t('monitoring.ttft_short')}</span>
-                  <span className={styles.realtimeMetricSeparator}>｜</span>
-                  <span className={styles.realtimeMetricRight}>
-                    {t('monitoring.elapsed_short')}
-                  </span>
-                </span>
-                </th>
+                <th className={styles.realtimeLatencyColumn}>{t('monitoring.elapsed_short')}</th>
               ) : null}
-              {isColumnVisible('time') ? <th>{t('monitoring.column_time')}</th> : null}
+              {isColumnVisible('time') ? (
+                <th className={styles.realtimeTimeColumn}>{t('monitoring.column_time')}</th>
+              ) : null}
               {isColumnVisible('usage') ? <th>{usageLabel}</th> : null}
               {isColumnVisible('cost') ? <th>{costLabel}</th> : null}
             </tr>
@@ -1097,6 +1299,12 @@ export function RealtimeEventsPanel({
               const serviceTier = formatOptionalText(row.serviceTier);
               const requestServiceTier = formatOptionalText(row.requestServiceTier);
               const responseServiceTier = formatOptionalText(row.responseServiceTier);
+              const effectiveServiceTier =
+                requestServiceTier !== '-'
+                  ? requestServiceTier
+                  : serviceTier !== '-'
+                    ? serviceTier
+                    : responseServiceTier;
               const requestDiagnosticDetails = buildRequestDiagnosticDetails(row, t, locale);
               const requestDiagnosticTooltipId = requestDiagnosticDetails
                 ? `${tooltipIdPrefix}-request-diagnostic-tooltip-${row.id}`
@@ -1105,7 +1313,7 @@ export function RealtimeEventsPanel({
               const hasTtftMs = row.ttftMs !== null && row.ttftMs !== undefined;
               const ttftToneClass = getRealtimeDurationToneClass(row.ttftMs);
               const latencyToneClass = getRealtimeDurationToneClass(row.latencyMs);
-              const tokenSummary = buildRealtimeTokenSummary(row, t, locale);
+              const tokenUsage = buildRealtimeTokenUsageDetails(row, t, locale);
               return (
                 <tr key={row.id} className={row.failed ? styles.logRowFailed : undefined}>
                   <td>
@@ -1139,32 +1347,39 @@ export function RealtimeEventsPanel({
                     </div>
                   </td>
                   {isColumnVisible('reasoning') ? (
-                    <td>
-                      <div className={styles.primaryCell}>
-                        {reasoningEffort !== '-' ? (
-                          <span className={styles.realtimeReasoningBadge}>{reasoningEffort}</span>
-                        ) : (
-                          <span className={styles.mutedCell}>-</span>
-                        )}
-                        {requestServiceTier !== '-' ? (
-                          <small>{`${t('monitoring.request_service_tier_short')}: ${requestServiceTier}`}</small>
-                        ) : serviceTier !== '-' ? (
-                          <small>{`${shortLabel(t, 'monitoring.service_tier_short', 'monitoring.service_tier')}: ${serviceTier}`}</small>
-                        ) : null}
-                        {responseServiceTier !== '-' ? (
-                          <small>{`${t('monitoring.response_service_tier_short')}: ${responseServiceTier}`}</small>
-                        ) : null}
+                    <td className={styles.realtimeSettingsColumn}>
+                      <div className={styles.realtimeSettingsCell}>
+                        <span className={styles.realtimeSettingLine}>
+                          <span className={styles.realtimeSettingLabel}>
+                            {t('monitoring.realtime_reasoning_label')}
+                          </span>
+                          <span
+                            className={`${styles.realtimeSettingValue} ${styles.realtimeReasoningValue}`}
+                          >
+                            {reasoningEffort}
+                          </span>
+                        </span>
+                        <span className={styles.realtimeSettingLine}>
+                          <span className={styles.realtimeSettingLabel}>
+                            {t('monitoring.realtime_service_label')}
+                          </span>
+                          <span
+                            className={`${styles.realtimeSettingValue} ${styles.realtimeServiceValue}`}
+                          >
+                            {effectiveServiceTier}
+                          </span>
+                        </span>
                       </div>
                     </td>
                   ) : null}
                   {isColumnVisible('recent') ? (
-                    <td>
+                    <td className={styles.realtimeCenteredColumn}>
                       <div className={styles.recentStatusCell}>
                         <RecentPattern pattern={row.recentPattern} variant="plain" />
                       </div>
                     </td>
                   ) : null}
-                  <td>
+                  <td className={styles.realtimeCenteredColumn}>
                     <div className={styles.primaryCell}>
                       {requestDiagnosticDetails ? (
                         <RealtimeRequestDiagnosticStatus
@@ -1196,19 +1411,22 @@ export function RealtimeEventsPanel({
                   </td>
                   {isColumnVisible('successRate') ? (
                     <td
-                      className={
+                      className={[
+                        styles.realtimeCenteredColumn,
                         row.successRate >= 0.95
                           ? styles.goodText
                           : row.successRate >= 0.85
                             ? styles.warnText
-                            : styles.badText
-                      }
+                            : styles.badText,
+                      ].join(' ')}
                     >
                       {formatPercent(row.successRate)}
                     </td>
                   ) : null}
                   {isColumnVisible('calls') ? (
-                    <td>{formatCompactNumber(row.requestCount)}</td>
+                    <td className={styles.realtimeCenteredColumn}>
+                      {formatCompactNumber(row.requestCount)}
+                    </td>
                   ) : null}
                   {isColumnVisible('tps') ? (
                     <td className={styles.realtimeTpsColumn}>
@@ -1219,35 +1437,36 @@ export function RealtimeEventsPanel({
                   ) : null}
                   {isColumnVisible('latency') ? (
                     <td className={styles.realtimeLatencyColumn}>
-                    <div className={styles.realtimeMetricCell}>
-                      <span
-                        className={[
-                          styles.realtimeMetricText,
-                          styles.realtimeMetricLeft,
-                          ttftToneClass,
-                        ]
-                          .filter(Boolean)
-                          .join(' ')}
-                      >
-                        {hasTtftMs ? formatRealtimeCompactDuration(row.ttftMs, locale) : '--'}
-                      </span>
-                      <span className={styles.realtimeMetricSeparator}>｜</span>
-                      <span
-                        className={[
-                          styles.realtimeMetricText,
-                          styles.realtimeMetricRight,
-                          latencyToneClass,
-                        ]
-                          .filter(Boolean)
-                          .join(' ')}
-                      >
-                        {formatRealtimeCompactDuration(row.latencyMs, locale)}
-                      </span>
-                    </div>
+                      <div className={styles.realtimeMetricCell}>
+                        <span className={styles.realtimeMetricLine}>
+                          <span className={styles.realtimeMetricLabel}>
+                            {t('monitoring.ttft_short')}
+                          </span>
+                          <span
+                            className={[styles.realtimeMetricText, ttftToneClass]
+                              .filter(Boolean)
+                              .join(' ')}
+                          >
+                            {hasTtftMs ? formatRealtimeCompactDuration(row.ttftMs, locale) : '--'}
+                          </span>
+                        </span>
+                        <span className={styles.realtimeMetricLine}>
+                          <span className={styles.realtimeMetricLabel}>
+                            {t('monitoring.elapsed_short')}
+                          </span>
+                          <span
+                            className={[styles.realtimeMetricText, latencyToneClass]
+                              .filter(Boolean)
+                              .join(' ')}
+                          >
+                            {formatRealtimeCompactDuration(row.latencyMs, locale)}
+                          </span>
+                        </span>
+                      </div>
                     </td>
                   ) : null}
                   {isColumnVisible('time') ? (
-                    <td>
+                    <td className={styles.realtimeTimeColumn}>
                       <div className={styles.realtimeTimeCell}>
                         <span className={styles.realtimeTimeLine}>{timeParts.date}</span>
                         <span className={styles.realtimeTimeLine}>{timeParts.time}</span>
@@ -1256,20 +1475,10 @@ export function RealtimeEventsPanel({
                   ) : null}
                   {isColumnVisible('usage') ? (
                     <td>
-                      <div className={styles.primaryCell}>
-                        <span>{formatRealtimeUsageNumber(row.totalTokens, locale)}</span>
-                        <small>{tokenSummary.primary}</small>
-                        {tokenSummary.cache ? (
-                          <small
-                            className={styles.realtimeCacheTokenSummary}
-                            title={tokenSummary.cacheTitle}
-                            aria-label={tokenSummary.cacheAriaLabel}
-                            tabIndex={0}
-                          >
-                            {tokenSummary.cache}
-                          </small>
-                        ) : null}
-                      </div>
+                      <RealtimeTokenUsage
+                        details={tokenUsage}
+                        tooltipId={`${tooltipIdPrefix}-token-usage-tooltip-${row.id}`}
+                      />
                     </td>
                   ) : null}
                   {isColumnVisible('cost') ? (

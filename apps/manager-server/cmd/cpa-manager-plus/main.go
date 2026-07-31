@@ -96,11 +96,19 @@ func runServer() {
 	}
 	automationSettingsService := serverApp.AppContext().AccountProcessingPolicyService
 	runtimeSettings := automationSettingsService.RuntimeSettings(ctx)
-	rateLimitAutoDisableWorker := worker.NewRateLimitAutoDisableWorker(db, collector.RuntimeConfig{
-		CPAUpstreamURL: cfg.CPAUpstreamURL,
-		ManagementKey:  cfg.ManagementKey,
-	})
-	accountActionWorker := worker.NewAccountActionCandidateWorker(db, runtimeSettings.AccountActionsAutoDisable)
+	rateLimitAutoDisableWorker := worker.NewRateLimitAutoDisableWorkerWithMutationCoordinator(
+		db,
+		serverApp.AppContext().AuthFileMutationCoordinator,
+		collector.RuntimeConfig{
+			CPAUpstreamURL: cfg.CPAUpstreamURL,
+			ManagementKey:  cfg.ManagementKey,
+		},
+	)
+	accountActionWorker := worker.NewAccountActionCandidateWorkerWithMutationCoordinator(
+		db,
+		serverApp.AppContext().AuthFileMutationCoordinator,
+		runtimeSettings.AccountActionsAutoDisable,
+	)
 	charityBaseConfig := worker.CharityModelMonitorConfig{
 		CPAUpstreamURL:  cfg.CPAUpstreamURL,
 		ManagementKey:   cfg.ManagementKey,
@@ -110,6 +118,9 @@ func runServer() {
 	charityModelMonitorWorker := worker.NewCharityModelMonitorWorker(db, charityBaseConfig)
 	accountHistoryRollupWorker := worker.NewAccountHistoryRollupWorker(db)
 	accountHistoryRollupWorker.Start(ctx)
+	usagePricingRollupWorker := worker.NewUsagePricingRollupWorker(db)
+	usagePricingRollupWorker.Start(ctx)
+	serverApp.AppContext().ModelPriceService.SetPricesChangedNotifier(usagePricingRollupWorker.Wake)
 	var usageHourlyAggregateWorker *worker.UsageHourlyAggregateWorker
 	if cfg.DashboardHourlyRollupEnabled {
 		usageHourlyAggregateWorker = worker.NewUsageHourlyAggregateWorker(db)
@@ -117,6 +128,7 @@ func runServer() {
 	}
 	serverApp.AppContext().UsageService.SetEventsInsertedNotifier(func() {
 		accountHistoryRollupWorker.Wake()
+		usagePricingRollupWorker.Wake()
 		if usageHourlyAggregateWorker != nil {
 			usageHourlyAggregateWorker.Wake()
 		}
@@ -134,6 +146,7 @@ func runServer() {
 	manager.SetUsageEventHandler(worker.NewUsageEventFanout(
 		automationRuntime.UsageEventHandler(),
 		accountHistoryRollupWorker,
+		usagePricingRollupWorker,
 		usageHourlyAggregateWorker,
 	))
 
@@ -176,6 +189,7 @@ func runServer() {
 	usageCacheAccountingMigrationWorker := worker.NewUsageCacheAccountingMigrationWorker(db, func() {
 		go runUsageResponseMetadataBackfill(ctx, db)
 		accountHistoryRollupWorker.Wake()
+		usagePricingRollupWorker.Wake()
 		if usageHourlyAggregateWorker != nil {
 			usageHourlyAggregateWorker.Wake()
 		}
