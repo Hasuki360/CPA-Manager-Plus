@@ -981,7 +981,7 @@ const buildRealtimeColumnOptions = (t: TFunction) =>
     },
     {
       key: 'recent',
-      label: shortLabel(t, 'monitoring.recent_status_short', 'monitoring.column_recent_status'),
+      label: shortLabel(t, 'monitoring.recent_status_short', 'monitoring.recent_status'),
     },
     {
       key: 'successRate',
@@ -989,7 +989,7 @@ const buildRealtimeColumnOptions = (t: TFunction) =>
     },
     {
       key: 'calls',
-      label: shortLabel(t, 'monitoring.column_calls_short', 'monitoring.column_calls'),
+      label: shortLabel(t, 'monitoring.total_calls_short', 'monitoring.total_calls', 'Calls'),
     },
     {
       key: 'tps',
@@ -1005,11 +1005,11 @@ const buildRealtimeColumnOptions = (t: TFunction) =>
     },
     {
       key: 'usage',
-      label: shortLabel(t, 'monitoring.column_usage_short', 'monitoring.column_usage'),
+      label: shortLabel(t, 'monitoring.this_call_usage_short', 'monitoring.this_call_usage'),
     },
     {
       key: 'cost',
-      label: shortLabel(t, 'monitoring.column_cost_short', 'monitoring.column_cost'),
+      label: shortLabel(t, 'monitoring.this_call_cost_short', 'monitoring.this_call_cost'),
     },
   ] satisfies Array<{ key: RealtimeVisibleColumnKey; label: string }>;
 
