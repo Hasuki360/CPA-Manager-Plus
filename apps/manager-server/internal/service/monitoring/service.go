@@ -11,6 +11,7 @@ import (
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/pricing"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/usagehourly"
+	monitoringrollup "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/usagemonitoring"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/store"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usage"
 )
@@ -33,8 +34,9 @@ const (
 )
 
 type Service struct {
-	store        *store.Store
-	hourlyReader *usagehourly.Reader
+	store            *store.Store
+	hourlyReader     *usagehourly.Reader
+	monitoringReader *monitoringrollup.Reader
 }
 
 type analyticsQueryGroup struct {
@@ -100,8 +102,9 @@ func New(store *store.Store, hourlyRollupEnabled ...bool) *Service {
 		enabled = hourlyRollupEnabled[0]
 	}
 	return &Service{
-		store:        store,
-		hourlyReader: usagehourly.New(store, enabled, "monitoring-rollup"),
+		store:            store,
+		hourlyReader:     usagehourly.New(store, enabled, "monitoring-rollup"),
+		monitoringReader: monitoringrollup.New(store),
 	}
 }
 
@@ -789,12 +792,13 @@ func (s *Service) analytics(ctx context.Context, req Request) (Response, error) 
 	var channelStats []store.ChannelModelStat
 	var accountStats []store.AccountModelStat
 	var apiKeyStats []store.APIKeyModelStat
+	deriveChannelStatsFromAccounts := req.Include.ChannelShare && req.Include.AccountStats
 	needsModelStats := req.Include.Summary || req.Include.ModelShare || req.Include.ModelStats
 	if needsModelStats {
 		if hourlySnapshotAvailable {
 			modelStats = hourlySnapshot.ModelStats
 		} else {
-			modelStats, err = s.store.ModelStatsWithFilter(ctx, filter, 0)
+			modelStats, err = s.modelStats(ctx, filter)
 			if err != nil {
 				return Response{}, err
 			}
@@ -831,10 +835,10 @@ func (s *Service) analytics(ctx context.Context, req Request) (Response, error) 
 		})
 	}
 
-	if req.Include.ChannelShare {
+	if req.Include.ChannelShare && !deriveChannelStatsFromAccounts {
 		queries.Go(func(queryCtx context.Context) error {
 			var queryErr error
-			channelStats, queryErr = s.store.ChannelModelStatsWithFilter(queryCtx, filter)
+			channelStats, queryErr = s.channelModelStats(queryCtx, filter)
 			return queryErr
 		})
 	}
@@ -851,7 +855,7 @@ func (s *Service) analytics(ctx context.Context, req Request) (Response, error) 
 	if req.Include.AccountStats {
 		queries.Go(func(queryCtx context.Context) error {
 			var queryErr error
-			accountStats, queryErr = s.store.AccountModelStatsWithFilter(queryCtx, filter)
+			accountStats, queryErr = s.accountModelStats(queryCtx, filter)
 			return queryErr
 		})
 	}
@@ -886,7 +890,7 @@ func (s *Service) analytics(ctx context.Context, req Request) (Response, error) 
 	if req.Include.APIKeyStats {
 		queries.Go(func(queryCtx context.Context) error {
 			var queryErr error
-			apiKeyStats, queryErr = s.store.APIKeyModelStatsWithFilter(queryCtx, filter)
+			apiKeyStats, queryErr = s.apiKeyModelStats(queryCtx, filter)
 			return queryErr
 		})
 	}
@@ -905,7 +909,7 @@ func (s *Service) analytics(ctx context.Context, req Request) (Response, error) 
 		if filterOptionsMatchMainScope(filter) {
 			queries.Go(func(queryCtx context.Context) error {
 				var queryErr error
-				filterOptionValues, queryErr = s.store.FilterOptionValuesWithFilter(queryCtx, filterOptionsBaseFilter(filter))
+				filterOptionValues, queryErr = s.filterOptionValues(queryCtx, filterOptionsBaseFilter(filter))
 				filterOptionValuesAvailable = queryErr == nil
 				return queryErr
 			})
@@ -946,7 +950,7 @@ func (s *Service) analytics(ctx context.Context, req Request) (Response, error) 
 		}
 		queries.Go(func(queryCtx context.Context) error {
 			var queryErr error
-			eventsPage, queryErr = s.store.EventsPageWithFilter(queryCtx, filter, beforeMS, beforeID, limit)
+			eventsPage, queryErr = s.eventsPage(queryCtx, filter, beforeMS, beforeID, limit)
 			return queryErr
 		})
 	}
@@ -964,7 +968,7 @@ func (s *Service) analytics(ctx context.Context, req Request) (Response, error) 
 		if hourlySnapshotAvailable {
 			agg = hourlySnapshot.Aggregate
 		} else {
-			agg, err = s.store.AggregateWithFilter(ctx, filter)
+			agg, err = s.aggregate(ctx, filter)
 			if err != nil {
 				return Response{}, err
 			}
@@ -1033,11 +1037,11 @@ func (s *Service) analytics(ctx context.Context, req Request) (Response, error) 
 					prevAgg = prevSnapshot.Aggregate
 					prevModelStats = prevSnapshot.ModelStats
 				} else {
-					prevAgg, err = s.store.AggregateWithFilter(ctx, prevFilter)
+					prevAgg, err = s.aggregate(ctx, prevFilter)
 					if err != nil {
 						return Response{}, err
 					}
-					prevModelStats, err = s.store.ModelStatsWithFilter(ctx, prevFilter, 0)
+					prevModelStats, err = s.modelStats(ctx, prevFilter)
 					if err != nil {
 						return Response{}, err
 					}
@@ -1057,6 +1061,9 @@ func (s *Service) analytics(ctx context.Context, req Request) (Response, error) 
 	}
 	if err := queries.Wait(); err != nil {
 		return Response{}, err
+	}
+	if deriveChannelStatsFromAccounts {
+		channelStats = channelModelStatsFromAccountStats(accountStats)
 	}
 	var timeline []TimelinePoint
 	if req.Include.Timeline || req.Include.AnomalyPoints {
@@ -1165,7 +1172,7 @@ func (s *Service) analytics(ctx context.Context, req Request) (Response, error) 
 		// lightweight count(*).
 		total := summaryTotalCalls
 		if !summaryComputed {
-			total, err = s.store.EventsCountWithFilter(ctx, filter)
+			total, err = s.eventsCount(ctx, filter)
 			if err != nil {
 				return Response{}, err
 			}
@@ -1185,7 +1192,7 @@ func (s *Service) analytics(ctx context.Context, req Request) (Response, error) 
 			if limit > maxDrilldownLimit {
 				limit = maxDrilldownLimit
 			}
-			page, err := s.store.EventsPageWithFilter(ctx, previewFilter, 0, 0, limit)
+			page, err := s.eventsPage(ctx, previewFilter, 0, 0, limit)
 			if err != nil {
 				return Response{}, err
 			}
@@ -1330,9 +1337,13 @@ func (s *Service) HeaderSnapshots(ctx context.Context, req HeaderSnapshotsReques
 	}
 	nowMS := time.Now().UnixMilli()
 	fromMS := nowMS - int64(days)*24*60*60*1000
-	items, err := s.store.LatestHeaderSnapshots(ctx, fromMS, limit)
-	if err != nil {
-		return HeaderSnapshotsResponse{}, err
+	items, available := s.monitoringReader.HeaderSnapshots(ctx, fromMS, limit)
+	if !available {
+		var err error
+		items, err = s.store.LatestHeaderSnapshots(ctx, fromMS, limit)
+		if err != nil {
+			return HeaderSnapshotsResponse{}, err
+		}
 	}
 	return HeaderSnapshotsResponse{
 		GeneratedAtMS: nowMS,
@@ -1401,7 +1412,7 @@ func (s *Service) filterOptions(
 	accountStats := reuse.accountStats
 	if !reuse.accountStatsAvailable {
 		var err error
-		accountStats, err = s.store.AccountModelStatsWithFilter(ctx, optionFilter)
+		accountStats, err = s.accountModelStats(ctx, optionFilter)
 		if err != nil {
 			return nil, err
 		}
@@ -1409,23 +1420,19 @@ func (s *Service) filterOptions(
 	apiKeyStats := reuse.apiKeyStats
 	if !reuse.apiKeyStatsAvailable {
 		var err error
-		apiKeyStats, err = s.store.APIKeyModelStatsWithFilter(ctx, optionFilter)
+		apiKeyStats, err = s.apiKeyModelStats(ctx, optionFilter)
 		if err != nil {
 			return nil, err
 		}
 	}
 	channelStats := reuse.channelStats
 	if !reuse.channelStatsAvailable {
-		var err error
-		channelStats, err = s.store.ChannelModelStatsWithFilter(ctx, optionFilter)
-		if err != nil {
-			return nil, err
-		}
+		channelStats = channelModelStatsFromAccountStats(accountStats)
 	}
 	modelStats := reuse.modelStats
 	if !reuse.modelStatsAvailable {
 		var err error
-		modelStats, err = s.store.ModelStatsWithFilter(ctx, optionFilter, 0)
+		modelStats, err = s.modelStats(ctx, optionFilter)
 		if err != nil {
 			return nil, err
 		}
@@ -1433,7 +1440,7 @@ func (s *Service) filterOptions(
 	optionValues := reuse.optionValues
 	if !reuse.optionValuesAvailable {
 		var err error
-		optionValues, err = s.store.FilterOptionValuesWithFilter(ctx, optionFilter)
+		optionValues, err = s.filterOptionValues(ctx, optionFilter)
 		if err != nil {
 			return nil, err
 		}
@@ -1477,9 +1484,14 @@ func filterOptionsMatchMainScope(filter store.AnalyticsFilter) bool {
 }
 
 func (s *Service) filterSelectors(ctx context.Context, filter store.AnalyticsFilter) (*FilterOptions, error) {
-	values, err := s.store.FilterSelectorValuesWithFilter(ctx, filterOptionsBaseFilter(filter))
-	if err != nil {
-		return nil, err
+	optionFilter := filterOptionsBaseFilter(filter)
+	values, available := s.monitoringReader.FilterSelectors(ctx, optionFilter)
+	if !available {
+		var err error
+		values, err = s.store.FilterSelectorValuesWithFilter(ctx, optionFilter)
+		if err != nil {
+			return nil, err
+		}
 	}
 	accountStats := buildAccountSelectorStats(values)
 	return &FilterOptions{
@@ -1492,6 +1504,175 @@ func (s *Service) filterSelectors(ctx context.Context, filter store.AnalyticsFil
 		AccountCount: len(accountStats),
 		APIKeyCount:  countAPIKeySelectors(values),
 	}, nil
+}
+
+func (s *Service) filterOptionValues(ctx context.Context, filter store.AnalyticsFilter) (store.FilterOptionValues, error) {
+	if values, available := s.monitoringReader.FilterOptions(ctx, filter); available {
+		return values, nil
+	}
+	return s.store.FilterOptionValuesWithFilter(ctx, filter)
+}
+
+func (s *Service) accountModelStats(ctx context.Context, filter store.AnalyticsFilter) ([]store.AccountModelStat, error) {
+	if rows, available := s.monitoringReader.AccountStats(ctx, filter); available {
+		return rows, nil
+	}
+	return s.store.AccountModelStatsWithFilter(ctx, filter)
+}
+
+func (s *Service) apiKeyModelStats(ctx context.Context, filter store.AnalyticsFilter) ([]store.APIKeyModelStat, error) {
+	if rows, available := s.monitoringReader.APIKeyStats(ctx, filter); available {
+		return rows, nil
+	}
+	return s.store.APIKeyModelStatsWithFilter(ctx, filter)
+}
+
+func (s *Service) channelModelStats(ctx context.Context, filter store.AnalyticsFilter) ([]store.ChannelModelStat, error) {
+	if rows, available := s.monitoringReader.AccountStats(ctx, filter); available {
+		return channelModelStatsFromAccountStats(rows), nil
+	}
+	return s.store.ChannelModelStatsWithFilter(ctx, filter)
+}
+
+type channelModelStatKey struct {
+	authIndex        string
+	model            string
+	billingModel     string
+	pricingModel     string
+	contextThreshold int64
+	serviceTier      string
+}
+
+type channelModelStatAccumulator struct {
+	row                          store.ChannelModelStat
+	provider                     string
+	explicitAuthProviderSnapshot string
+	latencySumMS                 int64
+}
+
+func channelModelStatsFromAccountStats(stats []store.AccountModelStat) []store.ChannelModelStat {
+	grouped := make(map[channelModelStatKey]*channelModelStatAccumulator)
+	for _, stat := range stats {
+		key := channelModelStatKey{
+			authIndex:        stat.AuthIndex,
+			model:            stat.Model,
+			billingModel:     stat.BillingModel,
+			pricingModel:     stat.PricingModel,
+			contextThreshold: stat.ContextThresholdTokens,
+			serviceTier:      stat.ServiceTier,
+		}
+		entry := grouped[key]
+		if entry == nil {
+			entry = &channelModelStatAccumulator{
+				row: store.ChannelModelStat{
+					PricingBand:  pricingBandFromAccountStat(stat),
+					AuthIndex:    stat.AuthIndex,
+					Model:        stat.Model,
+					BillingModel: stat.BillingModel,
+					ServiceTier:  stat.ServiceTier,
+				},
+			}
+			grouped[key] = entry
+		}
+		if stat.Source > entry.row.Source {
+			entry.row.Source = stat.Source
+		}
+		if stat.AccountSnapshot > entry.row.AccountSnapshot {
+			entry.row.AccountSnapshot = stat.AccountSnapshot
+		}
+		if stat.AuthLabelSnapshot > entry.row.AuthLabelSnapshot {
+			entry.row.AuthLabelSnapshot = stat.AuthLabelSnapshot
+		}
+		if stat.Provider > entry.provider {
+			entry.provider = stat.Provider
+		}
+		if stat.ExplicitAuthProviderSnapshot > entry.explicitAuthProviderSnapshot {
+			entry.explicitAuthProviderSnapshot = stat.ExplicitAuthProviderSnapshot
+		}
+		entry.row.Calls += stat.Calls
+		entry.row.SuccessCalls += stat.SuccessCalls
+		entry.row.FailureCalls += stat.FailureCalls
+		entry.row.InputTokens += stat.InputTokens
+		entry.row.OutputTokens += stat.OutputTokens
+		entry.row.CachedTokens += stat.CachedTokens
+		entry.row.CacheReadTokens += stat.CacheReadTokens
+		entry.row.CacheCreationTokens += stat.CacheCreationTokens
+		entry.row.LongInputTokens += stat.LongInputTokens
+		entry.row.LongOutputTokens += stat.LongOutputTokens
+		entry.row.LongCachedTokens += stat.LongCachedTokens
+		entry.row.LongCacheReadTokens += stat.LongCacheReadTokens
+		entry.row.LongCacheCreationTokens += stat.LongCacheCreationTokens
+		entry.row.TotalTokens += stat.TotalTokens
+		if stat.LatencySamples > 0 {
+			entry.latencySumMS += stat.LatencySumMS
+			entry.row.LatencySamples += stat.LatencySamples
+		}
+	}
+
+	result := make([]store.ChannelModelStat, 0, len(grouped))
+	for _, entry := range grouped {
+		entry.row.AuthProviderSnapshot = entry.explicitAuthProviderSnapshot
+		if entry.row.AuthProviderSnapshot == "" {
+			entry.row.AuthProviderSnapshot = entry.provider
+		}
+		if entry.row.LatencySamples > 0 {
+			entry.row.AvgLatencyMS.Valid = true
+			entry.row.AvgLatencyMS.Float64 = float64(entry.latencySumMS) / float64(entry.row.LatencySamples)
+		}
+		result = append(result, entry.row)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Calls != result[j].Calls {
+			return result[i].Calls > result[j].Calls
+		}
+		left := result[i]
+		right := result[j]
+		return strings.Join([]string{left.AuthIndex, left.Model, left.BillingModel, left.PricingModel, left.ServiceTier}, "\x00") <
+			strings.Join([]string{right.AuthIndex, right.Model, right.BillingModel, right.PricingModel, right.ServiceTier}, "\x00")
+	})
+	return result
+}
+
+func pricingBandFromAccountStat(stat store.AccountModelStat) usage.PricingBand {
+	return usage.PricingBand{
+		PricingModel:           stat.PricingModel,
+		ContextThresholdTokens: stat.ContextThresholdTokens,
+	}
+}
+
+func (s *Service) aggregate(ctx context.Context, filter store.AnalyticsFilter) (store.Aggregate, error) {
+	if aggregate, available := s.monitoringReader.Aggregate(ctx, filter); available {
+		return aggregate, nil
+	}
+	return s.store.AggregateWithFilter(ctx, filter)
+}
+
+func (s *Service) modelStats(ctx context.Context, filter store.AnalyticsFilter) ([]store.ModelStat, error) {
+	if rows, available := s.monitoringReader.ModelStats(ctx, filter); available {
+		return rows, nil
+	}
+	return s.store.ModelStatsWithFilter(ctx, filter, 0)
+}
+
+func (s *Service) eventsCount(ctx context.Context, filter store.AnalyticsFilter) (int64, error) {
+	if monitoringrollup.SupportsStatsFilter(filter) && monitoringrollup.PrefersEventProjection(filter) {
+		aggregate, err := s.aggregate(ctx, filter)
+		if err != nil {
+			return 0, err
+		}
+		return aggregate.TotalCalls, nil
+	}
+	if total, available := s.monitoringReader.EventsCount(ctx, filter); available {
+		return total, nil
+	}
+	return s.store.EventsCountWithFilter(ctx, filter)
+}
+
+func (s *Service) eventsPage(ctx context.Context, filter store.AnalyticsFilter, beforeMS, beforeID int64, limit int) (store.EventsPage, error) {
+	if page, available := s.monitoringReader.EventsPage(ctx, filter, beforeMS, beforeID, limit); available {
+		return page, nil
+	}
+	return s.store.EventsPageWithFilter(ctx, filter, beforeMS, beforeID, limit)
 }
 
 func countAPIKeySelectors(values store.FilterSelectorValues) int {

@@ -1589,6 +1589,67 @@ func TestAnalyticsUnfilteredFullResponseKeepsFilterOptionStatsInSync(t *testing.
 	}
 }
 
+func TestChannelModelStatsFromAccountStatsMatchesRawAggregation(t *testing.T) {
+	db := newMonitoringTestStore(t)
+	ctx := context.Background()
+	fromMS := int64(1_778_275_000_000)
+	toMS := fromMS + 60*60*1000
+	if err := db.SaveModelPrices(ctx, map[string]store.ModelPrice{
+		"gpt-a": {Prompt: 1},
+		"gpt-b": {Prompt: 2},
+	}); err != nil {
+		t.Fatalf("save model prices: %v", err)
+	}
+
+	firstLatencyMS := int64(1)
+	secondLatencyMS := int64(2)
+	thirdLatencyMS := int64(10)
+	first := monitoringEvent("channel-account-a", fromMS+1_000, "gpt-a", "auth-shared", "source-a", false, 10, 5, 0, 0, 15, &firstLatencyMS)
+	first.AccountSnapshot = "alice@example.com"
+	first.AuthLabelSnapshot = "Alice"
+	first.Provider = "z-provider"
+	first.AuthProviderSnapshot = ""
+	second := monitoringEvent("channel-account-b", fromMS+2_000, "gpt-a", "auth-shared", "source-b", true, 20, 10, 0, 0, 30, &secondLatencyMS)
+	second.AccountSnapshot = "bob@example.com"
+	second.AuthLabelSnapshot = "Bob"
+	second.Provider = "z-provider"
+	second.AuthProviderSnapshot = "a-snapshot"
+	third := monitoringEvent("channel-model-b", fromMS+3_000, "gpt-b", "auth-shared", "source-c", false, 30, 15, 0, 0, 45, &thirdLatencyMS)
+	third.AccountSnapshot = "carol@example.com"
+	third.AuthLabelSnapshot = "Carol"
+	third.Provider = "codex"
+	third.AuthProviderSnapshot = "codex"
+	if _, err := db.InsertEvents(ctx, []usage.Event{first, second, third}); err != nil {
+		t.Fatalf("insert events: %v", err)
+	}
+
+	filter := store.AnalyticsFilter{FromMS: fromMS, ToMS: toMS, IncludeFailed: true}
+	accountStats, err := db.AccountModelStatsWithFilter(ctx, filter)
+	if err != nil {
+		t.Fatalf("account stats: %v", err)
+	}
+	var channelALatencySumMS int64
+	for _, stat := range accountStats {
+		if stat.Model == "gpt-a" {
+			channelALatencySumMS += stat.LatencySumMS
+		}
+	}
+	if channelALatencySumMS != firstLatencyMS+secondLatencyMS {
+		t.Fatalf("gpt-a latency sum = %d, want %d", channelALatencySumMS, firstLatencyMS+secondLatencyMS)
+	}
+	want, err := db.ChannelModelStatsWithFilter(ctx, filter)
+	if err != nil {
+		t.Fatalf("channel stats: %v", err)
+	}
+	got := channelModelStatsFromAccountStats(accountStats)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("derived channel stats mismatch\nderived=%#v\nraw=%#v", got, want)
+	}
+	if len(got) != 2 || got[0].AuthProviderSnapshot != "a-snapshot" {
+		t.Fatalf("explicit provider snapshot should win channel metadata: %#v", got)
+	}
+}
+
 func TestAnalyticsFilterOptionsIgnoreActiveScopeFilters(t *testing.T) {
 	db := newMonitoringTestStore(t)
 	ctx := context.Background()

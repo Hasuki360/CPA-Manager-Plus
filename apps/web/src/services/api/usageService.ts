@@ -93,12 +93,33 @@ export interface UsageServiceCollectorStatus {
   lastError?: string;
 }
 
+export interface UsageServiceCheckpointStatus {
+  mode?: string;
+  busy?: number;
+  logFrames?: number;
+  checkpointedFrames?: number;
+  executedAtMs?: number;
+  durationMs?: number;
+  lastTruncateAttemptAtMs?: number;
+  error?: string;
+}
+
+export interface UsageServiceDatabaseStatus {
+  databaseBytes?: number;
+  walBytes?: number;
+  shmBytes?: number;
+  totalBytes?: number;
+  journalSizeLimitBytes?: number;
+  checkpoint?: UsageServiceCheckpointStatus;
+}
+
 export interface UsageServiceStatus {
   service?: string;
   dbPath?: string;
   events?: number;
   deadLetters?: number;
   collector?: UsageServiceCollectorStatus;
+  database?: UsageServiceDatabaseStatus;
 }
 
 export interface AccountPolicyCapability {

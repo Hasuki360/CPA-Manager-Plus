@@ -3878,6 +3878,22 @@ export const getDemoUsageServiceStatus = (): UsageServiceStatus => ({
     totalSkipped: 124,
     deadLetters: 3,
   },
+  database: {
+    databaseBytes: 2_684_354_560,
+    walBytes: 67_108_864,
+    shmBytes: 32_768,
+    totalBytes: 2_751_496_192,
+    journalSizeLimitBytes: 268_435_456,
+    checkpoint: {
+      mode: 'passive',
+      busy: 0,
+      logFrames: 16_384,
+      checkpointedFrames: 16_384,
+      executedAtMs: now() - 20_000,
+      durationMs: 112,
+      lastTruncateAttemptAtMs: now() - 42 * minute,
+    },
+  },
 });
 
 export const getDemoAccountProcessingPolicy = (): AccountProcessingPolicy => ({

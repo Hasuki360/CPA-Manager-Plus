@@ -100,12 +100,13 @@ import {
 } from '@/features/monitoring/model/monitoringCenterPageModel';
 import { resolveMonitoringDimensionCounts } from '@/features/monitoring/model/monitoringAnalyticsModel';
 import { useUsageData } from '@/features/monitoring/hooks/useUsageData';
+import { useHeaderSnapshotsLoader } from '@/features/monitoring/hooks/useHeaderSnapshotsLoader';
 import {
   isUsageImportCancelledError,
   isUsageImportPausedError,
   type UsageImportProgress,
 } from '@/features/monitoring/services/usageImportSession';
-import { monitoringAnalyticsApi, type UsageHeaderSnapshot } from '@/services/api/usageService';
+import type { UsageHeaderSnapshot } from '@/services/api/usageService';
 import {
   readMonitoringCenterUiState,
   writeMonitoringCenterUiState,
@@ -412,22 +413,11 @@ export function MonitoringCenterPage() {
     activeDataTab,
   });
 
-  const loadHeaderSnapshots = useCallback(async () => {
-    if (!requestMonitoringAvailability.serviceBase) {
-      setHeaderSnapshots([]);
-      return;
-    }
-    try {
-      const response = await monitoringAnalyticsApi.getHeaderSnapshots(
-        requestMonitoringAvailability.serviceBase,
-        managementKey,
-        { days: 30, limit: 1000 }
-      );
-      setHeaderSnapshots(response.items ?? []);
-    } catch {
-      setHeaderSnapshots((current) => current);
-    }
-  }, [managementKey, requestMonitoringAvailability.serviceBase]);
+  const loadHeaderSnapshots = useHeaderSnapshotsLoader({
+    serviceBase: requestMonitoringAvailability.serviceBase,
+    managementKey,
+    onItems: setHeaderSnapshots,
+  });
 
   const refreshAll = useCallback(async () => {
     await Promise.all([loadApiKeyAliases(), refreshMeta(false), loadHeaderSnapshots()]);

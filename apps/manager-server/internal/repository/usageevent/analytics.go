@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/usageprojection"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usage"
 )
 
@@ -57,32 +58,7 @@ type AnalyticsFilter struct {
 	HeaderTraceIDs   []string
 }
 
-var analyticsSearchTextColumns = []string{
-	"request_id",
-	"event_hash",
-	"model",
-	"resolved_model",
-	"endpoint",
-	"method",
-	"path",
-	"source",
-	"source_hash",
-	"api_key_hash",
-	"auth_index",
-	"account_snapshot",
-	"auth_label_snapshot",
-	"auth_file_snapshot",
-	"auth_provider_snapshot",
-	"auth_project_id_snapshot",
-	"reasoning_effort",
-	"service_tier",
-	"executor_type",
-	"fail_summary",
-	"header_quota_plan_type",
-	"header_error_kind",
-	"header_error_code",
-	"header_trace_id",
-}
+var analyticsSearchTextColumns = usageprojection.SearchColumns
 
 type LatencyPercentiles struct {
 	BucketMS     int64
@@ -221,27 +197,30 @@ type FailureSourceStat struct {
 type AccountModelStat struct {
 	usage.LongContextTokens
 	usage.PricingBand
-	AccountSnapshot      string
-	AuthLabelSnapshot    string
-	AuthProviderSnapshot string
-	AuthIndex            string
-	Source               string
-	SourceHash           string
-	Model                string
-	BillingModel         string
-	ServiceTier          string
-	Calls                int64
-	SuccessCalls         int64
-	FailureCalls         int64
-	InputTokens          int64
-	OutputTokens         int64
-	CachedTokens         int64
-	CacheReadTokens      int64
-	CacheCreationTokens  int64
-	TotalTokens          int64
-	LastSeenMS           int64
-	AvgLatencyMS         sql.NullFloat64
-	LatencySamples       int64
+	AccountSnapshot              string
+	AuthLabelSnapshot            string
+	AuthProviderSnapshot         string
+	Provider                     string
+	ExplicitAuthProviderSnapshot string
+	AuthIndex                    string
+	Source                       string
+	SourceHash                   string
+	Model                        string
+	BillingModel                 string
+	ServiceTier                  string
+	Calls                        int64
+	SuccessCalls                 int64
+	FailureCalls                 int64
+	InputTokens                  int64
+	OutputTokens                 int64
+	CachedTokens                 int64
+	CacheReadTokens              int64
+	CacheCreationTokens          int64
+	TotalTokens                  int64
+	LastSeenMS                   int64
+	AvgLatencyMS                 sql.NullFloat64
+	LatencySumMS                 int64
+	LatencySamples               int64
 }
 
 type CredentialModelStat struct {
@@ -1479,6 +1458,8 @@ select
 	coalesce(account_snapshot, ''),
 	coalesce(auth_label_snapshot, ''),
 	coalesce(nullif(auth_provider_snapshot, ''), provider, ''),
+	coalesce(max(provider), ''),
+	coalesce(max(auth_provider_snapshot), ''),
 	coalesce(auth_index, ''),
 	coalesce(max(source), ''),
 	coalesce(source_hash, ''),
@@ -1502,6 +1483,7 @@ select
 	coalesce(sum(`+longCacheCreationExpr+`), 0),
 	coalesce(sum(total_tokens), 0),
 	max(timestamp_ms),
+	coalesce(sum(case when latency_ms is not null and latency_ms != 0 then latency_ms else 0 end), 0),
 	avg(nullif(latency_ms, 0)),
 	count(nullif(latency_ms, 0))
 from banded_usage_events `+where+`
@@ -1519,6 +1501,8 @@ order by max(timestamp_ms) desc, count(*) desc`, args...)
 			&stat.AccountSnapshot,
 			&stat.AuthLabelSnapshot,
 			&stat.AuthProviderSnapshot,
+			&stat.Provider,
+			&stat.ExplicitAuthProviderSnapshot,
 			&stat.AuthIndex,
 			&stat.Source,
 			&stat.SourceHash,
@@ -1542,6 +1526,7 @@ order by max(timestamp_ms) desc, count(*) desc`, args...)
 			&stat.LongCacheCreationTokens,
 			&stat.TotalTokens,
 			&stat.LastSeenMS,
+			&stat.LatencySumMS,
 			&stat.AvgLatencyMS,
 			&stat.LatencySamples,
 		); err != nil {

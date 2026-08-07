@@ -19,6 +19,7 @@ import (
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/command/adminreset"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/config"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/httpapi"
+	sqliterepo "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/sqlite"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/security"
 	bootstrapservice "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/bootstrap"
 	collectorservice "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/collector"
@@ -84,8 +85,20 @@ func runServer() {
 	collectorWorker := worker.NewCollectorWorker(cfg, db, collectorService)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	walMaintenance, err := sqliterepo.NewWALMaintenance(cfg.DBPath)
+	if err != nil {
+		log.Printf("configure SQLite WAL maintenance: %v", err)
+	} else {
+		walMaintenance.Start(ctx)
+		defer func() {
+			if err := walMaintenance.Close(); err != nil {
+				log.Printf("close SQLite WAL maintenance: %v", err)
+			}
+		}()
+	}
 
 	serverApp := httpapi.New(cfg, db, manager)
+	serverApp.AppContext().DatabaseMaintenance = walMaintenance
 	recoveryCtx, cancelRecovery := context.WithTimeout(context.Background(), 10*time.Second)
 	if err := serverApp.AppContext().CodexInspectionService.Recover(recoveryCtx); err != nil {
 		log.Printf("recover codex inspection runs: %v", err)
@@ -118,9 +131,9 @@ func runServer() {
 	charityModelMonitorWorker := worker.NewCharityModelMonitorWorker(db, charityBaseConfig)
 	accountHistoryRollupWorker := worker.NewAccountHistoryRollupWorker(db)
 	accountHistoryRollupWorker.Start(ctx)
-	usagePricingRollupWorker := worker.NewUsagePricingRollupWorker(db)
-	usagePricingRollupWorker.Start(ctx)
-	serverApp.AppContext().ModelPriceService.SetPricesChangedNotifier(usagePricingRollupWorker.Wake)
+	usageDerivedRollupWorker := worker.NewUsagePricingRollupWorker(db)
+	usageDerivedRollupWorker.Start(ctx)
+	serverApp.AppContext().ModelPriceService.SetPricesChangedNotifier(usageDerivedRollupWorker.Wake)
 	var usageHourlyAggregateWorker *worker.UsageHourlyAggregateWorker
 	if cfg.DashboardHourlyRollupEnabled {
 		usageHourlyAggregateWorker = worker.NewUsageHourlyAggregateWorker(db)
@@ -128,7 +141,7 @@ func runServer() {
 	}
 	serverApp.AppContext().UsageService.SetEventsInsertedNotifier(func() {
 		accountHistoryRollupWorker.Wake()
-		usagePricingRollupWorker.Wake()
+		usageDerivedRollupWorker.Wake()
 		if usageHourlyAggregateWorker != nil {
 			usageHourlyAggregateWorker.Wake()
 		}
@@ -146,7 +159,7 @@ func runServer() {
 	manager.SetUsageEventHandler(worker.NewUsageEventFanout(
 		automationRuntime.UsageEventHandler(),
 		accountHistoryRollupWorker,
-		usagePricingRollupWorker,
+		usageDerivedRollupWorker,
 		usageHourlyAggregateWorker,
 	))
 
@@ -187,12 +200,12 @@ func runServer() {
 	}()
 
 	usageCacheAccountingMigrationWorker := worker.NewUsageCacheAccountingMigrationWorker(db, func() {
-		go runUsageResponseMetadataBackfill(ctx, db)
 		accountHistoryRollupWorker.Wake()
-		usagePricingRollupWorker.Wake()
+		usageDerivedRollupWorker.Wake()
 		if usageHourlyAggregateWorker != nil {
 			usageHourlyAggregateWorker.Wake()
 		}
+		go runUsageResponseMetadataBackfill(ctx, db)
 	})
 	usageCacheAccountingMigrationWorker.Start(ctx)
 

@@ -8,6 +8,7 @@ import (
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/collector"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/config"
+	sqliterepo "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/sqlite"
 	accountactionsvc "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/accountaction"
 	adminauthsvc "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/adminauth"
 	apikeyaliassvc "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/apikeyalias"
@@ -29,6 +30,10 @@ import (
 
 type AutomationRuntimeService interface {
 	Reload(ctx context.Context) error
+}
+
+type DatabaseMaintenanceStatusProvider interface {
+	Snapshot() sqliterepo.WALMaintenanceSnapshot
 }
 
 type Context struct {
@@ -56,6 +61,7 @@ type Context struct {
 	ProxyService                   *proxysvc.Service
 	PanelService                   *panelsvc.Service
 	AutomationRuntimeService       AutomationRuntimeService
+	DatabaseMaintenance            DatabaseMaintenanceStatusProvider
 }
 
 func FromExisting(

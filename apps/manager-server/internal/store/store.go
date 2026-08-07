@@ -20,6 +20,7 @@ import (
 	sqliterepo "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/sqlite"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/usageaggregate"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/usageevent"
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/usagemonitoring"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/usagepricing"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/usagerollup"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/security"
@@ -100,6 +101,8 @@ type UsagePricingCatchUpResult = usagepricing.CatchUpResult
 type UsagePricingHourlyFilter = usagepricing.HourlyFilter
 type UsagePricingHourlyRow = usagepricing.HourlyRow
 type UsagePricingAccountRow = usagepricing.AccountRow
+type UsageMonitoringState = usagemonitoring.State
+type UsageMonitoringCatchUpResult = usagemonitoring.CatchUpResult
 
 type UsageHourlyPricingSnapshot struct {
 	AggregateRows      []UsageHourlyAggregateRow
@@ -133,6 +136,7 @@ type Store struct {
 	QuotaCooldowns   quotacooldown.Repository
 	UsageAggregates  usageaggregate.Repository
 	UsagePricing     usagepricing.Repository
+	UsageMonitoring  usagemonitoring.Repository
 	UsageRollups     usagerollup.Repository
 }
 
@@ -158,6 +162,7 @@ func New(db *sql.DB, protector ...*security.Protector) *Store {
 		QuotaCooldowns:   quotacooldown.New(db),
 		UsageAggregates:  usageaggregate.New(db),
 		UsagePricing:     usagepricing.New(db),
+		UsageMonitoring:  usagemonitoring.New(db),
 		UsageRollups:     usagerollup.New(db),
 	}
 }
@@ -467,6 +472,76 @@ func (s *Store) CatchUpUsagePricing(ctx context.Context, limit int, nowMS int64)
 
 func (s *Store) RecordUsagePricingFailure(ctx context.Context, rollupErr error, nowMS int64) error {
 	return s.UsagePricing.RecordFailure(ctx, rollupErr, nowMS)
+}
+
+func (s *Store) CatchUpUsageMonitoringStats(ctx context.Context, limit int, nowMS int64) (UsageMonitoringCatchUpResult, error) {
+	ready, err := s.UsageCacheAccountingMigrationReady(ctx)
+	if err != nil {
+		return UsageMonitoringCatchUpResult{}, err
+	}
+	if !ready {
+		return UsageMonitoringCatchUpResult{Pending: true}, nil
+	}
+	return s.UsageMonitoring.CatchUpStats(ctx, limit, nowMS)
+}
+
+func (s *Store) CatchUpUsageMonitoringProjection(ctx context.Context, limit int, nowMS int64) (UsageMonitoringCatchUpResult, error) {
+	ready, err := s.UsageCacheAccountingMigrationReady(ctx)
+	if err != nil {
+		return UsageMonitoringCatchUpResult{}, err
+	}
+	if !ready {
+		return UsageMonitoringCatchUpResult{Pending: true}, nil
+	}
+	return s.UsageMonitoring.CatchUpProjection(ctx, limit, nowMS)
+}
+
+func (s *Store) CatchUpUsageMonitoringMetadata(ctx context.Context, limit int, nowMS int64) (UsageMonitoringCatchUpResult, error) {
+	return s.UsageMonitoring.CatchUpMetadata(ctx, limit, nowMS)
+}
+
+func (s *Store) RecordUsageMonitoringFailure(ctx context.Context, rollupName string, rollupErr error, nowMS int64) error {
+	return s.UsageMonitoring.RecordFailure(ctx, rollupName, rollupErr, nowMS)
+}
+
+func (s *Store) UsageMonitoringState(ctx context.Context, rollupName string) (UsageMonitoringState, error) {
+	return s.UsageMonitoring.State(ctx, rollupName)
+}
+
+func (s *Store) UsageMonitoringAggregate(ctx context.Context, filter AnalyticsFilter) (Aggregate, UsageMonitoringState, bool, error) {
+	return s.UsageMonitoring.LoadAggregate(ctx, filter)
+}
+
+func (s *Store) UsageMonitoringModelStats(ctx context.Context, filter AnalyticsFilter) ([]ModelStat, UsageMonitoringState, bool, error) {
+	return s.UsageMonitoring.LoadModelStats(ctx, filter)
+}
+
+func (s *Store) UsageMonitoringAccountStats(ctx context.Context, filter AnalyticsFilter) ([]AccountModelStat, UsageMonitoringState, bool, error) {
+	return s.UsageMonitoring.LoadAccountStats(ctx, filter)
+}
+
+func (s *Store) UsageMonitoringAPIKeyStats(ctx context.Context, filter AnalyticsFilter) ([]APIKeyModelStat, UsageMonitoringState, bool, error) {
+	return s.UsageMonitoring.LoadAPIKeyStats(ctx, filter)
+}
+
+func (s *Store) UsageMonitoringFilterOptions(ctx context.Context, filter AnalyticsFilter) (FilterOptionValues, UsageMonitoringState, bool, error) {
+	return s.UsageMonitoring.LoadFilterOptions(ctx, filter)
+}
+
+func (s *Store) UsageMonitoringFilterSelectors(ctx context.Context, filter AnalyticsFilter) (FilterSelectorValues, UsageMonitoringState, bool, error) {
+	return s.UsageMonitoring.LoadFilterSelectors(ctx, filter)
+}
+
+func (s *Store) UsageMonitoringEventsCount(ctx context.Context, filter AnalyticsFilter) (int64, UsageMonitoringState, bool, error) {
+	return s.UsageMonitoring.LoadEventsCount(ctx, filter)
+}
+
+func (s *Store) UsageMonitoringEventsPage(ctx context.Context, filter AnalyticsFilter, beforeMS, beforeID int64, limit int) (EventsPage, UsageMonitoringState, bool, error) {
+	return s.UsageMonitoring.LoadEventsPage(ctx, filter, beforeMS, beforeID, limit)
+}
+
+func (s *Store) UsageMonitoringHeaderSnapshots(ctx context.Context, sinceMS int64, limit int) ([]HeaderSnapshot, UsageMonitoringState, bool, error) {
+	return s.UsageMonitoring.LoadHeaderSnapshots(ctx, sinceMS, limit)
 }
 
 func (s *Store) UsagePricingState(ctx context.Context) (UsagePricingState, error) {

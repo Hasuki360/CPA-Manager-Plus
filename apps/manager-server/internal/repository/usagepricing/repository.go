@@ -172,7 +172,7 @@ func (r *repository) CatchUp(ctx context.Context, limit int, nowMS int64) (Catch
 	if state.SchemaVersion != SchemaVersion {
 		return CatchUpResult{}, fmt.Errorf("%w: got %d, want %d", ErrUnsupportedSchema, state.SchemaVersion, SchemaVersion)
 	}
-	revision, err := structureRevision(ctx, tx)
+	revision, err := StructureRevision(ctx, tx)
 	if err != nil {
 		return CatchUpResult{}, err
 	}
@@ -365,11 +365,11 @@ func stateQuery(ctx context.Context, db stateQuerier) (State, error) {
 	return state, nil
 }
 
-type rowQuerier interface {
+type RowQuerier interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }
 
-func structureRevision(ctx context.Context, db rowQuerier) (string, error) {
+func StructureRevision(ctx context.Context, db RowQuerier) (string, error) {
 	rows, err := db.QueryContext(ctx, `select p.model, t.threshold_tokens
 		from model_prices p
 		left join model_price_context_tiers t on t.model = p.model
@@ -661,7 +661,7 @@ func (r *repository) LoadHourlyRowsTx(ctx context.Context, tx *sql.Tx, filter Ho
 	if state.SchemaVersion != SchemaVersion {
 		return nil, state, false, nil
 	}
-	revision, err := structureRevision(ctx, tx)
+	revision, err := StructureRevision(ctx, tx)
 	if err != nil {
 		return nil, State{}, false, err
 	}
@@ -937,7 +937,7 @@ func (r *repository) LoadAccountRowsTx(ctx context.Context, tx *sql.Tx, accountK
 	if state.SchemaVersion != SchemaVersion {
 		return nil, state, false, nil
 	}
-	revision, err := structureRevision(ctx, tx)
+	revision, err := StructureRevision(ctx, tx)
 	if err != nil {
 		return nil, State{}, false, err
 	}
