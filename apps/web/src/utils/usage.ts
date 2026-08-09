@@ -1481,12 +1481,15 @@ export function formatCompactNumber(value: number, locale?: string): string {
     ];
     const unit = zhUnits.find((item) => abs >= item.threshold);
     if (unit) {
-      const formatted = (num / unit.threshold).toFixed(1);
       const nextUnit = zhUnits[zhUnits.indexOf(unit) - 1];
-      if (nextUnit && Math.abs(Number(formatted)) >= 1000) {
-        return `${(num / nextUnit.threshold).toFixed(1)}${nextUnit.suffix}`;
+      if (nextUnit && abs >= nextUnit.threshold) {
+        const formatted = (num / nextUnit.threshold).toFixed(1);
+        const clean = formatted.endsWith('.0') ? formatted.slice(0, -2) : formatted;
+        return `${clean}${nextUnit.suffix}`;
       }
-      return `${formatted}${unit.suffix}`;
+      const formatted = (num / unit.threshold).toFixed(1);
+      const clean = formatted.endsWith('.0') ? formatted.slice(0, -2) : formatted;
+      return `${clean}${unit.suffix}`;
     }
 
     return abs >= 1 ? num.toFixed(0) : num.toFixed(2);
