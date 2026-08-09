@@ -1461,12 +1461,37 @@ export function clearModelPrices(): void {
   }
 }
 
-export function formatCompactNumber(value: number): string {
+export function formatCompactNumber(value: number, locale?: string): string {
   const num = Number(value);
   if (!Number.isFinite(num)) return '0';
 
   const abs = Math.abs(num);
   if (abs === 0) return '0';
+
+  const resolvedLocale =
+    locale?.trim() || i18n.resolvedLanguage || i18n.language || 'en';
+  const isZh = resolvedLocale.toLowerCase().startsWith('zh');
+
+  if (isZh) {
+    const zhUnits = [
+      { threshold: 1_000_000_000_000, suffix: '万亿' },
+      { threshold: 100_000_000, suffix: '亿' },
+      { threshold: 10_000, suffix: '万' },
+      { threshold: 1_000, suffix: '千' },
+    ];
+    const unit = zhUnits.find((item) => abs >= item.threshold);
+    if (unit) {
+      const formatted = (num / unit.threshold).toFixed(1);
+      const nextUnit = zhUnits[zhUnits.indexOf(unit) - 1];
+      if (nextUnit && Math.abs(Number(formatted)) >= 1000) {
+        return `${(num / nextUnit.threshold).toFixed(1)}${nextUnit.suffix}`;
+      }
+      return `${formatted}${unit.suffix}`;
+    }
+
+    return abs >= 1 ? num.toFixed(0) : num.toFixed(2);
+  }
+
   const units = [
     { threshold: 1_000_000_000_000_000, suffix: 'P' },
     { threshold: 1_000_000_000_000, suffix: 'T' },

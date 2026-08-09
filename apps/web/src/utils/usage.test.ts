@@ -24,14 +24,24 @@ afterEach(() => {
 });
 
 describe('formatCompactNumber', () => {
-  it('keeps large values compact as data grows beyond millions', () => {
-    expect(formatCompactNumber(999)).toBe('999');
-    expect(formatCompactNumber(1_200)).toBe('1.2K');
-    expect(formatCompactNumber(999_950)).toBe('1.0M');
-    expect(formatCompactNumber(2_795_200_000)).toBe('2.8B');
-    expect(formatCompactNumber(1_200_000_000_000)).toBe('1.2T');
-    expect(formatCompactNumber(-2_500_000_000_000_000)).toBe('-2.5P');
-    expect(formatCompactNumber(Number.POSITIVE_INFINITY)).toBe('0');
+  it('keeps large values compact as data grows beyond millions (en)', () => {
+    expect(formatCompactNumber(999, 'en')).toBe('999');
+    expect(formatCompactNumber(1_200, 'en')).toBe('1.2K');
+    expect(formatCompactNumber(999_950, 'en')).toBe('1.0M');
+    expect(formatCompactNumber(2_795_200_000, 'en')).toBe('2.8B');
+    expect(formatCompactNumber(1_200_000_000_000, 'en')).toBe('1.2T');
+    expect(formatCompactNumber(-2_500_000_000_000_000, 'en')).toBe('-2.5P');
+    expect(formatCompactNumber(Number.POSITIVE_INFINITY, 'en')).toBe('0');
+  });
+
+  it('uses Chinese units (千/万/亿/万亿) for zh locales', () => {
+    expect(formatCompactNumber(999, 'zh-CN')).toBe('999');
+    expect(formatCompactNumber(1_200, 'zh-CN')).toBe('1.2千');
+    expect(formatCompactNumber(2_100, 'zh-CN')).toBe('2.1千');
+    expect(formatCompactNumber(21_200, 'zh-CN')).toBe('2.1万');
+    expect(formatCompactNumber(999_950, 'zh-CN')).toBe('100.0万');
+    expect(formatCompactNumber(2_795_200_000, 'zh-CN')).toBe('28.0亿');
+    expect(formatCompactNumber(1_200_000_000_000, 'zh-CN')).toBe('1.2万亿');
   });
 });
 

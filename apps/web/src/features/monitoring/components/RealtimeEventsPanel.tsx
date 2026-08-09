@@ -769,13 +769,7 @@ function RealtimeRequestDiagnosticStatus({
 
 const formatRealtimeUsageNumber = (value: number, locale: string) => {
   if (value <= 0) return '0';
-  if (value >= 100_000_000) {
-    return `${(value / 100_000_000).toLocaleString(locale, { maximumFractionDigits: 1 })}${locale.startsWith('zh') ? '亿' : 'M'}`;
-  }
-  if (value >= 10_000) {
-    return `${(value / 10_000).toLocaleString(locale, { maximumFractionDigits: 1 })}${locale.startsWith('zh') ? '万' : 'k'}`;
-  }
-  return value.toLocaleString(locale);
+  return formatCompactNumber(value, locale);
 };
 
 type RealtimeTokenUsageDetails = {
@@ -788,21 +782,21 @@ type RealtimeTokenUsageDetails = {
 
 const buildRealtimeTokenUsageDetails = (row: MonitoringEventRow, t: TFunction, locale: string = 'en') => {
   const fields = [
-    { label: t('monitoring.realtime_usage_total_label'), value: formatCompactNumber(row.totalTokens) },
-    { label: t('monitoring.realtime_usage_input_label'), value: formatCompactNumber(row.inputTokens) },
-    { label: t('monitoring.realtime_usage_output_label'), value: formatCompactNumber(row.outputTokens) },
+    { label: t('monitoring.realtime_usage_total_label'), value: formatCompactNumber(row.totalTokens, locale) },
+    { label: t('monitoring.realtime_usage_input_label'), value: formatCompactNumber(row.inputTokens, locale) },
+    { label: t('monitoring.realtime_usage_output_label'), value: formatCompactNumber(row.outputTokens, locale) },
     {
       label: t('monitoring.realtime_usage_reasoning_label'),
-      value: formatCompactNumber(row.reasoningTokens),
+      value: formatCompactNumber(row.reasoningTokens, locale),
     },
-    { label: t('monitoring.realtime_usage_cached_label'), value: formatCompactNumber(row.cachedTokens) },
+    { label: t('monitoring.realtime_usage_cached_label'), value: formatCompactNumber(row.cachedTokens, locale) },
     {
       label: t('monitoring.realtime_usage_cache_read_label'),
-      value: formatCompactNumber(row.cacheReadTokens),
+      value: formatCompactNumber(row.cacheReadTokens, locale),
     },
     {
       label: t('monitoring.realtime_usage_cache_creation_label'),
-      value: formatCompactNumber(row.cacheCreationTokens),
+      value: formatCompactNumber(row.cacheCreationTokens, locale),
     },
   ];
 
