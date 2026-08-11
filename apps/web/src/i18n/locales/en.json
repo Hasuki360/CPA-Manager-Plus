@@ -2502,6 +2502,7 @@
     "state_inactive": "Inactive",
     "result_failed": "Failed",
     "result_success": "Success",
+    "result_cache_success": "Cache Hit",
     "resolved_model_label": "resolved: {{model}}",
     "no_failures": "No failed calls in the selected range.",
     "no_data": "No call data is available in the current filter scope.",

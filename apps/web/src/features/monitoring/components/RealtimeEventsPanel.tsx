@@ -1007,6 +1007,21 @@ const buildRealtimeColumnOptions = (t: TFunction) =>
     },
   ] satisfies Array<{ key: RealtimeVisibleColumnKey; label: string }>;
 
+const formatCacheHitPercent = (hitTokens: number, inputTokens: number): string => {
+  if (inputTokens <= 0 || hitTokens <= 0) return '0%';
+  const rawPct = (hitTokens / inputTokens) * 100;
+  const truncated = Math.floor(rawPct * 100) / 100;
+  return `${truncated.toFixed(2)}%`;
+};
+
+const getCacheHitToneClass = (hitTokens: number, inputTokens: number): string => {
+  if (inputTokens <= 0 || hitTokens <= 0) return styles.badText;
+  const pct = (hitTokens / inputTokens) * 100;
+  if (pct >= 80) return styles.goodText;
+  if (pct >= 50) return styles.warnText;
+  return styles.badText;
+};
+
 export function RealtimeEventsPanelActions({
   rowCount,
   scopedFailureCount,
@@ -1398,9 +1413,21 @@ export function RealtimeEventsPanel({
                         >
                           {row.failed
                             ? t('monitoring.result_failed')
-                            : t('monitoring.result_success')}
+                            : (row.cachedTokens > 0 || row.cacheReadTokens > 0)
+                              ? t('monitoring.result_cache_success')
+                              : t('monitoring.result_success')}
                         </span>
                       )}
+                      {!row.failed && (row.cachedTokens > 0 || row.cacheReadTokens > 0) && row.inputTokens > 0 ? (
+                        <small
+                          className={[
+                            styles.realtimeCachePercentLine,
+                            getCacheHitToneClass(row.cachedTokens + row.cacheReadTokens, row.inputTokens),
+                          ].join(' ')}
+                        >
+                          {formatCacheHitPercent(row.cachedTokens + row.cacheReadTokens, row.inputTokens)}
+                        </small>
+                      ) : null}
                     </div>
                   </td>
                   {isColumnVisible('successRate') ? (

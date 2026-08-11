@@ -5,10 +5,6 @@
 
 import type { Language } from '@/types';
 
-const defineLanguageOrder = <T extends readonly Language[]>(
-  languages: T & ([Language] extends [T[number]] ? unknown : never)
-) => languages;
-
 // 缓存过期时间（毫秒）
 export const CACHE_EXPIRY_MS = 30 * 1000; // 与基线保持一致，减少管理端压力
 
@@ -43,7 +39,7 @@ export const STORAGE_KEY_AUTH_FILES_PAGE_SIZE = 'cli-proxy-auth-files-page-size'
 export const STORAGE_KEY_QUOTA_CACHE = 'cli-proxy-quota-cache';
 
 // 语言配置
-export const LANGUAGE_ORDER = defineLanguageOrder(['zh-CN', 'zh-TW', 'en', 'ru'] as const);
+export const LANGUAGE_ORDER: readonly Language[] = ['zh-CN'];
 export const LANGUAGE_LABEL_KEYS: Record<Language, string> = {
   'zh-CN': 'language.chinese',
   'zh-TW': 'language.chinese_tw',

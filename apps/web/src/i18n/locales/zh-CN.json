@@ -2502,6 +2502,7 @@
     "state_inactive": "未生效",
     "result_failed": "失败",
     "result_success": "成功",
+    "result_cache_success": "缓存成功",
     "resolved_model_label": "实际调用：{{model}}",
     "no_failures": "当前时间范围内没有失败调用。",
     "no_data": "当前筛选范围内暂无可展示的调用数据。",
