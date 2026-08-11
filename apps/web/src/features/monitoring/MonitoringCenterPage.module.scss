@@ -1516,6 +1516,18 @@
   line-height: 1.2;
 }
 
+.realtimeCachePercentLine.goodText {
+  color: var(--monitor-green);
+}
+
+.realtimeCachePercentLine.warnText {
+  color: var(--monitor-amber);
+}
+
+.realtimeCachePercentLine.badText {
+  color: var(--monitor-red);
+}
+
 .realtimeCenteredColumn .recentStatusCell {
   justify-content: center;
 }
