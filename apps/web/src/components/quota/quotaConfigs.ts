@@ -197,13 +197,24 @@ const ANTIGRAVITY_BUCKET_LABEL_KEYS = new Map<string, string>([
 const normalizeAntigravityQuotaText = (value: string): string =>
   value.trim().toLowerCase().replace(/\s+/g, ' ');
 
+const ANTIGRAVITY_BUCKET_LABEL_INFERENCE: Array<[RegExp, string]> = [
+  [/(five|5h|5 h|5-hour|5_hour|five-hour)/i, 'five_hour_limit'],
+  [/(week|weekly|7d|7 day)/i, 'weekly_limit'],
+  [/(day|daily|24h|24 h)/i, 'daily_limit'],
+  [/(month|monthly)/i, 'monthly_limit'],
+];
+
 const translateAntigravityQuotaLabel = (
   value: string,
   keys: Map<string, string>,
   t: TFunction
 ): string => {
   const key = keys.get(normalizeAntigravityQuotaText(value));
-  return key ? t(`antigravity_quota.${key}`) : value;
+  if (key) return t(`antigravity_quota.${key}`);
+  for (const [regex, fallbackKey] of ANTIGRAVITY_BUCKET_LABEL_INFERENCE) {
+    if (regex.test(value)) return t(`antigravity_quota.${fallbackKey}`);
+  }
+  return value;
 };
 
 const translateAntigravityQuotaDescription = (

@@ -9,59 +9,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/model"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usage"
 )
 
-func TestStoreCompatMigratesLegacyCodexInspectionOwnershipIdentity(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "ownership.sqlite")
-	raw, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatalf("open raw sqlite: %v", err)
-	}
-	if _, err := raw.Exec(`create table codex_inspection_disable_ownership (
-		file_name text primary key,
-		provider text not null default 'codex',
-		auth_index text,
-		account_id text,
-		disabled_at_ms integer not null,
-		updated_at_ms integer not null
-	)`); err != nil {
-		_ = raw.Close()
-		t.Fatalf("create legacy ownership table: %v", err)
-	}
-	if _, err := raw.Exec(`insert into codex_inspection_disable_ownership (
-		file_name, provider, auth_index, account_id, disabled_at_ms, updated_at_ms
-	) values ('shared.json', 'codex', 'auth-1', 'account-1', 10, 20)`); err != nil {
-		_ = raw.Close()
-		t.Fatalf("insert legacy ownership: %v", err)
-	}
-	if err := raw.Close(); err != nil {
-		t.Fatalf("close raw sqlite: %v", err)
-	}
 
-	st, err := Open(dbPath)
-	if err != nil {
-		t.Fatalf("open migrated store: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	if err := st.UpsertCodexInspectionDisableOwnership(context.Background(), model.CodexInspectionDisableOwnership{
-		FileName:        "shared.json",
-		Provider:        "codex",
-		AuthIndex:       "auth-2",
-		AccountID:       "account-2",
-		AccountSnapshot: "bob@example.com",
-	}); err != nil {
-		t.Fatalf("insert second ownership: %v", err)
-	}
-	items, err := st.ListCodexInspectionDisableOwnership(context.Background())
-	if err != nil {
-		t.Fatalf("list migrated ownership: %v", err)
-	}
-	if len(items) != 2 || items[0].AuthIndex != "auth-1" || items[0].AccountSnapshot != "" || items[1].AuthIndex != "auth-2" || items[1].AccountSnapshot != "" {
-		t.Fatalf("migrated ownership = %#v", items)
-	}
-}
 
 func TestStoreCompatMigratesLegacyUsageEventSchema(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "usage.sqlite")

@@ -11,7 +11,6 @@ import (
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/model"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/accountaction"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/apikeyalias"
-	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/codexinspection"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/datamigration"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/deadletter"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/modelprice"
@@ -33,14 +32,7 @@ type AdminCredential = model.AdminCredential
 type BootstrapState = model.BootstrapState
 type ManagerCPAConnectionConfig = model.ManagerCPAConnectionConfig
 type ManagerCollectorConfig = model.ManagerCollectorConfig
-type ManagerCodexInspectionConfig = model.ManagerCodexInspectionConfig
-type ManagerCodexInspectionScheduleConfig = model.ManagerCodexInspectionScheduleConfig
 type ManagerExternalUsageServiceConfig = model.ManagerExternalUsageServiceConfig
-type CodexInspectionRun = model.CodexInspectionRun
-type CodexInspectionResult = model.CodexInspectionResult
-type CodexInspectionLog = model.CodexInspectionLog
-type CodexInspectionDisableOwnership = model.CodexInspectionDisableOwnership
-type CodexInspectionLease = model.CodexInspectionLease
 type InsertResult = model.InsertResult
 type ModelPrice = model.ModelPrice
 type ModelPriceContextTier = model.ModelPriceContextTier
@@ -59,8 +51,6 @@ type CharityModelMonitorState = model.CharityModelMonitorState
 type DataMigrationState = datamigration.State
 type DataMigrationBatchResult = datamigration.BatchResult
 
-var DefaultCodexInspectionConfig = model.DefaultCodexInspectionConfig
-var NormalizeCodexInspectionConfig = model.NormalizeCodexInspectionConfig
 var NormalizeCharityModelMonitorInterval = model.NormalizeCharityModelMonitorInterval
 var NormalizeCharityModelMonitorSites = model.NormalizeCharityModelMonitorSites
 var NormalizeCharityModelMonitorState = model.NormalizeCharityModelMonitorState
@@ -131,7 +121,6 @@ type Store struct {
 	ModelPrices      modelprice.Repository
 	APIKeyAliases    apikeyalias.Repository
 	AccountActions   accountaction.Repository
-	CodexInspections codexinspection.Repository
 	DataMigrations   datamigration.Repository
 	QuotaCooldowns   quotacooldown.Repository
 	UsageAggregates  usageaggregate.Repository
@@ -157,7 +146,6 @@ func New(db *sql.DB, protector ...*security.Protector) *Store {
 		ModelPrices:      modelprice.New(db),
 		APIKeyAliases:    apikeyalias.New(db),
 		AccountActions:   accountaction.New(db),
-		CodexInspections: codexinspection.New(db),
 		DataMigrations:   datamigration.New(db),
 		QuotaCooldowns:   quotacooldown.New(db),
 		UsageAggregates:  usageaggregate.New(db),
@@ -300,102 +288,6 @@ func (s *Store) RecordAccountActionCandidateFailure(ctx context.Context, id int6
 
 func (s *Store) MarkAccountActionCandidateAutoDisabled(ctx context.Context, id int64, disabledAtMS int64) error {
 	return s.AccountActions.MarkAutoDisabled(ctx, id, disabledAtMS)
-}
-
-func (s *Store) CreateCodexInspectionRun(ctx context.Context, run CodexInspectionRun) (CodexInspectionRun, error) {
-	return s.CodexInspections.CreateRun(ctx, run)
-}
-
-func (s *Store) UpdateCodexInspectionRun(ctx context.Context, run CodexInspectionRun) error {
-	return s.CodexInspections.UpdateRun(ctx, run)
-}
-
-func (s *Store) UpdateCodexInspectionRunProgress(ctx context.Context, run CodexInspectionRun, ownerID string) error {
-	return s.CodexInspections.UpdateRunProgress(ctx, run, ownerID)
-}
-
-func (s *Store) AcquireCodexInspectionRun(ctx context.Context, run CodexInspectionRun, ownerID string, leaseDuration time.Duration) (codexinspection.AcquireRunResult, error) {
-	return s.CodexInspections.AcquireRun(ctx, run, ownerID, leaseDuration)
-}
-
-func (s *Store) HeartbeatCodexInspectionRun(ctx context.Context, runID int64, ownerID string, leaseDuration time.Duration) error {
-	return s.CodexInspections.HeartbeatRun(ctx, runID, ownerID, leaseDuration)
-}
-
-func (s *Store) MarkCodexInspectionRunCancelling(ctx context.Context, runID int64, ownerID string, reason string) (bool, error) {
-	return s.CodexInspections.MarkRunCancelling(ctx, runID, ownerID, reason)
-}
-
-func (s *Store) FinalizeCodexInspectionRun(ctx context.Context, run CodexInspectionRun, ownerID string, finalLog *CodexInspectionLog) error {
-	return s.CodexInspections.FinalizeRun(ctx, run, ownerID, finalLog)
-}
-
-func (s *Store) ForceFinalizeCodexInspectionRun(ctx context.Context, run CodexInspectionRun, ownerID string, finalLog *CodexInspectionLog) error {
-	return s.CodexInspections.ForceFinalizeRun(ctx, run, ownerID, finalLog)
-}
-
-func (s *Store) GetActiveCodexInspectionLease(ctx context.Context, nowMS int64) (CodexInspectionLease, bool, error) {
-	return s.CodexInspections.GetActiveLease(ctx, nowMS)
-}
-
-func (s *Store) RecoverStaleCodexInspectionRuns(ctx context.Context, nowMS int64, reason string) ([]CodexInspectionRun, error) {
-	return s.CodexInspections.RecoverStaleRuns(ctx, nowMS, reason)
-}
-
-func (s *Store) GetLatestCodexInspectionRunByTriggerType(ctx context.Context, triggerType string) (CodexInspectionRun, bool, error) {
-	return s.CodexInspections.GetLatestRunByTriggerType(ctx, triggerType)
-}
-
-func (s *Store) InsertCodexInspectionResult(ctx context.Context, result CodexInspectionResult) (CodexInspectionResult, error) {
-	return s.CodexInspections.InsertResult(ctx, result)
-}
-
-func (s *Store) InsertCodexInspectionLog(ctx context.Context, entry CodexInspectionLog) (CodexInspectionLog, error) {
-	return s.CodexInspections.InsertLog(ctx, entry)
-}
-
-func (s *Store) ListCodexInspectionRuns(ctx context.Context, limit int) ([]CodexInspectionRun, error) {
-	return s.CodexInspections.ListRuns(ctx, limit)
-}
-
-func (s *Store) GetCodexInspectionRun(ctx context.Context, id int64) (CodexInspectionRun, bool, error) {
-	return s.CodexInspections.GetRun(ctx, id)
-}
-
-func (s *Store) GetLatestCodexInspectionRunByTrigger(ctx context.Context, triggerType, triggerKey string) (CodexInspectionRun, bool, error) {
-	return s.CodexInspections.GetLatestRunByTrigger(ctx, triggerType, triggerKey)
-}
-
-func (s *Store) ListCodexInspectionResults(ctx context.Context, runID int64) ([]CodexInspectionResult, error) {
-	return s.CodexInspections.ListResults(ctx, runID)
-}
-
-func (s *Store) ListCodexInspectionLogs(ctx context.Context, runID int64) ([]CodexInspectionLog, error) {
-	return s.CodexInspections.ListLogs(ctx, runID)
-}
-
-func (s *Store) ListCodexInspectionDisableOwnership(ctx context.Context) ([]CodexInspectionDisableOwnership, error) {
-	return s.CodexInspections.ListDisableOwnership(ctx)
-}
-
-func (s *Store) UpsertCodexInspectionDisableOwnership(ctx context.Context, item CodexInspectionDisableOwnership) error {
-	return s.CodexInspections.UpsertDisableOwnership(ctx, item)
-}
-
-func (s *Store) UpsertCodexInspectionDisableOwnerships(ctx context.Context, items []CodexInspectionDisableOwnership) error {
-	return s.CodexInspections.UpsertDisableOwnerships(ctx, items)
-}
-
-func (s *Store) DeleteCodexInspectionDisableOwnership(ctx context.Context, target model.CodexInspectionDisableOwnershipTarget) error {
-	return s.CodexInspections.DeleteDisableOwnership(ctx, target)
-}
-
-func (s *Store) RevokeCodexInspectionDisableOwnership(ctx context.Context, targets []model.CodexInspectionDisableOwnershipTarget, clearAll bool) ([]CodexInspectionDisableOwnership, error) {
-	return s.CodexInspections.RevokeDisableOwnership(ctx, targets, clearAll)
-}
-
-func (s *Store) RestoreCodexInspectionDisableOwnership(ctx context.Context, items []CodexInspectionDisableOwnership) error {
-	return s.CodexInspections.RestoreDisableOwnership(ctx, items)
 }
 
 func (s *Store) InsertEvents(ctx context.Context, events []usage.Event) (InsertResult, error) {

@@ -1,7 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createAppRoutes } from '@/app/appRoutes';
-import { CODEX_INSPECTION_LAST_RUN_STORAGE_KEY } from '@/features/monitoring/model/codexInspectionStorage';
-import { CODEX_INSPECTION_SETTINGS_STORAGE_KEY } from '@/features/monitoring/model/codexInspectionSettings';
 import {
   getDemoAuthFiles,
   getDemoDashboardSummary,
@@ -26,21 +24,7 @@ import {
   setDemoMode,
   stripRouteBase,
 } from './demoMode';
-import { installDemoInspectionState } from './DemoPage';
 
-const createMemoryStorage = () => {
-  const values = new Map<string, string>();
-  return {
-    getItem: (key: string) => values.get(key) ?? null,
-    setItem: (key: string, value: string) => values.set(key, value),
-    removeItem: (key: string) => values.delete(key),
-    clear: () => values.clear(),
-    key: (index: number) => Array.from(values.keys())[index] ?? null,
-    get length() {
-      return values.size;
-    },
-  };
-};
 
 describe('DemoPage', () => {
   afterEach(() => {
@@ -329,45 +313,4 @@ describe('DemoPage', () => {
     );
   });
 
-  it('installs inspection demo state and restores the existing local state on exit', () => {
-    const storage = createMemoryStorage();
-    storage.setItem(CODEX_INSPECTION_LAST_RUN_STORAGE_KEY, 'real-last-run');
-    storage.setItem(CODEX_INSPECTION_SETTINGS_STORAGE_KEY, 'real-settings');
-    vi.stubGlobal('localStorage', storage);
-    vi.stubGlobal('window', {
-      localStorage: storage,
-      location: { hash: '#/demo/codex-inspection', pathname: '/' },
-    });
-
-    const restore = installDemoInspectionState();
-    const lastRun = JSON.parse(
-      storage.getItem(CODEX_INSPECTION_LAST_RUN_STORAGE_KEY) ?? '{}'
-    ) as Record<string, unknown>;
-    const settings = JSON.parse(
-      storage.getItem(CODEX_INSPECTION_SETTINGS_STORAGE_KEY) ?? '{}'
-    ) as Record<string, unknown>;
-
-    expect(lastRun).toMatchObject({
-      version: 1,
-      actionFilter: 'all',
-      logsCollapsed: false,
-      result: { results: expect.arrayContaining([expect.objectContaining({ provider: 'xai' })]) },
-    });
-    expect(lastRun.logs).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ detail: expect.objectContaining({ triggerKey: 'manual' }) }),
-      ])
-    );
-    expect(settings).toMatchObject({
-      targetTypes: ['codex', 'xai'],
-      xaiInferenceEnabled: true,
-      autoActionMode: 'disable',
-      autoRecoverEnabled: true,
-    });
-
-    restore();
-
-    expect(storage.getItem(CODEX_INSPECTION_LAST_RUN_STORAGE_KEY)).toBe('real-last-run');
-    expect(storage.getItem(CODEX_INSPECTION_SETTINGS_STORAGE_KEY)).toBe('real-settings');
-  });
 });

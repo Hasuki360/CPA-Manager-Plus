@@ -14,7 +14,6 @@ import (
 	apikeyaliassvc "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/apikeyalias"
 	automationsvc "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/automation"
 	bootstrapsvc "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/bootstrap"
-	codexinspectionsvc "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/codexinspection"
 	collectorsvc "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/collector"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/cpaauthfiles"
 	dashboardsvc "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/dashboard"
@@ -51,7 +50,6 @@ type Context struct {
 	CollectorService               *collectorsvc.Service
 	UsageService                   *usagesvc.Service
 	DashboardService               *dashboardsvc.Service
-	CodexInspectionService         *codexinspectionsvc.Service
 	MonitoringService              *monitoringsvc.Service
 	ModelPriceService              *modelpricesvc.Service
 	APIKeyAliasService             *apikeyaliassvc.Service
@@ -158,11 +156,6 @@ func fromExisting(
 		CollectorService:     collectorService,
 		UsageService:         usageService,
 		DashboardService:     dashboardsvc.New(st, cfg.DashboardHourlyRollupEnabled),
-		CodexInspectionService: codexinspectionsvc.NewWithOptions(
-			st,
-			managerConfigService,
-			codexinspectionsvc.ServiceOptions{AuthFileMutationCoordinator: authFileMutationCoordinator},
-		),
 		MonitoringService:  monitoringsvc.New(st, cfg.DashboardHourlyRollupEnabled),
 		ModelPriceService:  modelpricesvc.NewMultiSourceWithModelsDev(st, modelsDevModelPriceSyncURL, modelPriceSyncURL, openRouterModelPriceSyncURL, managerConfigService),
 		APIKeyAliasService: apikeyaliassvc.New(st),

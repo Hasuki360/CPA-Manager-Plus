@@ -38,11 +38,6 @@ import {
   type AuthFilePatchTarget,
 } from '@/features/authFiles/model/authFilesPageModel';
 import {
-  clearCodexInspectionDisableOwnership,
-  clearCodexInspectionDisableOwnershipForFile,
-  getCodexInspectionOwnershipIdentityForFile,
-} from '@/features/monitoring/model/codexInspectionOwnership';
-import {
   authFileStatusMutationLockSetsOverlap,
   getAuthFileStatusSelectionKey,
   getAuthFileStatusMutationLockKeys,
@@ -702,23 +697,8 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
     };
   }, [commitFiles, connectionFingerprint]);
 
-  const clearInspectionOwnershipForFile = useCallback(
-    (fileName: string) => {
-      if (!connectionFingerprint) return;
-      clearCodexInspectionDisableOwnershipForFile(connectionFingerprint, fileName);
-    },
-    [connectionFingerprint]
-  );
-  const clearInspectionOwnershipForIdentity = useCallback(
-    (file: AuthFileItem) => {
-      if (!connectionFingerprint) return;
-      clearCodexInspectionDisableOwnership(
-        connectionFingerprint,
-        getCodexInspectionOwnershipIdentityForFile(file)
-      );
-    },
-    [connectionFingerprint]
-  );
+  const clearInspectionOwnershipForFile = useCallback((_fileName: string) => {}, []);
+  const clearInspectionOwnershipForIdentity = useCallback((_file: AuthFileItem) => {}, []);
   const toggleSelect = useCallback((key: string) => {
     setSelectedFiles((prev) => {
       const next = new Set(prev);

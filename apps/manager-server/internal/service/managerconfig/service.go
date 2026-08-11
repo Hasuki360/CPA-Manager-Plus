@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/config"
-	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/model"
 	collectorservice "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/collector"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/cpa"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/store"
@@ -66,9 +65,6 @@ func (s *Service) Get(ctx context.Context) (Response, error) {
 func (s *Service) Update(ctx context.Context, submitted store.ManagerConfig) (Response, error) {
 	current, source, _, err := s.ResolveManagerConfigWithSource(ctx)
 	if err != nil {
-		return Response{}, err
-	}
-	if err := model.ValidateCodexInspectionConfig(submitted.CodexInspection); err != nil {
 		return Response{}, err
 	}
 	next := s.MergeSubmittedManagerConfig(current, submitted)
@@ -217,7 +213,6 @@ func (s *Service) DefaultManagerConfig() store.ManagerConfig {
 			QueryLimit:     PositiveOrDefault(s.cfg.QueryLimit, 50000, 50000),
 			TLSSkipVerify:  s.cfg.TLSSkipVerify,
 		},
-		CodexInspection: store.DefaultCodexInspectionConfig(),
 	}
 }
 
@@ -239,8 +234,6 @@ func (s *Service) MergeSubmittedManagerConfig(base store.ManagerConfig, submitte
 	next.Collector.PollIntervalMS = PositiveOrDefault(submitted.Collector.PollIntervalMS, next.Collector.PollIntervalMS, 500)
 	next.Collector.QueryLimit = PositiveOrDefault(submitted.Collector.QueryLimit, next.Collector.QueryLimit, 50000)
 	next.Collector.TLSSkipVerify = submitted.Collector.TLSSkipVerify
-
-	next.CodexInspection = store.NormalizeCodexInspectionConfig(submitted.CodexInspection, next.CodexInspection)
 
 	next.ExternalUsageService.Enabled = false
 	next.ExternalUsageService.ServiceBase = ""

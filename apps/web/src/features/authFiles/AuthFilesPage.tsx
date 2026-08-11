@@ -85,7 +85,6 @@ import {
   DEFAULT_REGULAR_PAGE_SIZE,
   authFileMatchesCodexPlanFilter,
   authFileMatchesCodexStatusFilter,
-  buildAuthFileCodexInspectionMap,
   buildWildcardSearch,
   compareAuthFileName,
   compareAuthFileNote,
@@ -107,7 +106,6 @@ import {
   normalizeAuthFilesCodexPlanFilter,
   normalizeAuthFilesCodexStatusFilter,
   stringifySearchValue,
-  type AuthFileCodexInspectionSnapshot,
   type AuthFilesCodexPlanFilter,
   type AuthFilesCodexStatusFilter,
 } from '@/features/authFiles/model/authFilesPageModel';
@@ -115,10 +113,6 @@ import {
   canBulkDeleteAccountActions,
   selectAccountActionCandidate,
 } from '@/features/authFiles/model/accountAutomationPresentation';
-import {
-  createCodexInspectionConnectionFingerprint,
-  loadCodexInspectionLastRun,
-} from '@/features/monitoring/codexInspection';
 import {
   normalizeAuthFilesSortMode,
   normalizeAuthFilesViewMode,
@@ -149,64 +143,6 @@ const hasInlineQuotaLayout = (file: AuthFileItem): boolean => {
   if (isRuntimeOnlyAuthFile(file)) return false;
   const provider = resolveAuthProvider(file);
   return QUOTA_PROVIDER_TYPES.has(provider as QuotaProviderType);
-};
-
-type CodexInspectionSnapshotSource = {
-  fileName: string;
-  runtimeId?: string | null;
-  provider?: string | null;
-  authIndex?: string | number | null;
-  accountId?: string | null;
-  accountSnapshot?: string | null;
-  displayAccount?: string | null;
-  statusCode?: number | string | null;
-  action?: string | null;
-  usedPercent?: number | string | null;
-  isQuota?: boolean | null;
-  errorKind?: string | null;
-};
-
-const readCodexInspectionRunAtMs = (run: {
-  finishedAtMs?: number;
-  updatedAtMs?: number;
-  startedAtMs?: number;
-}): number | null =>
-  run.finishedAtMs && Number.isFinite(run.finishedAtMs)
-    ? run.finishedAtMs
-    : run.updatedAtMs && Number.isFinite(run.updatedAtMs)
-      ? run.updatedAtMs
-      : run.startedAtMs && Number.isFinite(run.startedAtMs)
-        ? run.startedAtMs
-        : null;
-
-const toAuthFileCodexInspectionSnapshots = (
-  results: CodexInspectionSnapshotSource[],
-  inspectionAtMs?: number | null
-): AuthFileCodexInspectionSnapshot[] =>
-  results.map((item) => ({
-    fileName: item.fileName,
-    runtimeId: item.runtimeId ?? null,
-    provider: item.provider ?? null,
-    authIndex: item.authIndex ?? null,
-    accountId: item.accountId ?? null,
-    accountSnapshot: item.accountSnapshot ?? null,
-    statusCode: item.statusCode ?? null,
-    action: item.action ?? null,
-    usedPercent: item.usedPercent ?? null,
-    isQuota: item.isQuota ?? null,
-    errorKind: item.errorKind ?? null,
-    inspectionAtMs: inspectionAtMs ?? null,
-  }));
-
-const isStaleCodexReauthSnapshot = (item: AuthFileCodexInspectionSnapshot): boolean => {
-  const action = typeof item.action === 'string' ? item.action.trim().toLowerCase() : '';
-  const statusCode =
-    typeof item.statusCode === 'number'
-      ? item.statusCode
-      : typeof item.statusCode === 'string'
-        ? Number(item.statusCode)
-        : null;
-  return action === 'reauth' || statusCode === 401;
 };
 
 type QuotaCooldownState = {
@@ -242,7 +178,7 @@ export function AuthFilesPage() {
   const isCurrentLayer = pageTransitionLayer ? pageTransitionLayer.status === 'current' : true;
   const navigate = useNavigate();
   const connectionFingerprint = useMemo(
-    () => createCodexInspectionConnectionFingerprint(apiBase, managementKey),
+    () => `${apiBase ?? ''}::${managementKey ?? ''}`,
     [apiBase, managementKey]
   );
 
@@ -268,9 +204,6 @@ export function AuthFilesPage() {
   const [batchPriorityOpen, setBatchPriorityOpen] = useState(false);
   const [batchPriorityValue, setBatchPriorityValue] = useState('');
   const [codexReauthTarget, setCodexReauthTarget] = useState<CodexReauthTarget | null>(null);
-  const [lastCodexInspectionResults, setLastCodexInspectionResults] = useState<
-    AuthFileCodexInspectionSnapshot[]
-  >([]);
   const [quotaCooldownState, setQuotaCooldownState] = useState<QuotaCooldownState>(() => ({
     contextKey: getQuotaCooldownContextKey(managerServiceBase, managementKey),
     items: new Map(),
@@ -601,64 +534,6 @@ export function AuthFilesPage() {
     setPageSizeInput(String(pageSize));
   }, [pageSize]);
 
-  const loadCodexInspectionSnapshots = useCallback(async () => {
-    const lastRun = connectionFingerprint
-      ? loadCodexInspectionLastRun(connectionFingerprint)
-      : null;
-
-    const managerServiceBase = featureAvailability.managerServiceBase;
-    if (
-      !featureAvailability.checking &&
-      featureAvailability.serverCodexInspectionAvailable &&
-      managerServiceBase
-    ) {
-      try {
-        const runs = await usageServiceApi.listCodexInspectionRuns(
-          managerServiceBase,
-          managementKey,
-          1
-        );
-        const latestRun = runs.items[0];
-        if (latestRun) {
-          const detail = await usageServiceApi.getCodexInspectionRun(
-            managerServiceBase,
-            managementKey,
-            latestRun.id
-          );
-          setLastCodexInspectionResults(
-            toAuthFileCodexInspectionSnapshots(
-              detail.results,
-              readCodexInspectionRunAtMs(detail.run)
-            )
-          );
-          return;
-        }
-      } catch {
-        // Fall back to the browser-side cache when the manager service is unavailable.
-      }
-    }
-
-    setLastCodexInspectionResults(
-      lastRun
-        ? toAuthFileCodexInspectionSnapshots(
-            lastRun.result.results,
-            lastRun.result.finishedAt || lastRun.result.startedAt || null
-          )
-        : []
-    );
-  }, [
-    connectionFingerprint,
-    featureAvailability.checking,
-    featureAvailability.managerServiceBase,
-    featureAvailability.serverCodexInspectionAvailable,
-    managementKey,
-  ]);
-
-  useEffect(() => {
-    if (!isCurrentLayer) return;
-    void loadCodexInspectionSnapshots();
-  }, [isCurrentLayer, loadCodexInspectionSnapshots]);
-
   const setCurrentModePageSize = useCallback(
     (next: number) => {
       setPageSizeByMode((current) =>
@@ -728,9 +603,8 @@ export function AuthFilesPage() {
       loadFiles(),
       loadExcluded(),
       loadModelAlias(),
-      loadCodexInspectionSnapshots(),
     ]);
-  }, [loadFiles, loadExcluded, loadModelAlias, loadCodexInspectionSnapshots]);
+  }, [loadFiles, loadExcluded, loadModelAlias]);
 
   useHeaderRefresh(handleHeaderRefresh);
 
@@ -1041,11 +915,6 @@ export function AuthFilesPage() {
     return Array.from(types);
   }, [files]);
 
-  const codexInspectionByAuthFile = useMemo(
-    () => buildAuthFileCodexInspectionMap(lastCodexInspectionResults),
-    [lastCodexInspectionResults]
-  );
-
   const headerSnapshotLookup = useMemo(
     () => buildUsageHeaderSnapshotLookup(headerSnapshots),
     [headerSnapshots]
@@ -1117,14 +986,13 @@ export function AuthFilesPage() {
         getFreshAuthFileCodexStatusSources(
           file,
           getActiveCodexQuota(file),
-          codexInspectionByAuthFile.get(statusKey),
+          undefined,
           freshHeaderSnapshot
         )
       );
     });
     return sourcesMap;
   }, [
-    codexInspectionByAuthFile,
     files,
     getActiveCodexQuota,
     headerSnapshotGeneratedAtMs,
@@ -1485,24 +1353,8 @@ export function AuthFilesPage() {
   const handleCodexReauthSuccess = useCallback(async () => {
     const target = codexReauthTarget;
     await loadFiles();
-    await loadCodexInspectionSnapshots();
     if (!target?.fileName) return;
-
-    const targetKey = getAuthFileCodexInspectionKeyForIdentity({
-      fileName: target.fileName,
-      runtimeId: target.runtimeId,
-      provider: target.provider,
-      authIndex: target.authIndex ?? null,
-      accountId: target.accountId,
-      accountSnapshot: target.accountSnapshot,
-    });
-    setLastCodexInspectionResults((current) =>
-      current.filter((item) => {
-        const itemKey = getAuthFileCodexInspectionKeyForIdentity(item);
-        return itemKey !== targetKey || !isStaleCodexReauthSnapshot(item);
-      })
-    );
-  }, [codexReauthTarget, loadCodexInspectionSnapshots, loadFiles]);
+  }, [codexReauthTarget, loadFiles]);
 
   const openExcludedEditor = useCallback(
     (provider?: string) => {

@@ -90,11 +90,6 @@ import {
   prepareAuthFilesForUpload,
   useAuthFilesData,
 } from './useAuthFilesData';
-import {
-  getCodexInspectionOwnedDisableIdentityKeys,
-  getCodexInspectionOwnershipIdentityKey,
-  recordCodexInspectionDisableOwnership,
-} from '@/features/monitoring/model/codexInspectionOwnership';
 
 type UseAuthFilesDataHarness = {
   getCurrent: () => ReturnType<typeof useAuthFilesData>;
@@ -1125,13 +1120,6 @@ describe('useAuthFilesData handleDelete', () => {
 
   it('keeps ownership when CPA reports a logical delete failure', async () => {
     vi.stubGlobal('localStorage', createStorage());
-    recordCodexInspectionDisableOwnership('scope-a', {
-      fileName: 'owned.json',
-      provider: 'codex',
-      authIndex: 'auth-1',
-      accountId: null,
-      accountSnapshot: 'owned@example.com',
-    });
     mocks.list.mockResolvedValueOnce({ files: [disabledFile] });
     mocks.deleteFileByName.mockResolvedValueOnce({
       deleted: 0,
@@ -1169,17 +1157,6 @@ describe('useAuthFilesData handleDelete', () => {
       ]
     );
 
-    expect(
-      Array.from(getCodexInspectionOwnedDisableIdentityKeys('scope-a', [disabledFile]))
-    ).toEqual([
-      getCodexInspectionOwnershipIdentityKey({
-        fileName: 'owned.json',
-        provider: 'codex',
-        authIndex: 'auth-1',
-        accountId: null,
-        accountSnapshot: 'owned@example.com',
-      }),
-    ]);
     expect(mocks.showNotification).toHaveBeenCalledWith(
       'notification.delete_failed: still in use',
       'error'
@@ -1187,63 +1164,6 @@ describe('useAuthFilesData handleDelete', () => {
     hook.unmount();
   });
 
-  it('clears ownership only for the active connection after a successful delete', async () => {
-    vi.stubGlobal('localStorage', createStorage());
-    for (const scope of ['scope-a', 'scope-b']) {
-      recordCodexInspectionDisableOwnership(scope, {
-        fileName: 'owned.json',
-        provider: 'codex',
-        authIndex: 'auth-1',
-        accountId: null,
-        accountSnapshot: 'owned@example.com',
-      });
-    }
-    mocks.list.mockResolvedValueOnce({ files: [disabledFile] });
-    mocks.deleteFileByName.mockResolvedValueOnce({
-      deleted: 1,
-      files: ['owned.json'],
-      failed: [],
-    });
-    const hook = mountUseAuthFilesData('scope-a');
-
-    act(() => hook.getCurrent().handleDelete(disabledFile));
-    const confirmation = mocks.showConfirmation.mock.calls[0]?.[0] as
-      | { onConfirm?: () => Promise<void>; secondConfirmation?: { message?: string } }
-      | undefined;
-    expect(confirmation?.secondConfirmation?.message).toBe(
-      'auth_files.delete_second_confirm:owned.json'
-    );
-    await act(async () => confirmation?.onConfirm?.());
-
-    expect(mocks.deleteFileByName).toHaveBeenCalledWith(
-      'runtime-owned',
-      'owned.json',
-      expect.any(Function),
-      [
-        {
-          name: 'owned.json',
-          runtimeId: 'runtime-owned',
-          authIndex: 'auth-1',
-          provider: 'codex',
-          accountSnapshot: 'owned@example.com',
-        },
-      ]
-    );
-
-    expect(getCodexInspectionOwnedDisableIdentityKeys('scope-a', [disabledFile]).size).toBe(0);
-    expect(
-      Array.from(getCodexInspectionOwnedDisableIdentityKeys('scope-b', [disabledFile]))
-    ).toEqual([
-      getCodexInspectionOwnershipIdentityKey({
-        fileName: 'owned.json',
-        provider: 'codex',
-        authIndex: 'auth-1',
-        accountId: null,
-        accountSnapshot: 'owned@example.com',
-      }),
-    ]);
-    hook.unmount();
-  });
 
   it('warns that a shared card delete removes every credential and uses a stable selector', async () => {
     const first = {
@@ -2426,15 +2346,6 @@ describe('useAuthFilesData status targeting', () => {
         disabled: false,
       },
     ] as AuthFileItem[];
-    files.forEach((file) => {
-      recordCodexInspectionDisableOwnership('scope-plugin-source-status', {
-        fileName: file.name,
-        provider: 'gemini-cli',
-        authIndex: file.auth_index as string,
-        accountId: null,
-        accountSnapshot: String(file.account),
-      });
-    });
     mocks.list.mockResolvedValue({ files });
     mocks.setStatus.mockImplementation(
       async (_target: unknown, _disabled: unknown, verifyFallback?: () => Promise<void>) => {
@@ -2468,12 +2379,6 @@ describe('useAuthFilesData status targeting', () => {
     );
     expect(mocks.list).toHaveBeenCalledTimes(3);
     expect(hook.getCurrent().files.map((file) => file.disabled)).toEqual([false, false]);
-    expect(
-      getCodexInspectionOwnedDisableIdentityKeys('scope-plugin-source-status', [
-        { ...files[0], disabled: true },
-        { ...files[1], disabled: true },
-      ]).size
-    ).toBe(2);
     expect(mocks.showNotification).toHaveBeenCalledWith(
       'notification.update_failed: auth_files.status_mutation_scope_ambiguous:shared.json',
       'error'
@@ -2742,15 +2647,6 @@ describe('useAuthFilesData status targeting', () => {
         disabled: false,
       },
     ] as AuthFileItem[];
-    files.forEach((file) => {
-      recordCodexInspectionDisableOwnership('scope-source-status', {
-        fileName: file.name,
-        provider: 'codex',
-        authIndex: file.auth_index as string,
-        accountId: null,
-        accountSnapshot: String(file.account),
-      });
-    });
     mocks.list.mockResolvedValue({ files });
     mocks.setStatus.mockResolvedValue({ status: 'ok', disabled: true });
     const hook = mountUseAuthFilesData('scope-source-status');
@@ -2788,12 +2684,6 @@ describe('useAuthFilesData status targeting', () => {
       ]
     );
     expect(hook.getCurrent().files.map((file) => file.disabled)).toEqual([true, true]);
-    expect(
-      getCodexInspectionOwnedDisableIdentityKeys('scope-source-status', [
-        { ...files[0], disabled: true },
-        { ...files[1], disabled: true },
-      ])
-    ).toEqual(new Set());
     hook.unmount();
   });
 
@@ -3086,15 +2976,6 @@ describe('useAuthFilesData status targeting', () => {
         disabled: false,
       },
     ] as AuthFileItem[];
-    files.forEach((file) => {
-      recordCodexInspectionDisableOwnership('scope-plugin-batch-status', {
-        fileName: file.name,
-        provider: 'gemini-cli',
-        authIndex: file.auth_index as string,
-        accountId: null,
-        accountSnapshot: String(file.account),
-      });
-    });
     mocks.list.mockResolvedValue({ files });
     mocks.setStatus.mockResolvedValue({
       status: 'ok',
@@ -3130,12 +3011,6 @@ describe('useAuthFilesData status targeting', () => {
       expect.any(Function)
     );
     expect(hook.getCurrent().files.map((file) => file.disabled)).toEqual([true, true]);
-    expect(
-      getCodexInspectionOwnedDisableIdentityKeys('scope-plugin-batch-status', [
-        { ...files[0], disabled: true },
-        { ...files[1], disabled: true },
-      ])
-    ).toEqual(new Set());
     hook.unmount();
   });
 
@@ -3255,15 +3130,6 @@ describe('useAuthFilesData status targeting', () => {
         disabled: false,
       },
     ] as AuthFileItem[];
-    files.slice(0, 2).forEach((file) => {
-      recordCodexInspectionDisableOwnership('scope-status', {
-        fileName: file.name,
-        provider: 'codex',
-        authIndex: file.auth_index as string,
-        accountId: file.auth_index === 'auth-1' ? 'account-1' : null,
-        accountSnapshot: file.auth_index === 'auth-1' ? null : String(file.account),
-      });
-    });
     mocks.list.mockResolvedValue({ files });
     mocks.setStatus.mockResolvedValue({ status: 'ok', disabled: true });
     const hook = mountUseAuthFilesData('scope-status');
@@ -3341,12 +3207,6 @@ describe('useAuthFilesData status targeting', () => {
       'auth_files.batch_status_success:3',
       'success'
     );
-
-    const ownedKeys = getCodexInspectionOwnedDisableIdentityKeys('scope-status', [
-      { ...files[0], disabled: true },
-      { ...files[1], disabled: true },
-    ]);
-    expect(ownedKeys).toEqual(new Set());
     hook.unmount();
   });
 

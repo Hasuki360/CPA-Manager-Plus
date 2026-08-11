@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/config"
-	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/model"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/cpaauthfiles"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/managerconfig"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/store"
@@ -1319,186 +1318,15 @@ func TestSuccessfulAuthFileOwnershipMutationKeepsOwnershipRevokedWithoutSuccessE
 	}
 }
 
-func TestSuccessfulAuthFileOwnershipMutationAcceptsCanonicalStatusResponse(t *testing.T) {
-	provider := "codex"
-	authIndex := "auth-1"
-	accountID := "account-1"
-	response := &http.Response{
-		Body: io.NopCloser(strings.NewReader(`{"status":"ok","disabled":true}`)),
-	}
-	want := authFileOwnershipMutation{
-		ownershipTargets: []model.CodexInspectionDisableOwnershipTarget{{
-			FileName:  "auth-a.json",
-			Provider:  &provider,
-			AuthIndex: &authIndex,
-			AccountID: &accountID,
-		}},
-	}
-	mutation, err := successfulAuthFileOwnershipMutation(response, want)
-	if err != nil {
-		t.Fatalf("resolve canonical status mutation: %v", err)
-	}
-	if len(mutation.ownershipTargets) != 1 || mutation.ownershipTargets[0].FileName != "auth-a.json" {
-		t.Fatalf("canonical status mutation = %#v, want target retained", mutation)
-	}
-}
 
-func TestSuccessfulAuthFileOwnershipMutationDoesNotExpandCredentialTargetFromResponseFiles(t *testing.T) {
-	provider := "codex"
-	authIndex := "auth-1"
-	accountID := "account-1"
-	response := &http.Response{
-		Body: io.NopCloser(strings.NewReader(`{"status":"ok","files":["shared.json"],"disabled":true}`)),
-	}
-	mutation, err := successfulAuthFileOwnershipMutation(response, authFileOwnershipMutation{
-		ownershipTargets: []model.CodexInspectionDisableOwnershipTarget{{
-			FileName:  "shared.json",
-			Provider:  &provider,
-			AuthIndex: &authIndex,
-			AccountID: &accountID,
-		}},
-	})
-	if err != nil {
-		t.Fatalf("resolve credential status mutation: %v", err)
-	}
-	if len(mutation.fileNames) != 0 || len(mutation.ownershipTargets) != 1 {
-		t.Fatalf("credential status mutation = %#v, want exact target only", mutation)
-	}
-}
 
-func TestSuccessfulAuthFileOwnershipMutationKeepsOwnershipRevokedForEncodedResponse(t *testing.T) {
-	response := &http.Response{
-		Header: http.Header{"Content-Encoding": []string{"gzip"}},
-		Body:   io.NopCloser(strings.NewReader("compressed")),
-	}
-	mutation, err := successfulAuthFileOwnershipMutation(response, authFileOwnershipMutation{
-		fileNames: []string{"auth-a.json"},
-	})
-	if err != nil {
-		t.Fatalf("resolve encoded response: %v", err)
-	}
-	if len(mutation.fileNames) != 1 || mutation.fileNames[0] != "auth-a.json" {
-		t.Fatalf("encoded response mutation = %#v, want original mutation", mutation)
-	}
-}
 
-func TestRevokeAndRestoreInspectionOwnership(t *testing.T) {
-	st, err := store.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	if err := st.UpsertCodexInspectionDisableOwnership(context.Background(), model.CodexInspectionDisableOwnership{
-		FileName:  "auth-a.json",
-		AuthIndex: "auth-1",
-	}); err != nil {
-		t.Fatalf("save ownership: %v", err)
-	}
-	if err := st.UpsertCodexInspectionDisableOwnership(context.Background(), model.CodexInspectionDisableOwnership{
-		FileName:  "auth-b.json",
-		AuthIndex: "auth-2",
-	}); err != nil {
-		t.Fatalf("save second ownership: %v", err)
-	}
-	if err := st.UpsertCodexInspectionDisableOwnership(context.Background(), model.CodexInspectionDisableOwnership{
-		FileName:  "auth-a.json",
-		AuthIndex: "auth-3",
-	}); err != nil {
-		t.Fatalf("save same-file ownership: %v", err)
-	}
-	if err := st.UpsertCodexInspectionDisableOwnership(context.Background(), model.CodexInspectionDisableOwnership{
-		FileName: "auth-a.json",
-	}); err != nil {
-		t.Fatalf("save legacy wildcard ownership: %v", err)
-	}
-	service := New(nil, st)
-	revoked, err := service.revokeInspectionOwnership(context.Background(), authFileOwnershipMutation{
-		fileNames: []string{"auth-a.json"},
-	})
-	if err != nil {
-		t.Fatalf("revoke ownership: %v", err)
-	}
-	if len(revoked) != 3 || revoked[0].FileName != "auth-a.json" || revoked[1].FileName != "auth-a.json" || revoked[2].FileName != "auth-a.json" {
-		t.Fatalf("revoked ownership = %#v", revoked)
-	}
-	items, err := st.ListCodexInspectionDisableOwnership(context.Background())
-	if err != nil {
-		t.Fatalf("list ownership: %v", err)
-	}
-	if len(items) != 1 || items[0].FileName != "auth-b.json" {
-		t.Fatalf("ownership = %#v, want auth-b only", items)
-	}
-	if err := service.restoreInspectionOwnership(context.Background(), revoked); err != nil {
-		t.Fatalf("restore ownership: %v", err)
-	}
-	items, err = st.ListCodexInspectionDisableOwnership(context.Background())
-	if err != nil {
-		t.Fatalf("list ownership after restore: %v", err)
-	}
-	if len(items) != 4 {
-		t.Fatalf("ownership after restore = %#v, want 4 items", items)
-	}
-}
 
-func TestStatusMutationRemovesExactAndCompatibleLegacyInspectionOwnership(t *testing.T) {
-	st, err := store.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	items := []model.CodexInspectionDisableOwnership{
-		{FileName: "shared.json", Provider: "codex", AuthIndex: "auth-1", AccountID: "account-1"},
-		{FileName: "shared.json", Provider: "codex", AuthIndex: "auth-2", AccountID: "account-2"},
-		{FileName: "shared.json"},
-		{FileName: "shared.json", Provider: "codex", AuthIndex: "auth-1"},
-		{FileName: "shared.json", Provider: "codex", AccountID: "account-1"},
-	}
-	for _, item := range items {
-		if err := st.UpsertCodexInspectionDisableOwnership(context.Background(), item); err != nil {
-			t.Fatalf("save ownership %#v: %v", item, err)
-		}
-	}
-	provider := "codex"
-	authIndex := "auth-1"
-	accountID := "account-1"
-	mutation := authFileOwnershipMutation{
-		ownershipTargets: []model.CodexInspectionDisableOwnershipTarget{{
-			FileName:  "shared.json",
-			Provider:  &provider,
-			AuthIndex: &authIndex,
-			AccountID: &accountID,
-		}},
-	}
-	service := New(nil, st)
-	revoked, err := service.revokeInspectionOwnership(context.Background(), mutation)
-	if err != nil {
-		t.Fatalf("revoke exact ownership: %v", err)
-	}
-	if len(revoked) != 4 {
-		t.Fatalf("revoked ownership = %#v, want exact and compatible legacy wildcards", revoked)
-	}
-	if err := service.restoreInspectionOwnership(
-		context.Background(),
-		ownershipItemsNotMutated(revoked, mutation),
-	); err != nil {
-		t.Fatalf("restore non-target ownership: %v", err)
-	}
-	remaining, err := st.ListCodexInspectionDisableOwnership(context.Background())
-	if err != nil {
-		t.Fatalf("list remaining ownership: %v", err)
-	}
-	if len(remaining) != 1 {
-		t.Fatalf("remaining ownership = %#v, want sibling only", remaining)
-	}
-	for _, item := range remaining {
-		if item.AuthIndex == "auth-1" && item.AccountID == "account-1" {
-			t.Fatalf("target ownership was restored: %#v", remaining)
-		}
-		if item.AuthIndex == "" || item.AccountID == "" {
-			t.Fatalf("legacy wildcard ownership was restored: %#v", remaining)
-		}
-	}
-}
+
+
+
+
+
 
 func TestReadAndRestoreRequestBodyRejectsOversizedBody(t *testing.T) {
 	req, err := http.NewRequest(http.MethodPost, "/v0/management/auth-files", strings.NewReader("12345"))
@@ -1510,114 +1338,15 @@ func TestReadAndRestoreRequestBodyRejectsOversizedBody(t *testing.T) {
 	}
 }
 
-func TestOwnershipItemsNotMutatedRestoresOnlyFailedFiles(t *testing.T) {
-	items := []store.CodexInspectionDisableOwnership{
-		{FileName: "auth-a.json", AuthIndex: "auth-1"},
-		{FileName: "auth-a.json", AuthIndex: "auth-2"},
-		{FileName: "auth-a.json"},
-		{FileName: "auth-b.json"},
-	}
-	remaining := ownershipItemsNotMutated(items, authFileOwnershipMutation{
-		fileNames: []string{"auth-a.json"},
-	})
-	if len(remaining) != 1 || remaining[0].FileName != "auth-b.json" {
-		t.Fatalf("remaining ownership = %#v", remaining)
-	}
-}
 
-func TestOwnershipItemsNotMutatedKeepsSameFileSiblingsForExactTarget(t *testing.T) {
-	provider := "codex"
-	authIndex := "auth-1"
-	accountID := "account-1"
-	items := []store.CodexInspectionDisableOwnership{
-		{FileName: "shared.json", Provider: "codex", AuthIndex: "auth-1", AccountID: "account-1"},
-		{FileName: "shared.json", Provider: "codex", AuthIndex: "auth-2", AccountID: "account-2"},
-		{FileName: "shared.json"},
-		{FileName: "shared.json", Provider: "codex", AuthIndex: "auth-1"},
-		{FileName: "shared.json", Provider: "codex", AccountID: "account-1"},
-	}
-	remaining := ownershipItemsNotMutated(items, authFileOwnershipMutation{
-		ownershipTargets: []model.CodexInspectionDisableOwnershipTarget{{
-			FileName:  "shared.json",
-			Provider:  &provider,
-			AuthIndex: &authIndex,
-			AccountID: &accountID,
-		}},
-	})
-	if len(remaining) != 1 || remaining[0].AuthIndex != "auth-2" {
-		t.Fatalf("remaining ownership = %#v, want sibling only", remaining)
-	}
-}
 
-func TestOwnershipItemsNotMutatedKeepsSnapshotFallbackSibling(t *testing.T) {
-	provider := "codex"
-	authIndex := ""
-	accountID := ""
-	accountSnapshot := "alice@example.com"
-	items := []store.CodexInspectionDisableOwnership{
-		{FileName: "shared.json", Provider: "codex", AccountSnapshot: "alice@example.com"},
-		{FileName: "shared.json", Provider: "codex", AccountSnapshot: "bob@example.com"},
-		{FileName: "shared.json", Provider: "codex"},
-	}
-	remaining := ownershipItemsNotMutated(items, authFileOwnershipMutation{
-		ownershipTargets: []model.CodexInspectionDisableOwnershipTarget{{
-			FileName:        "shared.json",
-			Provider:        &provider,
-			AuthIndex:       &authIndex,
-			AccountID:       &accountID,
-			AccountSnapshot: &accountSnapshot,
-		}},
-	})
-	if len(remaining) != 1 || remaining[0].AccountSnapshot != "bob@example.com" {
-		t.Fatalf("remaining ownership = %#v, want bob only", remaining)
-	}
-}
 
-func TestOwnershipItemsNotMutatedKeepsDifferentSnapshotWhenTargetHasAccountID(t *testing.T) {
-	provider := "codex"
-	authIndex := "auth-1"
-	accountID := "account-alice"
-	accountSnapshot := "alice@example.com"
-	items := []store.CodexInspectionDisableOwnership{
-		{FileName: "shared.json", Provider: "codex", AuthIndex: "auth-1", AccountSnapshot: "alice@example.com"},
-		{FileName: "shared.json", Provider: "codex", AuthIndex: "auth-1", AccountSnapshot: "bob@example.com"},
-		{FileName: "shared.json", Provider: "codex", AuthIndex: "auth-1"},
-	}
-	remaining := ownershipItemsNotMutated(items, authFileOwnershipMutation{
-		ownershipTargets: []model.CodexInspectionDisableOwnershipTarget{{
-			FileName:        "shared.json",
-			Provider:        &provider,
-			AuthIndex:       &authIndex,
-			AccountID:       &accountID,
-			AccountSnapshot: &accountSnapshot,
-		}},
-	})
-	if len(remaining) != 1 || remaining[0].AccountSnapshot != "bob@example.com" {
-		t.Fatalf("remaining ownership = %#v, want different snapshot only", remaining)
-	}
-}
 
-func TestOwnershipItemsNotMutatedTreatsEmptyProviderAsLegacyWildcard(t *testing.T) {
-	provider := "xai"
-	authIndex := "auth-1"
-	accountID := "account-1"
-	items := []store.CodexInspectionDisableOwnership{
-		{FileName: "shared.json", Provider: "xai", AuthIndex: "auth-1", AccountID: "account-1"},
-		{FileName: "shared.json", AuthIndex: "auth-1", AccountID: "account-1"},
-		{FileName: "shared.json", Provider: "codex", AuthIndex: "auth-1", AccountID: "account-1"},
-	}
-	remaining := ownershipItemsNotMutated(items, authFileOwnershipMutation{
-		ownershipTargets: []model.CodexInspectionDisableOwnershipTarget{{
-			FileName:  "shared.json",
-			Provider:  &provider,
-			AuthIndex: &authIndex,
-			AccountID: &accountID,
-		}},
-	})
-	if len(remaining) != 1 || remaining[0].Provider != "codex" {
-		t.Fatalf("remaining ownership = %#v, want incompatible provider only", remaining)
-	}
-}
+
+
+
+
+
 
 func TestIsManagementPath(t *testing.T) {
 	tests := []struct {

@@ -18,7 +18,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/model"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/cpaauthfiles"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/managerconfig"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/store"
@@ -30,9 +29,25 @@ type Service struct {
 	authFileMutations    *cpaauthfiles.MutationCoordinator
 }
 
+type authFileOwnershipTarget struct {
+	FileName        string
+	Provider        *string
+	AuthIndex       *string
+	AccountID       *string
+	AccountSnapshot *string
+}
+
+type authFileOwnedFile struct {
+	FileName        string
+	Provider        string
+	AuthIndex       string
+	AccountID       string
+	AccountSnapshot string
+}
+
 type authFileOwnershipMutation struct {
 	fileNames        []string
-	ownershipTargets []model.CodexInspectionDisableOwnershipTarget
+	ownershipTargets []authFileOwnershipTarget
 	clearAll         bool
 	lockAll          bool
 	statusMutation   *authFileStatusMutation
@@ -372,22 +387,14 @@ func (s *Service) prepareAuthFileMutation(
 	return s.prepareAuthFileWriteMutation(ctx, setup, prepared)
 }
 
-func (s *Service) revokeInspectionOwnership(ctx context.Context, mutation authFileOwnershipMutation) ([]store.CodexInspectionDisableOwnership, error) {
-	if s.store == nil || (!mutation.clearAll && len(mutation.fileNames) == 0 && len(mutation.ownershipTargets) == 0) {
-		return nil, nil
-	}
-	targets := make([]model.CodexInspectionDisableOwnershipTarget, 0, len(mutation.fileNames)+len(mutation.ownershipTargets))
-	for _, fileName := range mutation.fileNames {
-		targets = append(targets, model.CodexInspectionDisableOwnershipTarget{FileName: fileName})
-	}
-	targets = append(targets, mutation.ownershipTargets...)
-	return s.store.RevokeCodexInspectionDisableOwnership(ctx, targets, mutation.clearAll)
+func (s *Service) revokeInspectionOwnership(_ context.Context, _ authFileOwnershipMutation) ([]authFileOwnedFile, error) {
+	return nil, nil
 }
 
 func (s *Service) revokeInspectionOwnershipDetached(
 	ctx context.Context,
 	mutation authFileOwnershipMutation,
-) ([]store.CodexInspectionDisableOwnership, error) {
+) ([]authFileOwnedFile, error) {
 	persistCtx, cancel := detachedAuthFileOwnershipContext(ctx)
 	defer cancel()
 	return s.revokeInspectionOwnership(persistCtx, mutation)
@@ -466,7 +473,7 @@ func (s *Service) prepareAuthFileStatusMutation(
 	accountID := target.File.AccountID
 	accountSnapshot := target.File.AccountSnapshot
 	mutation.fileNames = nil
-	mutation.ownershipTargets = []model.CodexInspectionDisableOwnershipTarget{{
+	mutation.ownershipTargets = []authFileOwnershipTarget{{
 		FileName:        target.File.Name,
 		Provider:        &provider,
 		AuthIndex:       &authIndex,
@@ -643,14 +650,11 @@ func (s *Service) prepareAuthFileWriteMutation(
 	return mutation, nil
 }
 
-func (s *Service) restoreInspectionOwnership(ctx context.Context, items []store.CodexInspectionDisableOwnership) error {
-	if s.store == nil || len(items) == 0 {
-		return nil
-	}
-	return s.store.RestoreCodexInspectionDisableOwnership(ctx, items)
+func (s *Service) restoreInspectionOwnership(_ context.Context, _ []authFileOwnedFile) error {
+	return nil
 }
 
-func (s *Service) restoreInspectionOwnershipDetached(ctx context.Context, items []store.CodexInspectionDisableOwnership) error {
+func (s *Service) restoreInspectionOwnershipDetached(ctx context.Context, items []authFileOwnedFile) error {
 	persistCtx, cancel := detachedAuthFileOwnershipContext(ctx)
 	defer cancel()
 	return s.restoreInspectionOwnership(persistCtx, items)
@@ -1148,7 +1152,7 @@ func filterAuthFileOwnershipMutation(mutation authFileOwnershipMutation, fileNam
 			filteredFileNames = append(filteredFileNames, fileName)
 		}
 	}
-	ownershipTargets := make([]model.CodexInspectionDisableOwnershipTarget, 0, len(mutation.ownershipTargets))
+	ownershipTargets := make([]authFileOwnershipTarget, 0, len(mutation.ownershipTargets))
 	for _, target := range mutation.ownershipTargets {
 		if _, ok := allowed[strings.TrimSpace(target.FileName)]; ok {
 			ownershipTargets = append(ownershipTargets, target)
@@ -1161,7 +1165,7 @@ func filterAuthFileOwnershipMutation(mutation authFileOwnershipMutation, fileNam
 	}
 }
 
-func ownershipFileNames(items []store.CodexInspectionDisableOwnership) []string {
+func ownershipFileNames(items []authFileOwnedFile) []string {
 	fileNames := make([]string, 0, len(items))
 	for _, item := range items {
 		fileNames = append(fileNames, item.FileName)
@@ -1169,11 +1173,11 @@ func ownershipFileNames(items []store.CodexInspectionDisableOwnership) []string 
 	return normalizeFileNames(fileNames)
 }
 
-func ownershipItemsNotMutated(items []store.CodexInspectionDisableOwnership, mutation authFileOwnershipMutation) []store.CodexInspectionDisableOwnership {
+func ownershipItemsNotMutated(items []authFileOwnedFile, mutation authFileOwnershipMutation) []authFileOwnedFile {
 	if mutation.clearAll {
 		return nil
 	}
-	result := make([]store.CodexInspectionDisableOwnership, 0, len(items))
+	result := make([]authFileOwnedFile, 0, len(items))
 	for _, item := range items {
 		if !authFileOwnershipMutationMatchesItem(mutation, item) {
 			result = append(result, item)
@@ -1182,7 +1186,7 @@ func ownershipItemsNotMutated(items []store.CodexInspectionDisableOwnership, mut
 	return result
 }
 
-func authFileOwnershipMutationMatchesItem(mutation authFileOwnershipMutation, item store.CodexInspectionDisableOwnership) bool {
+func authFileOwnershipMutationMatchesItem(mutation authFileOwnershipMutation, item authFileOwnedFile) bool {
 	for _, fileName := range mutation.fileNames {
 		if item.FileName == fileName {
 			return true
@@ -1196,7 +1200,7 @@ func authFileOwnershipMutationMatchesItem(mutation authFileOwnershipMutation, it
 	return false
 }
 
-func ownershipTargetMatchesItem(target model.CodexInspectionDisableOwnershipTarget, item store.CodexInspectionDisableOwnership) bool {
+func ownershipTargetMatchesItem(target authFileOwnershipTarget, item authFileOwnedFile) bool {
 	if strings.TrimSpace(target.FileName) != strings.TrimSpace(item.FileName) {
 		return false
 	}

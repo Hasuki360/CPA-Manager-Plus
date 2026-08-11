@@ -99,11 +99,6 @@ func runServer() {
 
 	serverApp := httpapi.New(cfg, db, manager)
 	serverApp.AppContext().DatabaseMaintenance = walMaintenance
-	recoveryCtx, cancelRecovery := context.WithTimeout(context.Background(), 10*time.Second)
-	if err := serverApp.AppContext().CodexInspectionService.Recover(recoveryCtx); err != nil {
-		log.Printf("recover codex inspection runs: %v", err)
-	}
-	cancelRecovery()
 	if err := serverApp.AppContext().UsageService.StartImportSessionCleanup(ctx); err != nil {
 		log.Fatalf("start usage import session cleanup: %v", err)
 	}
@@ -187,8 +182,6 @@ func runServer() {
 	if err != nil {
 		log.Fatalf("http listen: %v", err)
 	}
-	codexInspectionWorker := worker.NewCodexInspectionWorker(serverApp.AppContext().Store, serverApp.AppContext().CodexInspectionService)
-	codexInspectionWorker.Start(ctx)
 	serverResult := make(chan error, 1)
 	go func() {
 		log.Printf("cpa-manager-plus listening on %s", listener.Addr())
@@ -219,7 +212,6 @@ func runServer() {
 		// shutdown even when the HTTP listener, rather than a signal, initiated it.
 		stop()
 	}
-	stopCodexInspectionWorker(codexInspectionWorker, 20*time.Second)
 	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancelShutdown()
 	collectorWorker.Stop(context.Background())
@@ -231,27 +223,6 @@ func runServer() {
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Printf("shutdown: %v", err)
 	}
-}
-
-type codexInspectionStopper interface {
-	StopAndWait(context.Context) error
-}
-
-func stopCodexInspectionWorker(stopper codexInspectionStopper, timeout time.Duration) {
-	if stopper == nil {
-		return
-	}
-	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), timeout)
-	err := stopper.StopAndWait(shutdownCtx)
-	cancelShutdown()
-	if err == nil {
-		return
-	}
-	// Shutdown must remain bounded. The worker has already fenced new starts and
-	// cancelled owned work; if it still cannot finish within the grace period,
-	// leave an explicit error for the supervisor and let startup recovery reclaim
-	// the expired lease instead of hanging the process indefinitely.
-	log.Printf("shutdown codex inspection worker: %v; continuing bounded process shutdown", err)
 }
 
 func newPprofServer(addr string) (*http.Server, error) {

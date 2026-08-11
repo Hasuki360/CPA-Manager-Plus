@@ -434,26 +434,6 @@ func TestManagerConfigRejectsPollIntervalAboveRetention(t *testing.T) {
 	}
 }
 
-func TestManagerConfigRejectsInvalidCodexInspectionTimeZone(t *testing.T) {
-	handler := newTestHandler(t, "http://example.test", false)
-	body := bytes.NewBufferString(`{"config":{"collector":{"enabled":false},"codexInspection":{"schedule":{"mode":"time_points","timePoints":["09:00"],"timeZone":"Mars/Olympus"}},"externalUsageService":{"enabled":false}}}`)
-	req := httptest.NewRequest(http.MethodPut, "/usage-service/config", body)
-	req.Header.Set("Authorization", "Bearer "+testutil.AdminKey)
-	rr := httptest.NewRecorder()
-
-	handler.ServeHTTP(rr, req)
-
-	if rr.Code != http.StatusBadRequest {
-		t.Fatalf("save status = %d, body = %s", rr.Code, rr.Body.String())
-	}
-	if !strings.Contains(rr.Body.String(), "invalid time zone") {
-		t.Fatalf("response body = %s", rr.Body.String())
-	}
-	if !strings.Contains(rr.Body.String(), `"code":"invalid_time_zone"`) {
-		t.Fatalf("response body = %s", rr.Body.String())
-	}
-}
-
 func TestManagerConfigReadsLegacySetup(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v0/management/config" && r.Header.Get("Authorization") == "Bearer management-key" {

@@ -599,12 +599,6 @@ export function MainLayout({ routeBase = '', demoMode = false }: MainLayoutProps
         shortLabel: navShortLabel('nav.quota_management', t('nav.quota_management')),
         icon: sidebarIcons.quota,
       },
-      {
-        path: '/codex-inspection',
-        label: t('nav.codex_inspection'),
-        shortLabel: navShortLabel('nav.codex_inspection', t('nav.codex_inspection')),
-        icon: sidebarIcons.codexInspection,
-      },
     ],
     operationNavItems,
     pluginResourceNavItems,

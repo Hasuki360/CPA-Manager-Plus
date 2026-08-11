@@ -26,22 +26,18 @@ import { UsageAnalyticsPage } from '@/pages/UsageAnalyticsPage';
 import { MonitoringCenterPage } from '@/pages/MonitoringCenterPage';
 import { AccountActionCandidatesPage } from '@/pages/AccountActionCandidatesPage';
 import { ModelPricesPage } from '@/pages/ModelPricesPage';
-import { CodexInspectionPage } from '@/pages/CodexInspectionPage';
-import { ServerCodexInspectionPage } from '@/pages/ServerCodexInspectionPage';
 import { ConfigPage } from '@/pages/ConfigPage';
 import { LogsPage } from '@/pages/LogsPage';
 import { PluginResourcePage } from '@/pages/PluginResourcePage';
 import { PluginsPage } from '@/pages/PluginsPage';
 import { SystemPage } from '@/pages/SystemPage';
 import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
-import { CodexInspectionModeTabs } from '@/features/monitoring/components/CodexInspectionModeTabs';
 import { usePanelFeatureAvailability } from '@/hooks/usePanelFeatureAvailability';
 import { isLogsRouteAvailable } from '@/features/logs/logFeatureAvailability';
 import { ensureRouteBasePathname, isDemoMode } from '@/features/demo/demoMode';
 import { useAuthStore, useConfigStore } from '@/stores';
-import codexInspectionStyles from '@/features/monitoring/CodexInspectionPage.module.scss';
 
-type FeatureKey = 'requestMonitoring' | 'modelPrices' | 'serverCodexInspection';
+type FeatureKey = 'requestMonitoring' | 'modelPrices';
 
 function PluginGate({ children }: { children: ReactElement }) {
   const supportsPlugin = useAuthStore((state) => state.supportsPlugin);
@@ -67,9 +63,7 @@ function FeatureGate({
   const enabled =
     feature === 'requestMonitoring'
       ? availability.requestMonitoringAvailable
-      : feature === 'modelPrices'
-        ? availability.modelPricesAvailable
-        : availability.serverCodexInspectionAvailable;
+      : availability.modelPricesAvailable;
 
   if (availability.checking) {
     return fallback ?? <LoadingSpinner />;
@@ -80,49 +74,6 @@ function FeatureGate({
   }
 
   return children;
-}
-
-function ServerCodexInspectionRouteFallback() {
-  return (
-    <div className={codexInspectionStyles.page} aria-busy="true">
-      <CodexInspectionModeTabs activeMode="server" />
-      <section
-        className={[
-          codexInspectionStyles.panel,
-          codexInspectionStyles.statusPanel,
-          codexInspectionStyles.routeSkeletonPanel,
-        ]
-          .filter(Boolean)
-          .join(' ')}
-      >
-        <div className={codexInspectionStyles.routeSkeletonHeader}>
-          <span
-            className={[
-              codexInspectionStyles.routeSkeletonLine,
-              codexInspectionStyles.routeSkeletonLineTitle,
-            ]
-              .filter(Boolean)
-              .join(' ')}
-          />
-          <span className={codexInspectionStyles.routeSkeletonPill} />
-        </div>
-        <div className={codexInspectionStyles.routeSkeletonMeta}>
-          <span className={codexInspectionStyles.routeSkeletonPill} />
-          <span className={codexInspectionStyles.routeSkeletonPill} />
-          <span className={codexInspectionStyles.routeSkeletonPillWide} />
-        </div>
-        <div className={codexInspectionStyles.routeSkeletonGrid}>
-          {Array.from({ length: 6 }).map((_, index) => (
-            <span key={index} className={codexInspectionStyles.routeSkeletonCard} />
-          ))}
-        </div>
-      </section>
-      <section className={codexInspectionStyles.routeSkeletonDetailGrid}>
-        <span className={codexInspectionStyles.routeSkeletonBlock} />
-        <span className={codexInspectionStyles.routeSkeletonBlockTall} />
-      </section>
-    </div>
-  );
 }
 
 function LogsGate({ children }: { children: ReactElement }) {
@@ -207,18 +158,6 @@ const mainRoutes: RouteObject[] = [
       </FeatureGate>
     ),
   },
-  { path: '/codex-inspection', element: <CodexInspectionPage /> },
-  {
-    path: '/codex-inspection/server',
-    element: (
-      <FeatureGate
-        feature="serverCodexInspection"
-        fallback={<ServerCodexInspectionRouteFallback />}
-      >
-        <ServerCodexInspectionPage />
-      </FeatureGate>
-    ),
-  },
   {
     path: '/model-prices',
     element: (
@@ -248,15 +187,6 @@ const mainRoutes: RouteObject[] = [
     element: (
       <FeatureGate feature="modelPrices">
         <Navigate to="/model-prices" replace />
-      </FeatureGate>
-    ),
-  },
-  { path: '/monitoring/codex-inspection', element: <Navigate to="/codex-inspection" replace /> },
-  {
-    path: '/monitoring/codex-inspection/server',
-    element: (
-      <FeatureGate feature="serverCodexInspection">
-        <Navigate to="/codex-inspection/server" replace />
       </FeatureGate>
     ),
   },
