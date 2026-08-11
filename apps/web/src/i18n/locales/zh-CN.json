@@ -3859,17 +3859,17 @@
       "不会恢复用户手动停用的登录文件"
     ],
     "antigravityQuotaCooldown_title": "Antigravity 额度冷却处理",
-    "antigravityQuotaCooldown_summary": "确认 Antigravity 短时间额度用完后，会临时停用对应登录文件，并在额度恢复后重新启用。",
+    "antigravityQuotaCooldown_summary": "确认 Antigravity 额度用完或服务端临时故障时，会临时停用对应登录文件，并在恢复后自动启用。",
     "antigravityQuotaCooldown_toggle": "启用 Antigravity 额度冷却处理",
-    "antigravityQuotaCooldown_description": "请求监控确认 Antigravity 短时间额度用完后，会临时停用对应登录文件，并在额度恢复后自动启用。",
+    "antigravityQuotaCooldown_description": "请求监控确认 Antigravity 短时间额度用完（429）后会临时停用对应登录文件，并在套餐窗口重置后自动恢复；遇到服务端临时故障（503）则临时停用 5 分钟后自动恢复。",
     "antigravityQuotaCooldown_behavior": [
       "只处理 Antigravity",
-      "只处理明确的额度用完错误",
+      "只处理明确的额度用完错误（429 / 404）",
       "必须能判断恢复时间",
       "会临时停用登录文件",
-      "重置时间后自动恢复",
-      "重置时间后自动恢复",
-      "如果冷却期间继续发生额度耗尽，会自动延长冷却时间"
+      "429 额度耗尽：套餐窗口重置后自动恢复",
+      "503 服务端超时：临时停用 5 分钟后自动恢复",
+      "冷却期间继续发生额度耗尽，会自动延长冷却时间"
     ],
     "charityModelMonitor_title": "公益站模型监控与通道自愈",
     "charityModelMonitor_summary": "通过后台监控公益站模型价格表，并在模型变化时自动调度开启或封锁通道。",

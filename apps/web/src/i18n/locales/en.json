@@ -3864,12 +3864,12 @@
     "antigravityQuotaCooldown_description": "When request monitoring confirms short-term Antigravity quota is exhausted, it temporarily pauses the matching login file and enables it again after quota recovers.",
     "antigravityQuotaCooldown_behavior": [
       "Handles Antigravity only",
-      "Handles only clear quota-exhausted errors",
+      "Handles only clear quota-exhausted errors (429 / 404)",
       "Requires a known recovery time",
       "Temporarily pauses the login file",
-      "Auto-recovers after the reset time",
-      "Restores only accounts paused by CPAMP",
-      "Does not restore login files you disabled manually"
+      "429 quota exhausted: auto-recovers after the bucket window reset",
+      "503 server timeout: temporarily pauses for 5 minutes then recovers",
+      "Extends the cooldown automatically while quota exhaustion continues"
     ],
     "charityModelMonitor_title": "Charity Site Model Monitor",
     "charityModelMonitor_summary": "Monitors charity-site model price lists and schedules channel pause or recovery when model availability changes.",
