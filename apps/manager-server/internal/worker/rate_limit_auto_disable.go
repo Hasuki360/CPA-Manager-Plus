@@ -32,8 +32,11 @@ const (
 	xaiFreeUsageCooldown          = 24 * time.Hour
 	quotaReasonCodexUsageLimit    = "codex_usage_limit_reached"
 	quotaReasonXAIFreeUsage       = "xai_free_usage_exhausted"
+	quotaReasonAntigravity503     = "antigravity_service_unavailable"
 	quotaWindowRolling24H         = "rolling_24h"
+	quotaWindowShort              = "short"
 	quotaWindowUnknown            = "unknown"
+	antigravity503Cooldown        = 5 * time.Minute
 )
 
 var antigravityQuotaCheckURLs = []string{
@@ -522,7 +525,7 @@ func (w *RateLimitAutoDisableWorker) enableDueLocked(ctx context.Context, now ti
 }
 
 func (w *RateLimitAutoDisableWorker) recoverCooldown(ctx context.Context, baseURL string, managementKey string, item store.QuotaCooldown, now time.Time) {
-	if item.Owner != model.QuotaCooldownOwnerUsage429 && item.Owner != model.QuotaCooldownOwnerXAIFreeUsage {
+	if item.Owner != model.QuotaCooldownOwnerUsage429 && item.Owner != model.QuotaCooldownOwnerXAIFreeUsage && item.Owner != model.QuotaCooldownOwnerAntigravity503 {
 		reason := "unknown owner"
 		_ = w.store.MarkQuotaCooldownSkipped(ctx, item.ID, reason)
 		log.Printf("[quota-auto-disable] skip cooldown recovery id=%d authFile=%q reason=%s owner=%q", item.ID, item.AuthFileName, reason, item.Owner)
@@ -657,7 +660,10 @@ func (w *RateLimitAutoDisableWorker) quotaAutoDisableCandidateFromEvent(ctx cont
 	}
 	var resetAt time.Time
 	var ok bool
-	if provider == "antigravity" && event.Failed && (event.FailStatusCode == http.StatusTooManyRequests || isAntigravityQuotaNotFound(event, provider)) {
+	if provider == "antigravity" && event.Failed && event.FailStatusCode == http.StatusServiceUnavailable {
+		resetAt = now.Add(antigravity503Cooldown)
+		ok = true
+	} else if provider == "antigravity" && event.Failed && (event.FailStatusCode == http.StatusTooManyRequests || isAntigravityQuotaNotFound(event, provider)) {
 		resetAt, ok = w.antigravityQuotaResetTime(ctx, baseURL, managementKey, event, fileName, now)
 	}
 	if !ok {
@@ -668,6 +674,12 @@ func (w *RateLimitAutoDisableWorker) quotaAutoDisableCandidateFromEvent(ctx cont
 	}
 	reasonCode := ""
 	windowKind := ""
+	owner := model.QuotaCooldownOwnerUsage429
+	if provider == "antigravity" && event.FailStatusCode == http.StatusServiceUnavailable {
+		reasonCode = quotaReasonAntigravity503
+		windowKind = quotaWindowShort
+		owner = model.QuotaCooldownOwnerAntigravity503
+	}
 	if provider == "codex" {
 		reasonCode = quotaReasonCodexUsageLimit
 		windowKind = codexQuotaWindowKindFromEvent(event)
@@ -685,7 +697,7 @@ func (w *RateLimitAutoDisableWorker) quotaAutoDisableCandidateFromEvent(ctx cont
 		ResetAt:         resetAt,
 		EventHash:       event.EventHash,
 		Reason:          event.FailSummary,
-		Owner:           model.QuotaCooldownOwnerUsage429,
+		Owner:           owner,
 		HTTPStatusCode:  event.FailStatusCode,
 	}, true
 }
