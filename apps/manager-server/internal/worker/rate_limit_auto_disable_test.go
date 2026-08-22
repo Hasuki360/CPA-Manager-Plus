@@ -2379,3 +2379,37 @@ func TestAntigravity503CreatesFiveMinuteCooldownCandidate(t *testing.T) {
 		t.Fatalf("httpStatusCode = %d, want %d", candidate.HTTPStatusCode, http.StatusServiceUnavailable)
 	}
 }
+
+func TestAntigravity429CreatesOneMinuteCooldownCandidateWhenNotExhausted(t *testing.T) {
+	now := time.Date(2026, 8, 23, 14, 0, 0, 0, time.UTC)
+	event := usage.Event{
+		EventHash:        "evt-antigravity-429-rpm",
+		Failed:           true,
+		FailStatusCode:   http.StatusTooManyRequests,
+		FailSummary:      "Resource has been exhausted (e.g. check quota).",
+		AuthFileSnapshot: "antigravity-auth.json",
+		AuthIndex:        "ag-1",
+		Provider:         "antigravity",
+		AccountSnapshot:  "antigravity-auth.json",
+	}
+	candidate, ok := quotaAutoDisableCandidateFromEvent(event, "http://base", "test-management-key", now)
+	if !ok {
+		t.Fatal("expected antigravity 429 to produce a cooldown candidate")
+	}
+	if candidate.Owner != model.QuotaCooldownOwnerAntigravity429 {
+		t.Fatalf("owner = %q, want %q", candidate.Owner, model.QuotaCooldownOwnerAntigravity429)
+	}
+	if candidate.ReasonCode != quotaReasonAntigravity429 {
+		t.Fatalf("reasonCode = %q, want %q", candidate.ReasonCode, quotaReasonAntigravity429)
+	}
+	if candidate.WindowKind != quotaWindowShort {
+		t.Fatalf("windowKind = %q, want %q", candidate.WindowKind, quotaWindowShort)
+	}
+	want := now.Add(antigravity429ShortCooldown)
+	if !candidate.ResetAt.Equal(want) {
+		t.Fatalf("resetAt = %v, want %v", candidate.ResetAt, want)
+	}
+	if candidate.HTTPStatusCode != http.StatusTooManyRequests {
+		t.Fatalf("httpStatusCode = %d, want %d", candidate.HTTPStatusCode, http.StatusTooManyRequests)
+	}
+}

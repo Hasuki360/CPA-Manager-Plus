@@ -4,6 +4,7 @@ const (
 	QuotaCooldownOwnerUsage429          = "cpamp_usage_429"
 	QuotaCooldownOwnerXAIFreeUsage      = "cpamp_xai_free_usage"
 	QuotaCooldownOwnerAntigravity503    = "cpamp_antigravity_503"
+	QuotaCooldownOwnerAntigravity429    = "cpamp_antigravity_429"
 
 	QuotaCooldownStatusActive    = "active"
 	QuotaCooldownStatusRecovered = "recovered"
