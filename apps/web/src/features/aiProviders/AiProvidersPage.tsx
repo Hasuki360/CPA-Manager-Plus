@@ -30,19 +30,13 @@ import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Select } from '@/components/ui/Select';
-import { ToggleSwitch } from '@/components/ui/ToggleSwitch';
-import { IconChevronDown, IconChevronUp, IconRefreshCw } from '@/components/ui/icons';
 import { useHeaderRefresh } from '@/hooks/useHeaderRefresh';
-import { usePanelFeatureAvailability } from '@/hooks/usePanelFeatureAvailability';
 import { providersApi } from '@/services/api';
-import {
-  usageServiceApi,
-  type AccountProcessingPolicy,
-  type CharityModelMonitorProviderState,
-} from '@/services/api/usageService';
 import { useAuthStore, useConfigStore, useNotificationStore, useThemeStore } from '@/stores';
-import type {
+import {
   CloakConfig,
+  coolingPolicyToOverride,
+  type CoolingPolicy,
   GeminiKeyConfig,
   OpenAIProviderConfig,
   ProviderKeyConfig,
@@ -50,23 +44,6 @@ import type {
 import { createConfigMutationLock } from './model/configMutationLock';
 import { buildProviderDeleteSecondConfirmation } from './model/deleteConfirmation';
 import styles from './AiProvidersPage.module.scss';
-
-/** 公益站检测时间统一按东八区展示（后端存 UTC RFC3339）。 */
-function formatCharityCheckTime(value?: string | null): string {
-  if (!value?.trim()) return '暂无';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat('zh-CN', {
-    timeZone: 'Asia/Shanghai',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  }).format(date);
-}
 
 const PROVIDER_TABLE_DEFAULT_PAGE_SIZE = 10;
 const PROVIDER_TABLE_PAGE_SIZE_OPTIONS = [10, 20, 50] as const;
@@ -77,32 +54,11 @@ const DEFAULT_CLOAK_CONFIG: CloakConfig = {
   sensitiveWords: [],
 };
 
-const normalizeProviderUrl = (value?: string) => String(value ?? '').trim().replace(/\/+$/, '').toLowerCase();
-
-const findCharityStateForRow = (
-  row: ProviderRow,
-  states: CharityModelMonitorProviderState[]
-): CharityModelMonitorProviderState | null => {
-  if (row.kind !== 'codex' && row.kind !== 'claude') return null;
-  const rowBase = normalizeProviderUrl(row.baseUrl);
-  const rowSection = row.kind === 'codex' ? 'codex-api-key' : 'claude-api-key';
-  return (
-    states.find(
-      (state) =>
-        normalizeProviderUrl(state.provider) === rowBase &&
-        String(state.section ?? '').trim() === rowSection
-    ) ?? null
-  );
-};
-
 export function AiProvidersPage() {
   const { t } = useTranslation();
   const { showNotification, showConfirmation } = useNotificationStore();
   const resolvedTheme = useThemeStore((state) => state.resolvedTheme);
   const connectionStatus = useAuthStore((state) => state.connectionStatus);
-  const managementKey = useAuthStore((state) => state.managementKey);
-  const featureAvailability = usePanelFeatureAvailability();
-  const managerServiceBase = featureAvailability.managerServiceBase;
 
   const config = useConfigStore((state) => state.config);
   const fetchConfig = useConfigStore((state) => state.fetchConfig);
@@ -135,13 +91,6 @@ export function AiProvidersPage() {
   );
 
   const [configSwitchingKey, setConfigSwitchingKey] = useState<string | null>(null);
-  const [charityPolicy, setCharityPolicy] = useState<AccountProcessingPolicy | null>(null);
-  const [charityLoading, setCharityLoading] = useState(false);
-  const [charitySaving, setCharitySaving] = useState(false);
-  const [charityIntervalDraft, setCharityIntervalDraft] = useState(15);
-  const [charityIntervalSaving, setCharityIntervalSaving] = useState(false);
-  const [expandedCharityKeys, setExpandedCharityKeys] = useState<Set<string>>(() => new Set());
-  const [charityLoadError, setCharityLoadError] = useState('');
   const configMutationLockRef = useRef(createConfigMutationLock());
   const beginConfigMutation = useCallback((switchingKey: string) => {
     if (!configMutationLockRef.current.tryAcquire()) return false;
@@ -177,11 +126,11 @@ export function AiProvidersPage() {
     enabled: isCurrentLayer,
   });
 
-  const getErrorMessage = useCallback((err: unknown) => {
+  const getErrorMessage = (err: unknown) => {
     if (err instanceof Error) return err.message;
     if (typeof err === 'string') return err;
     return '';
-  }, []);
+  };
 
   const loadConfigs = useCallback(async () => {
     const hasValidCache = isCacheValid();
@@ -260,30 +209,6 @@ export function AiProvidersPage() {
   const handleRecentRequestsRefresh = useCallback(async () => {
     await refreshRecentRequests();
   }, [refreshRecentRequests]);
-
-  const loadCharityPolicy = useCallback(async () => {
-    if (!managerServiceBase || !managementKey) return;
-    setCharityLoading(true);
-    try {
-      const data = await usageServiceApi.getAccountProcessingPolicy(
-        managerServiceBase,
-        managementKey
-      );
-      setCharityPolicy(data);
-      setCharityLoadError('');
-      setCharityIntervalDraft(data.charityModelMonitorIntervalMinutes ?? 15);
-    } catch (err: unknown) {
-      const message = getErrorMessage(err);
-      setCharityLoadError(message ? `状态加载失败：${message}` : '状态加载失败，请稍后重试');
-    } finally {
-      setCharityLoading(false);
-    }
-  }, [getErrorMessage, managementKey, managerServiceBase]);
-
-  useEffect(() => {
-    if (!isCurrentLayer) return;
-    void loadCharityPolicy();
-  }, [isCurrentLayer, loadCharityPolicy]);
 
   useHeaderRefresh(handleRecentRequestsRefresh, isCurrentLayer);
 
@@ -396,73 +321,7 @@ export function AiProvidersPage() {
     [detailRowKey, rows]
   );
 
-  const charityProviderStates = charityPolicy?.charityModelMonitorState?.lastProviderSync ?? [];
-  const charityRows = useMemo(
-    () => rows
-      .map((row) => ({ row, state: findCharityStateForRow(row, charityProviderStates) }))
-      .filter((item): item is { row: ProviderRow; state: CharityModelMonitorProviderState } => Boolean(item.state)),
-    [charityProviderStates, rows]
-  );
-  const charityEnabled = charityPolicy?.charityModelMonitor?.enabled === true;
-  const charityInterval = charityPolicy?.charityModelMonitorIntervalMinutes ?? 15;
-  const charityIntervalUnchanged = charityIntervalDraft === charityInterval;
-
-  const updateCharityIntervalDraft = useCallback((value: string) => {
-    const parsed = Number.parseInt(value, 10);
-    setCharityIntervalDraft(Number.isFinite(parsed) ? parsed : 0);
-  }, []);
-
-  const persistCharityInterval = useCallback(async () => {
-    if (!managerServiceBase || !managementKey) return;
-    setCharityIntervalSaving(true);
-    try {
-      const data = await usageServiceApi.updateAccountProcessingPolicy(
-        managerServiceBase,
-        managementKey,
-        { charityModelMonitorIntervalMinutes: charityIntervalDraft }
-      );
-      setCharityPolicy(data);
-      setCharityIntervalDraft(data.charityModelMonitorIntervalMinutes ?? 15);
-      showNotification('公益站检查间隔已保存', 'success');
-    } catch (err: unknown) {
-      const message = getErrorMessage(err);
-      showNotification(`公益站检查间隔保存失败：${message}`, 'error');
-    } finally {
-      setCharityIntervalSaving(false);
-    }
-  }, [charityIntervalDraft, getErrorMessage, managementKey, managerServiceBase, showNotification]);
-
-  const toggleCharityMonitor = useCallback(async (enabled: boolean) => {
-    if (!managerServiceBase || !managementKey) return;
-    setCharitySaving(true);
-    try {
-      const data = await usageServiceApi.updateAccountProcessingPolicy(
-        managerServiceBase,
-        managementKey,
-        { charityModelMonitorEnabled: enabled }
-      );
-      setCharityPolicy(data);
-      showNotification(enabled ? '公益站模型监控已开启' : '公益站模型监控已关闭', 'success');
-    } catch (err: unknown) {
-      const message = getErrorMessage(err);
-      showNotification(`公益站模型监控保存失败：${message}`, 'error');
-    } finally {
-      setCharitySaving(false);
-    }
-  }, [getErrorMessage, managementKey, managerServiceBase, showNotification]);
-
-  const filtersActive =
-    kindFilter !== 'all' || searchText.trim() !== '' || selectedModels.size > 0;
-
-  const toggleCharityCard = useCallback((key: string) => {
-    setExpandedCharityKeys((current) => {
-      const next = new Set(current);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  }, []);
-
+  const filtersActive = kindFilter !== 'all' || searchText.trim() !== '' || selectedModels.size > 0;
 
   const clearFilters = () => {
     setKindFilter('all');
@@ -1012,11 +871,12 @@ export function AiProvidersPage() {
     }
   };
 
-  const setProviderDisableCoolingEnabled = async (
-    provider: 'gemini' | 'interactions' | 'codex' | 'xai' | 'claude' | 'openai',
+  const setProviderCoolingPolicy = async (
+    provider: 'gemini' | 'interactions' | 'codex' | 'xai' | 'claude' | 'vertex' | 'openai',
     index: number,
-    enabled: boolean
+    policy: CoolingPolicy
   ) => {
+    const disableCooling = coolingPolicyToOverride(policy);
     if (provider === 'gemini' || provider === 'interactions') {
       const source = provider === 'gemini' ? geminiKeys : interactionsKeys;
       const current = source[index];
@@ -1026,7 +886,7 @@ export function AiProvidersPage() {
       if (!beginConfigMutation(switchingKey)) return;
 
       const previousList = source;
-      const nextItem: GeminiKeyConfig = { ...current, disableCooling: enabled };
+      const nextItem: GeminiKeyConfig = { ...current, disableCooling };
       const nextList = previousList.map((item, idx) => (idx === index ? nextItem : item));
 
       if (provider === 'gemini') {
@@ -1080,7 +940,7 @@ export function AiProvidersPage() {
       if (!beginConfigMutation(switchingKey)) return;
 
       const previousList = openaiProviders;
-      const nextItem: OpenAIProviderConfig = { ...current, disableCooling: enabled };
+      const nextItem: OpenAIProviderConfig = { ...current, disableCooling };
       const nextList = previousList.map((item, idx) => (idx === index ? nextItem : item));
 
       setOpenaiProviders(nextList);
@@ -1104,7 +964,13 @@ export function AiProvidersPage() {
     }
 
     const source =
-      provider === 'codex' ? codexConfigs : provider === 'xai' ? xaiConfigs : claudeConfigs;
+      provider === 'codex'
+        ? codexConfigs
+        : provider === 'xai'
+          ? xaiConfigs
+          : provider === 'vertex'
+            ? vertexConfigs
+            : claudeConfigs;
     const current = source[index];
     if (!current) return;
 
@@ -1112,7 +978,7 @@ export function AiProvidersPage() {
     if (!beginConfigMutation(switchingKey)) return;
 
     const previousList = source;
-    const nextItem: ProviderKeyConfig = { ...current, disableCooling: enabled };
+    const nextItem: ProviderKeyConfig = { ...current, disableCooling };
     const nextList = previousList.map((item, idx) => (idx === index ? nextItem : item));
 
     if (provider === 'codex') {
@@ -1123,6 +989,10 @@ export function AiProvidersPage() {
       setXAIConfigs(nextList);
       updateConfigValue('xai-api-key', nextList);
       clearCache('xai-api-key');
+    } else if (provider === 'vertex') {
+      setVertexConfigs(nextList);
+      updateConfigValue('vertex-api-key', nextList);
+      clearCache('vertex-api-key');
     } else {
       setClaudeConfigs(nextList);
       updateConfigValue('claude-api-key', nextList);
@@ -1138,6 +1008,10 @@ export function AiProvidersPage() {
         await providersApi.updateXAIConfig(current, nextItem);
         await loadConfigs();
         showNotification(t('notification.xai_config_updated'), 'success');
+      } else if (provider === 'vertex') {
+        await providersApi.updateVertexConfig(current, nextItem);
+        await loadConfigs();
+        showNotification(t('notification.vertex_config_updated'), 'success');
       } else {
         await providersApi.updateClaudeConfig(current, nextItem);
         await loadConfigs();
@@ -1153,6 +1027,10 @@ export function AiProvidersPage() {
         setXAIConfigs(previousList);
         updateConfigValue('xai-api-key', previousList);
         clearCache('xai-api-key');
+      } else if (provider === 'vertex') {
+        setVertexConfigs(previousList);
+        updateConfigValue('vertex-api-key', previousList);
+        clearCache('vertex-api-key');
       } else {
         setClaudeConfigs(previousList);
         updateConfigValue('claude-api-key', previousList);
@@ -1518,18 +1396,19 @@ export function AiProvidersPage() {
     void setProviderCloakEnabled(row.kind, row.originalIndex, enabled);
   };
 
-  const handleRowDisableCoolingToggle = (row: ProviderRow, enabled: boolean) => {
+  const handleRowCoolingPolicyChange = (row: ProviderRow, policy: CoolingPolicy) => {
     if (
       row.kind !== 'gemini' &&
       row.kind !== 'interactions' &&
       row.kind !== 'codex' &&
       row.kind !== 'xai' &&
       row.kind !== 'claude' &&
+      row.kind !== 'vertex' &&
       row.kind !== 'openai'
     ) {
       return;
     }
-    void setProviderDisableCoolingEnabled(row.kind, row.originalIndex, enabled);
+    void setProviderCoolingPolicy(row.kind, row.originalIndex, policy);
   };
 
   const handleRowPriorityChange = (row: ProviderRow, priority: number) => {
@@ -1600,149 +1479,6 @@ export function AiProvidersPage() {
     <div className={styles.container}>
       <div className={styles.content}>
         {error && <div className="error-box">{error}</div>}
-
-        <Card className={styles.charityMonitorCard}>
-          <div className={styles.charityMonitorHeader}>
-            <div>
-              <h3>公益站模型监控与通道自愈</h3>
-              <p>
-                从 AI 提供商读取 Codex / Claude 通道，优先按自定义模型检查：有可用则保持通道开启并排除缺失模型，全部缺失才整通道关闭；恢复后自动拉回。
-              </p>
-            </div>
-            <div className={styles.charityMonitorActions}>
-              <ToggleSwitch
-                checked={charityEnabled}
-                onChange={(value) => void toggleCharityMonitor(value)}
-                disabled={actionsDisabled || charitySaving || charityLoading || !managerServiceBase}
-                ariaLabel="公益站模型监控总开关"
-              />
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => void loadCharityPolicy()}
-                disabled={charityLoading || !managerServiceBase}
-              >
-                <IconRefreshCw size={14} />
-                刷新状态
-              </Button>
-            </div>
-          </div>
-          <div className={styles.charityMonitorSummary}>
-            <div className={styles.charityMonitorSummaryTags}>
-              <span>总开关：{charityEnabled ? '已开启' : '已关闭'}</span>
-              <span>最近检测：{formatCharityCheckTime(charityPolicy?.charityModelMonitorState?.lastCheck)}</span>
-              <span>Codex 版本：{charityPolicy?.charityModelMonitorState?.lastCodexCliVersion || '等待同步'}</span>
-              <span>历史轮次：{charityPolicy?.charityModelMonitorState?.history?.length ?? 0}</span>
-            </div>
-            <div className={styles.charityIntervalInline}>
-              <label className={styles.charityIntervalInlineField}>
-                <span>检查间隔（分钟）</span>
-                <input
-                  type="number"
-                  min={5}
-                  max={1440}
-                  value={charityIntervalDraft}
-                  onChange={(event) => updateCharityIntervalDraft(event.target.value)}
-                  aria-label="公益站检查间隔（分钟）"
-                />
-              </label>
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => void persistCharityInterval()}
-                disabled={
-                  charityIntervalSaving ||
-                  charityIntervalUnchanged ||
-                  !managerServiceBase ||
-                  charityIntervalDraft < 5 ||
-                  charityIntervalDraft > 1440
-                }
-              >
-                保存
-              </Button>
-            </div>
-          </div>
-          {charityLoadError ? (
-            <div className={styles.charityMonitorNotice}>{charityLoadError}</div>
-          ) : null}
-          {charityRows.length > 0 ? (
-            <div className={styles.charityMonitorGrid}>
-              {charityRows.map(({ row, state }) => {
-                const cardKey = `${row.key}:charity`;
-                const expanded = expandedCharityKeys.has(cardKey);
-                return (
-                  <section
-                    className={expanded ? styles.charityProviderCardExpanded : styles.charityProviderCard}
-                    key={cardKey}
-                  >
-                    <button
-                      type="button"
-                      className={styles.charityProviderToggle}
-                      onClick={() => toggleCharityCard(cardKey)}
-                      aria-expanded={expanded}
-                    >
-                      <div className={styles.charityProviderTitle}>
-                        <strong>
-                          {state.site} / {state.label}
-                        </strong>
-                        <span className={state.desiredEnabled ? styles.charityStatusOn : styles.charityStatusOff}>
-                          {state.desiredEnabled ? '应开启' : '应关闭'}
-                        </span>
-                      </div>
-                      <span className={styles.charityProviderChevron} aria-hidden="true">
-                        {expanded ? <IconChevronUp size={14} /> : <IconChevronDown size={14} />}
-                      </span>
-                    </button>
-                    {expanded ? (
-                      <div className={styles.charityProviderBody}>
-                        <p>{row.baseUrl}</p>
-                        <div className={styles.charityProviderMeta}>
-                          <span>
-                            检查范围：
-                            {state.checkMode === 'custom'
-                              ? `自定义模型 ${state.customModels?.length ?? 0} 个`
-                              : `${row.kind === 'codex' ? 'gpt-*' : 'claude-*'}`}
-                          </span>
-                          <span>可用：{state.matchedModels?.length ?? 0} 个</span>
-                          <span>缺失：{state.missingModels?.length ?? 0} 个</span>
-                          <span>已排除：{state.excludedModels?.length ?? 0} 个</span>
-                          <span>动作：{state.reason || (state.changed ? '已同步' : '无变化')}</span>
-                          {state.headersChanged ? <span>请求头已同步</span> : null}
-                        </div>
-                        {state.matchedModels?.length ? (
-                          <p className={styles.charityProviderDetail}>
-                            可用模型：{state.matchedModels.join(', ')}
-                          </p>
-                        ) : null}
-                        {state.missingModels?.length ? (
-                          <p className={styles.charityProviderDetail}>
-                            缺失模型：{state.missingModels.join(', ')}
-                          </p>
-                        ) : null}
-                        {state.excludedModels?.length ? (
-                          <p className={styles.charityProviderDetail}>
-                            排除列表：{state.excludedModels.join(', ')}
-                          </p>
-                        ) : null}
-                      </div>
-                    ) : null}
-                  </section>
-                );
-              })}
-            </div>
-          ) : (
-            <p className={styles.charityMonitorEmpty}>
-              暂无最近自愈结果。开启总开关后，worker 下次运行会按 AI 提供商自动匹配薄荷 / AnyRouter。
-            </p>
-          )}
-          {charityPolicy?.charityModelMonitorState?.lastProviderError?.length ? (
-            <div className={styles.charityMonitorErrors}>
-              {charityPolicy.charityModelMonitorState.lastProviderError.map((line) => (
-                <span key={line}>{line}</span>
-              ))}
-            </div>
-          ) : null}
-        </Card>
 
         <div>
           <ProviderToolbar
@@ -1845,7 +1581,7 @@ export function AiProvidersPage() {
         onToggle={handleRowToggle}
         onToggleWebsockets={handleRowWebsocketsToggle}
         onToggleCloak={handleRowCloakToggle}
-        onToggleDisableCooling={handleRowDisableCoolingToggle}
+        onToggleDisableCooling={handleRowCoolingPolicyChange}
       />
       <ProviderHealthCheckDrawer
         open={healthCheckOpen}
