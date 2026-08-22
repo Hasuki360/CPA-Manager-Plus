@@ -148,10 +148,14 @@ export type MonitoringEventRow = {
   dayKey: string;
   hourLabel: string;
   model: string;
+  requestedModel?: string;
   resolvedModel?: string;
   endpoint: string;
   endpointMethod: string;
   endpointPath: string;
+  clientIp?: string;
+  xForwardedFor?: string;
+  userAgent?: string;
   sourceKey: string;
   source: string;
   sourceMasked: string;
@@ -351,6 +355,7 @@ export interface MonitoringScopeFilters {
   account?: string;
   provider?: string;
   authFile?: string;
+  authIndex?: string;
   projectId?: string;
   requestType?: string;
   model?: string;

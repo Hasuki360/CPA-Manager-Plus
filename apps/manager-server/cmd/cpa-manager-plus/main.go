@@ -19,6 +19,7 @@ import (
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/command/adminreset"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/config"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/httpapi"
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/processlock"
 	sqliterepo "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/sqlite"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/security"
 	bootstrapservice "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/bootstrap"
@@ -46,6 +47,16 @@ func runServer() {
 	if err != nil {
 		log.Fatalf("load config: %v", err)
 	}
+	databaseLock, err := processlock.Acquire(cfg.DBPath)
+	if err != nil {
+		log.Fatalf("acquire manager database process lock: %v", err)
+	}
+	defer func() {
+		if err := databaseLock.Close(); err != nil {
+			log.Printf("close manager database process lock: %v", err)
+		}
+	}()
+	cfg.DBPath = databaseLock.DatabasePath()
 	dataKey, dataKeyCreated, err := security.LoadOrCreateDataKey(cfg.DataKey, cfg.DataKeyPath)
 	if err != nil {
 		log.Fatalf("load data key: %v", err)
