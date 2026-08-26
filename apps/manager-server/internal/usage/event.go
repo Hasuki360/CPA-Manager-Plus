@@ -796,13 +796,6 @@ func readFailFields(record map[string]any) (int64, string) {
 			body = compacted
 		}
 	}
-	if headers, ok := compactJSON(first(record, "response_headers", "responseHeaders", "headers")); ok && headers != "{}" && headers != "[]" {
-		if body == "" {
-			body = headers
-		} else {
-			body = body + "\n" + headers
-		}
-	}
 	return statusCode, body
 }
 

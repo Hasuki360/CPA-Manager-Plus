@@ -3,6 +3,7 @@ package usagemonitoring_test
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -113,6 +114,58 @@ func TestUsageMonitoringSearchIndexTracksProjectionInsertUpdateAndDelete(t *test
 	if got := countSearchEvents("updated-marker"); got != 0 {
 		t.Fatalf("deleted search count = %d, want 0", got)
 	}
+}
+
+func TestSuccessfulResponseHeadersDoNotEnterFailureSearchStorage(t *testing.T) {
+	sqlDB, db := newMonitoringRepositoryStore(t)
+	ctx := context.Background()
+	marker := strings.Repeat("unindexed-success-header-marker-", 128)
+	payload, err := json.Marshal(map[string]any{
+		"timestamp": "2026-04-25T00:00:00Z",
+		"failed":    false,
+		"provider":  "openai",
+		"model":     "gpt-5.4",
+		"endpoint":  "POST /v1/chat/completions",
+		"tokens":    map[string]any{"input_tokens": 1, "total_tokens": 1},
+		"response_headers": map[string]any{
+			"Content-Type":                 []any{"application/json"},
+			"X-CPAMP-Unindexed-Diagnostic": []any{marker},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal successful event: %v", err)
+	}
+	event, err := usage.NormalizeRaw(payload)
+	if err != nil {
+		t.Fatalf("normalize successful event: %v", err)
+	}
+	if _, err := db.InsertEvents(ctx, []usage.Event{event}); err != nil {
+		t.Fatalf("insert successful event: %v", err)
+	}
+
+	var eventID int64
+	var failBody, failSummary, metadataJSON, rawJSON string
+	if err := sqlDB.QueryRowContext(ctx, `select id, coalesce(fail_body, ''), coalesce(fail_summary, ''),
+		coalesce(response_metadata_json, ''), coalesce(raw_json, '')
+		from usage_events where event_hash = ?`, event.EventHash).Scan(&eventID, &failBody, &failSummary, &metadataJSON, &rawJSON); err != nil {
+		t.Fatalf("read persisted successful event: %v", err)
+	}
+	if failBody != "" || failSummary != "" {
+		t.Fatalf("persisted failure fields = body:%q summary:%q", failBody, failSummary)
+	}
+	if !strings.Contains(metadataJSON, "application/json") || !strings.Contains(rawJSON, marker) {
+		t.Fatalf("persisted metadata/raw json missing: metadata=%q rawHasMarker=%v", metadataJSON, strings.Contains(rawJSON, marker))
+	}
+
+	catchUpMonitoringRepository(t, ctx, db)
+	var searchText string
+	if err := sqlDB.QueryRowContext(ctx, `select search_text from usage_monitoring_event_projection_v1 where event_id = ?`, eventID).Scan(&searchText); err != nil {
+		t.Fatalf("read successful event projection: %v", err)
+	}
+	if strings.Contains(searchText, marker) {
+		t.Fatalf("projection search text contains response header marker")
+	}
+	assertSearchIndexCount(t, ctx, sqlDB, marker, 0)
 }
 
 func TestMigrationBackfillsSearchIndexForExistingProjection(t *testing.T) {
