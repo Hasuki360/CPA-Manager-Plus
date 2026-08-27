@@ -45,4 +45,9 @@ type QuotaCooldownUpsert struct {
 	EventHash        string
 	PreDisabledState bool
 	DisabledAtMS     int64
+	// BeginNewCycle archives a matching active row before inserting this row.
+	// Callers set it only after observing that the credential is enabled, which
+	// proves the previous CPAMP-owned disabled interval has ended. The archived
+	// row records when CPAMP observed that recovery, not who enabled it.
+	BeginNewCycle bool
 }

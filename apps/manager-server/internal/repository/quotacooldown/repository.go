@@ -111,6 +111,27 @@ func (r *repository) UpsertActive(ctx context.Context, cooldown model.QuotaCoold
 			}
 		}
 	}
+	if found && cooldown.BeginNewCycle {
+		// The caller already observed this credential enabled. Record that
+		// observation at persistence time; recovered does not imply that CPAMP
+		// issued the enabling mutation itself.
+		_, err = tx.ExecContext(ctx, `update quota_cooldowns set
+			status = ?,
+			recovered_at_ms = ?,
+			last_error = null,
+			updated_at_ms = ?
+			where id = ? and status = ?`,
+			model.QuotaCooldownStatusRecovered,
+			now,
+			now,
+			id,
+			model.QuotaCooldownStatusActive,
+		)
+		if err != nil {
+			return model.QuotaCooldown{}, err
+		}
+		found = false
+	}
 	if !found {
 		res, execErr := tx.ExecContext(ctx, `insert into quota_cooldowns (
 			auth_file_name, auth_index, account_snapshot, provider, reason_code, window_kind, evidence_json, recover_at_ms,
