@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { MonitoringAnalyticsResponse } from '@/services/api/usageService';
 import { buildSourceInfoMap } from '@/utils/sourceResolver';
-import type { UsageRankRow } from './usageAnalyticsModel';
+import type { UsageRankRow, UsageTimelinePoint } from './usageAnalyticsModel';
 import {
   analyzeUsageBucket,
+  adaptUsageAnalyticsData,
   buildApiKeyTrendSeries,
   buildApiKeyRows,
   buildCredentialRows,
@@ -28,6 +29,7 @@ import {
   buildUsageCredentialTimeline,
   buildUsageApiKeyTimeline,
   buildUsageTimeline,
+  fillUsageTimelineBuckets,
   computeCacheHitRate,
   computeRowAverageCostPerCall,
   computeRowCacheHitRate,
@@ -41,6 +43,32 @@ import {
 const NOW_MS = Date.UTC(2026, 5, 4, 12, 0, 0);
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
+
+const localDateMs = (day: number, hour = 0) =>
+  new Date(2026, 7, day, hour, 0, 0, 0).getTime();
+
+const expectZeroTimelinePoint = (point: UsageTimelinePoint) => {
+  expect(point).toMatchObject({
+    requestCount: 0,
+    totalTokens: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    cachedTokens: 0,
+    cacheReadTokens: 0,
+    cacheCreationTokens: 0,
+    reasoningTokens: 0,
+    estimatedCost: 0,
+    successCount: 0,
+    failureCount: 0,
+    successRate: 0,
+    failureRate: 0,
+    cacheHitRate: 0,
+    averageTokensPerRequest: 0,
+  });
+  expect(point.averageLatencyMs).toBeNull();
+  expect(point.p95LatencyMs).toBeNull();
+  expect(point.p95TtftMs).toBeNull();
+};
 
 describe('usage analytics request model', () => {
   it('resolves time ranges and default granularity rules', () => {
@@ -166,6 +194,123 @@ describe('usage analytics request model', () => {
 });
 
 describe('usage analytics adapters', () => {
+  it('fills a missing middle hourly bucket with zero metrics', () => {
+    const fromMs = localDateMs(10, 10);
+    const toMs = localDateMs(10, 13);
+    const timeline = fillUsageTimelineBuckets(
+      buildUsageTimeline(
+        [
+          { bucket_ms: fromMs, label: '', calls: 2, tokens: 20, success: 2, failure: 0 },
+          {
+            bucket_ms: fromMs + 2 * HOUR_MS,
+            label: '',
+            calls: 3,
+            tokens: 30,
+            success: 3,
+            failure: 0,
+          },
+        ],
+        'hour'
+      ),
+      { fromMs, toMs },
+      'hour'
+    );
+
+    expect(timeline.map((point) => point.bucketMs)).toEqual([
+      fromMs,
+      fromMs + HOUR_MS,
+      fromMs + 2 * HOUR_MS,
+    ]);
+    expectZeroTimelinePoint(timeline[1]);
+    expect(timeline[1].bucketEndMs).toBe(fromMs + 2 * HOUR_MS);
+  });
+
+  it('fills missing daily buckets and respects the exclusive range end', () => {
+    const fromMs = localDateMs(10);
+    const toMs = localDateMs(13);
+    const timeline = fillUsageTimelineBuckets(
+      buildUsageTimeline(
+        [
+          { bucket_ms: fromMs, label: '', calls: 1, tokens: 10, success: 1, failure: 0 },
+          {
+            bucket_ms: localDateMs(12),
+            label: '',
+            calls: 2,
+            tokens: 20,
+            success: 2,
+            failure: 0,
+          },
+        ],
+        'day'
+      ),
+      { fromMs, toMs },
+      'day'
+    );
+
+    expect(timeline.map((point) => point.bucketMs)).toEqual([
+      localDateMs(10),
+      localDateMs(11),
+      localDateMs(12),
+    ]);
+    expectZeroTimelinePoint(timeline[1]);
+    expect(timeline.some((point) => point.bucketMs === toMs)).toBe(false);
+  });
+
+  it('fills both leading and trailing buckets without changing real points', () => {
+    const fromMs = localDateMs(10);
+    const toMs = localDateMs(14);
+    const realPoint = buildUsageTimeline(
+      [{ bucket_ms: localDateMs(12), label: '', calls: 4, tokens: 40, success: 3, failure: 1 }],
+      'day'
+    )[0];
+    const timeline = fillUsageTimelineBuckets([realPoint], { fromMs, toMs }, 'day');
+
+    expect(timeline.map((point) => point.bucketMs)).toEqual([
+      localDateMs(10),
+      localDateMs(11),
+      localDateMs(12),
+      localDateMs(13),
+    ]);
+    expectZeroTimelinePoint(timeline[0]);
+    expectZeroTimelinePoint(timeline[1]);
+    expectZeroTimelinePoint(timeline[3]);
+    expect(timeline[2]).toBe(realPoint);
+    expect(timeline[2]).toMatchObject({ requestCount: 4, totalTokens: 40, failureCount: 1 });
+  });
+
+  it('returns a complete timeline unchanged apart from ordering', () => {
+    const fromMs = localDateMs(10, 10);
+    const toMs = localDateMs(10, 13);
+    const mappedTimeline = buildUsageTimeline(
+      [
+        { bucket_ms: fromMs + 2 * HOUR_MS, label: '', calls: 3, tokens: 30, success: 3, failure: 0 },
+        { bucket_ms: fromMs, label: '', calls: 1, tokens: 10, success: 1, failure: 0 },
+        { bucket_ms: fromMs + HOUR_MS, label: '', calls: 2, tokens: 20, success: 1, failure: 1 },
+      ],
+      'hour'
+    );
+    const timeline = fillUsageTimelineBuckets(mappedTimeline, { fromMs, toMs }, 'hour');
+
+    expect(timeline).toEqual(mappedTimeline.slice().sort((left, right) => left.bucketMs - right.bucketMs));
+    expect(timeline).toHaveLength(3);
+  });
+
+  it('builds zero buckets for a successful empty analytics response', () => {
+    const fromMs = localDateMs(10, 10);
+    const toMs = localDateMs(10, 13);
+    const adapted = adaptUsageAnalyticsData(
+      { generated_at_ms: 1, granularity: 'hour', timeline: [] },
+      'hour',
+      '',
+      undefined,
+      undefined,
+      { fromMs, toMs }
+    );
+
+    expect(adapted.timeline).toHaveLength(3);
+    adapted.timeline.forEach(expectZeroTimelinePoint);
+  });
+
   it('builds heatmap chart data from non-empty valid request buckets only', () => {
     expect(
       buildUsageHeatmapChartData([
