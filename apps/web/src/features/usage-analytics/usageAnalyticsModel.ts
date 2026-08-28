@@ -975,6 +975,9 @@ export const fillUsageTimelineBuckets = (
   granularity: UsageAnalyticsResolvedGranularity
 ): UsageTimelinePoint[] => {
   const sortedTimeline = sortUsageTimeline(timeline);
+  if (sortedTimeline.length === 0) {
+    return sortedTimeline;
+  }
   if (
     !bounds ||
     !Number.isFinite(bounds.fromMs) ||
@@ -2560,6 +2563,10 @@ export const analyzeUsageBucket = (
   if (index < 0) return null;
   const point = timeline[index];
   const previousPoint = index > 0 ? timeline[index - 1] : null;
+  const comparisonPoint =
+    previousPoint && previousPoint.requestCount > 0 && point.requestCount > 0
+      ? previousPoint
+      : null;
   const changes = {
     requestCount: previousPoint ? percentChange(point.requestCount, previousPoint.requestCount) : 0,
     totalTokens: previousPoint ? percentChange(point.totalTokens, previousPoint.totalTokens) : 0,
@@ -2574,14 +2581,16 @@ export const analyzeUsageBucket = (
     estimatedCost: previousPoint
       ? percentChange(point.estimatedCost, previousPoint.estimatedCost)
       : 0,
-    cacheHitRate: previousPoint ? point.cacheHitRate - previousPoint.cacheHitRate : 0,
-    averageTokensPerRequest: previousPoint
-      ? percentChange(point.averageTokensPerRequest, previousPoint.averageTokensPerRequest)
+    cacheHitRate: comparisonPoint ? point.cacheHitRate - comparisonPoint.cacheHitRate : 0,
+    averageTokensPerRequest: comparisonPoint
+      ? percentChange(point.averageTokensPerRequest, comparisonPoint.averageTokensPerRequest)
       : 0,
-    failureRate: previousPoint ? point.failureRate - previousPoint.failureRate : 0,
+    failureRate: comparisonPoint ? point.failureRate - comparisonPoint.failureRate : 0,
     averageLatencyMs:
-      previousPoint && previousPoint.averageLatencyMs !== null && point.averageLatencyMs !== null
-        ? percentChange(point.averageLatencyMs, previousPoint.averageLatencyMs)
+      comparisonPoint &&
+      comparisonPoint.averageLatencyMs !== null &&
+      point.averageLatencyMs !== null
+        ? percentChange(point.averageLatencyMs, comparisonPoint.averageLatencyMs)
         : 0,
   };
   const anomalies: UsageAnomaly[] = [];

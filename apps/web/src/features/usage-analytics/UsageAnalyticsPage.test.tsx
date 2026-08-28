@@ -569,6 +569,96 @@ describe('UsageAnalyticsPage', () => {
     expect(cacheSeries?.data).toEqual([100]);
   });
 
+  it('keeps zero-request health buckets unavailable in charts and tooltips', () => {
+    const firstPoint = createTimelinePoint({
+      successRate: 0.9,
+      failureRate: 0.1,
+      averageLatencyMs: 500,
+    });
+    const emptyPoint = createTimelinePoint({
+      bucketMs: firstPoint.bucketMs + 60 * 60 * 1000,
+      bucketEndMs: firstPoint.bucketEndMs + 60 * 60 * 1000,
+      label: '06/04 13:00',
+      requestCount: 0,
+      totalTokens: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cachedTokens: 0,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+      successCount: 0,
+      failureCount: 0,
+      successRate: 0,
+      failureRate: 0,
+      averageLatencyMs: null,
+      p95LatencyMs: null,
+      p95TtftMs: null,
+      cacheHitRate: 0,
+      averageTokensPerRequest: 0,
+    });
+    const lastPoint = createTimelinePoint({
+      bucketMs: firstPoint.bucketMs + 2 * 60 * 60 * 1000,
+      bucketEndMs: firstPoint.bucketEndMs + 2 * 60 * 60 * 1000,
+      label: '06/04 14:00',
+      successCount: 10,
+      failureCount: 0,
+      successRate: 1,
+      failureRate: 0,
+      averageLatencyMs: 400,
+    });
+    mocks.usageState = createUsageState({
+      activeTab: 'trends',
+      timeline: [firstPoint, emptyPoint, lastPoint],
+      selectedBucket: null,
+      anomalyAnalysis: null,
+    });
+
+    const renderer = renderPage();
+    const healthChart = renderer.root.findAllByType(EChartsView).find((node) => {
+      const series = (node.props.option?.series ?? []) as Array<{ name?: string }>;
+      return series.some((item) => item.name === 'usage_analytics.success_rate');
+    });
+    const healthOption = healthChart?.props.option as
+      | {
+          series?: Array<{ name?: string; data?: Array<number | null> }>;
+          tooltip?: { formatter?: (params: unknown) => string };
+        }
+      | undefined;
+
+    expect(healthOption).toBeDefined();
+    const findSeriesData = (name: string) =>
+      healthOption?.series?.find((series) => series.name === name)?.data;
+    expect(findSeriesData('usage_analytics.success_rate')).toEqual([0.9, null, 1]);
+    expect(findSeriesData('usage_analytics.failure_rate')).toEqual([0.1, null, 0]);
+    expect(findSeriesData('usage_analytics.metric_average_latency')).toEqual([500, null, 400]);
+
+    const formatter = healthOption?.tooltip?.formatter;
+    if (!formatter) throw new Error('Health chart tooltip formatter not found');
+    const tooltip = formatter([
+      {
+        dataIndex: 1,
+        seriesName: 'usage_analytics.success_rate',
+        data: null,
+        marker: '',
+      },
+      {
+        dataIndex: 1,
+        seriesName: 'usage_analytics.failure_rate',
+        data: null,
+        marker: '',
+      },
+      {
+        dataIndex: 1,
+        seriesName: 'usage_analytics.metric_average_latency',
+        data: null,
+        marker: '',
+      },
+    ]);
+    expect(tooltip.match(/>-<\/strong>/g)).toHaveLength(3);
+    expect(tooltip).not.toContain('0.00%');
+    expect(tooltip).not.toContain('0ms');
+  });
+
   it('renders fine-grained cache buckets in rank tables', () => {
     const modelRow = createRankRow({
       cachedTokens: 0,

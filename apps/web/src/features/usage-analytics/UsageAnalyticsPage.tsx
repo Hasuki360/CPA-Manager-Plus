@@ -1039,11 +1039,17 @@ const buildHealthChartOption = (
       const point = typeof first?.dataIndex === 'number' ? timeline[first.dataIndex] : undefined;
       const rows = items
         .map((item) => {
-          const entry = item as { marker?: string; seriesName?: string; data?: number };
+          const entry = item as {
+            marker?: string;
+            seriesName?: string;
+            data?: number | null;
+          };
           const value =
-            entry.seriesName === t('usage_analytics.metric_average_latency')
-              ? formatUsageDurationMs(Number(entry.data ?? 0))
-              : formatPercent(Number(entry.data ?? 0));
+            entry.data === null || entry.data === undefined
+              ? '-'
+              : entry.seriesName === t('usage_analytics.metric_average_latency')
+                ? formatUsageDurationMs(entry.data)
+                : formatPercent(entry.data);
           return tooltipRowHtml(
             chartTheme,
             `${entry.marker ?? ''}${escapeHtml(entry.seriesName)}`,
@@ -1092,7 +1098,7 @@ const buildHealthChartOption = (
   ],
   series: [
     {
-      data: timeline.map((point) => point.successRate),
+      data: timeline.map((point) => (point.requestCount > 0 ? point.successRate : null)),
       lineStyle: { width: 2.5 },
       name: t('usage_analytics.success_rate'),
       showSymbol: timeline.length <= 36,
@@ -1101,7 +1107,7 @@ const buildHealthChartOption = (
       yAxisIndex: 0,
     },
     {
-      data: timeline.map((point) => point.failureRate),
+      data: timeline.map((point) => (point.requestCount > 0 ? point.failureRate : null)),
       lineStyle: { width: 2.5 },
       name: t('usage_analytics.failure_rate'),
       showSymbol: timeline.length <= 36,
@@ -1111,7 +1117,7 @@ const buildHealthChartOption = (
     },
     {
       barMaxWidth: 16,
-      data: timeline.map((point) => point.averageLatencyMs ?? 0),
+      data: timeline.map((point) => (point.requestCount > 0 ? point.averageLatencyMs : null)),
       name: t('usage_analytics.metric_average_latency'),
       type: 'bar',
       yAxisIndex: 1,

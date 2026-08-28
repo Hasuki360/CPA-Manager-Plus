@@ -44,8 +44,7 @@ const NOW_MS = Date.UTC(2026, 5, 4, 12, 0, 0);
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 
-const localDateMs = (day: number, hour = 0) =>
-  new Date(2026, 7, day, hour, 0, 0, 0).getTime();
+const localDateMs = (day: number, hour = 0) => new Date(2026, 7, day, hour, 0, 0, 0).getTime();
 
 const expectZeroTimelinePoint = (point: UsageTimelinePoint) => {
   expect(point).toMatchObject({
@@ -283,7 +282,14 @@ describe('usage analytics adapters', () => {
     const toMs = localDateMs(10, 13);
     const mappedTimeline = buildUsageTimeline(
       [
-        { bucket_ms: fromMs + 2 * HOUR_MS, label: '', calls: 3, tokens: 30, success: 3, failure: 0 },
+        {
+          bucket_ms: fromMs + 2 * HOUR_MS,
+          label: '',
+          calls: 3,
+          tokens: 30,
+          success: 3,
+          failure: 0,
+        },
         { bucket_ms: fromMs, label: '', calls: 1, tokens: 10, success: 1, failure: 0 },
         { bucket_ms: fromMs + HOUR_MS, label: '', calls: 2, tokens: 20, success: 1, failure: 1 },
       ],
@@ -291,11 +297,13 @@ describe('usage analytics adapters', () => {
     );
     const timeline = fillUsageTimelineBuckets(mappedTimeline, { fromMs, toMs }, 'hour');
 
-    expect(timeline).toEqual(mappedTimeline.slice().sort((left, right) => left.bucketMs - right.bucketMs));
+    expect(timeline).toEqual(
+      mappedTimeline.slice().sort((left, right) => left.bucketMs - right.bucketMs)
+    );
     expect(timeline).toHaveLength(3);
   });
 
-  it('builds zero buckets for a successful empty analytics response', () => {
+  it('keeps a successful empty analytics response empty', () => {
     const fromMs = localDateMs(10, 10);
     const toMs = localDateMs(10, 13);
     const adapted = adaptUsageAnalyticsData(
@@ -307,8 +315,7 @@ describe('usage analytics adapters', () => {
       { fromMs, toMs }
     );
 
-    expect(adapted.timeline).toHaveLength(3);
-    adapted.timeline.forEach(expectZeroTimelinePoint);
+    expect(adapted.timeline).toEqual([]);
   });
 
   it('builds heatmap chart data from non-empty valid request buckets only', () => {
@@ -1603,6 +1610,69 @@ describe('usage anomaly drilldown', () => {
       'usage_analytics.cause_token_per_request_spike',
       'usage_analytics.cause_cache_hit_drop',
     ]);
+  });
+
+  it('does not treat zero-request buckets as health anomaly samples', () => {
+    const timeline = buildUsageTimeline(
+      [
+        {
+          bucket_ms: NOW_MS,
+          label: '',
+          calls: 10,
+          tokens: 100,
+          success: 9,
+          failure: 1,
+          input_tokens: 100,
+          cache_read_tokens: 80,
+          cost: 1,
+          average_latency_ms: 500,
+        },
+        {
+          bucket_ms: NOW_MS + HOUR_MS,
+          label: '',
+          calls: 0,
+          tokens: 0,
+          success: 0,
+          failure: 0,
+          input_tokens: 0,
+          cache_read_tokens: 0,
+          cost: 0,
+        },
+        {
+          bucket_ms: NOW_MS + 2 * HOUR_MS,
+          label: '',
+          calls: 10,
+          tokens: 100,
+          success: 5,
+          failure: 5,
+          input_tokens: 100,
+          cache_read_tokens: 80,
+          cost: 1,
+          average_latency_ms: 400,
+        },
+      ],
+      'hour'
+    );
+
+    const emptyAnalysis = analyzeUsageBucket(timeline, NOW_MS + HOUR_MS);
+    expect(emptyAnalysis?.changes).toMatchObject({
+      requestCount: -1,
+      cacheHitRate: 0,
+      averageTokensPerRequest: 0,
+      failureRate: 0,
+      averageLatencyMs: 0,
+    });
+    expect(emptyAnalysis?.anomalies).toEqual([]);
+
+    const recoveryAnalysis = analyzeUsageBucket(timeline, NOW_MS + 2 * HOUR_MS);
+    expect(recoveryAnalysis?.changes).toMatchObject({
+      requestCount: 1,
+      cacheHitRate: 0,
+      averageTokensPerRequest: 0,
+      failureRate: 0,
+      averageLatencyMs: 0,
+    });
+    expect(recoveryAnalysis?.anomalies).toEqual([]);
   });
 
   it('uses direction-aware anomaly cause copy', () => {
