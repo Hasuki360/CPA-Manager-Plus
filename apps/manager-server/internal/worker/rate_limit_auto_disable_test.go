@@ -1881,6 +1881,26 @@ func TestRateLimitAutoDisableWorkerXAIEventDisablesAndRecoversEndToEnd(t *testin
 	}
 	defer st.Close()
 
+	ctx := context.Background()
+	now := time.Now()
+	oldRecoverAt := now.Add(7 * 24 * time.Hour)
+	oldEvidence := fmt.Sprintf(`{"provider":"xai","kind":"included_free_usage","code":"subscription:free-usage-exhausted","model":"grok-old","actual":1000,"limit":1000,"recover_at_ms":%d}`, oldRecoverAt.UnixMilli())
+	old, err := st.UpsertQuotaCooldown(ctx, store.QuotaCooldownUpsert{
+		AuthFileName: "xai-auth.json",
+		AuthIndex:    "auth-xai-1",
+		Provider:     "xai",
+		ReasonCode:   quotaReasonXAIFreeUsage,
+		WindowKind:   quotaWindowRolling24H,
+		EvidenceJSON: oldEvidence,
+		RecoverAtMS:  oldRecoverAt.UnixMilli(),
+		Owner:        model.QuotaCooldownOwnerXAIFreeUsage,
+		EventHash:    "evt-xai-old",
+		DisabledAtMS: now.Add(-time.Hour).UnixMilli(),
+	})
+	if err != nil {
+		t.Fatalf("seed stale xAI cooldown: %v", err)
+	}
+
 	disabled := false
 	patches := []bool{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1908,7 +1928,6 @@ func TestRateLimitAutoDisableWorkerXAIEventDisablesAndRecoversEndToEnd(t *testin
 	}))
 	defer server.Close()
 
-	now := time.Now()
 	event := usage.Event{
 		EventHash:        "evt-xai-e2e",
 		Failed:           true,
@@ -1922,8 +1941,10 @@ func TestRateLimitAutoDisableWorkerXAIEventDisablesAndRecoversEndToEnd(t *testin
 	if !ok {
 		t.Fatal("xAI candidate not detected")
 	}
+	if candidate.EvidenceJSON == "" {
+		t.Fatal("xAI candidate has no evidence")
+	}
 
-	ctx := context.Background()
 	worker := NewRateLimitAutoDisableWorker(st, collectorpkg.RuntimeConfig{CPAUpstreamURL: server.URL, ManagementKey: "test-management-key"})
 	worker.handleCandidate(ctx, candidate)
 	if !disabled || len(patches) != 1 || !patches[0] {
@@ -1933,8 +1954,11 @@ func TestRateLimitAutoDisableWorkerXAIEventDisablesAndRecoversEndToEnd(t *testin
 	if err != nil {
 		t.Fatalf("list active cooldowns: %v", err)
 	}
-	if len(active) != 1 || active[0].Owner != model.QuotaCooldownOwnerXAIFreeUsage || active[0].Provider != "xai" || active[0].ReasonCode != quotaReasonXAIFreeUsage || active[0].WindowKind != quotaWindowRolling24H {
+	if len(active) != 1 || active[0].ID == old.ID || active[0].Owner != model.QuotaCooldownOwnerXAIFreeUsage || active[0].Provider != "xai" || active[0].ReasonCode != quotaReasonXAIFreeUsage || active[0].WindowKind != quotaWindowRolling24H || active[0].EventHash != event.EventHash {
 		t.Fatalf("xAI cooldown = %#v", active)
+	}
+	if active[0].EvidenceJSON != candidate.EvidenceJSON || strings.Contains(active[0].EvidenceJSON, "grok-old") {
+		t.Fatalf("xAI cooldown carried stale evidence: %s", active[0].EvidenceJSON)
 	}
 
 	worker.enableDue(ctx, now.Add(24*time.Hour+time.Second))

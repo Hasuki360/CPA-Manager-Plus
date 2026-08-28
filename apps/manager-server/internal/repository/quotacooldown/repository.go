@@ -52,6 +52,9 @@ func (r *repository) UpsertActive(ctx context.Context, cooldown model.QuotaCoold
 	if cooldown.DisabledAtMS <= 0 {
 		cooldown.DisabledAtMS = now
 	}
+	if cooldown.ObservedEnabledAtMS > cooldown.DisabledAtMS {
+		return model.QuotaCooldown{}, errors.New("quota cooldown observed_enabled_at_ms must not exceed disabled_at_ms")
+	}
 
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -111,10 +114,7 @@ func (r *repository) UpsertActive(ctx context.Context, cooldown model.QuotaCoold
 			}
 		}
 	}
-	if found && cooldown.BeginNewCycle {
-		// The caller already observed this credential enabled. Record that
-		// observation at persistence time; recovered does not imply that CPAMP
-		// issued the enabling mutation itself.
+	if found && cooldown.ObservedEnabledAtMS > 0 {
 		_, err = tx.ExecContext(ctx, `update quota_cooldowns set
 			status = ?,
 			recovered_at_ms = ?,
@@ -122,7 +122,7 @@ func (r *repository) UpsertActive(ctx context.Context, cooldown model.QuotaCoold
 			updated_at_ms = ?
 			where id = ? and status = ?`,
 			model.QuotaCooldownStatusRecovered,
-			now,
+			cooldown.ObservedEnabledAtMS,
 			now,
 			id,
 			model.QuotaCooldownStatusActive,
