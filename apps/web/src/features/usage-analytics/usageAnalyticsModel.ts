@@ -644,8 +644,11 @@ const getNextUsageBucketStartMs = (
   bucketMs: number,
   granularity: UsageAnalyticsResolvedGranularity
 ) => {
-  if (granularity === 'hour') return bucketMs + HOUR_MS;
   const date = new Date(bucketMs);
+  if (granularity === 'hour') {
+    date.setHours(date.getHours() + 1, 0, 0, 0);
+    return date.getTime();
+  }
   date.setDate(date.getDate() + 1);
   return date.getTime();
 };

@@ -1,5 +1,8 @@
-import { describe, expect, it } from 'vitest';
-import type { MonitoringAnalyticsResponse } from '@/services/api/usageService';
+import { describe, expect, it, vi } from 'vitest';
+import type {
+  MonitoringAnalyticsApiKeyStatRow,
+  MonitoringAnalyticsResponse,
+} from '@/services/api/usageService';
 import { buildSourceInfoMap } from '@/utils/sourceResolver';
 import type { UsageRankRow, UsageTimelinePoint } from './usageAnalyticsModel';
 import {
@@ -222,6 +225,64 @@ describe('usage analytics adapters', () => {
     ]);
     expectZeroTimelinePoint(timeline[1]);
     expect(timeline[1].bucketEndMs).toBe(fromMs + 2 * HOUR_MS);
+  });
+
+  it('does not synthesize a duplicate local hour across DST fall-back', () => {
+    vi.stubEnv('TZ', 'America/New_York');
+
+    try {
+      const firstMidnight = Date.parse('2026-11-01T04:00:00.000Z');
+      const firstOneAm = Date.parse('2026-11-01T05:00:00.000Z');
+      const repeatedOneAm = Date.parse('2026-11-01T06:00:00.000Z');
+      const twoAm = Date.parse('2026-11-01T07:00:00.000Z');
+      const threeAm = Date.parse('2026-11-01T08:00:00.000Z');
+      const mappedTimeline = buildUsageTimeline(
+        [
+          {
+            bucket_ms: firstMidnight,
+            label: '',
+            calls: 1,
+            tokens: 10,
+            success: 1,
+            failure: 0,
+            cost: 1,
+          },
+          {
+            bucket_ms: firstOneAm,
+            label: '',
+            calls: 2,
+            tokens: 20,
+            success: 2,
+            failure: 0,
+            cost: 2,
+          },
+          {
+            bucket_ms: twoAm,
+            label: '',
+            calls: 3,
+            tokens: 30,
+            success: 3,
+            failure: 0,
+            cost: 3,
+          },
+        ],
+        'hour'
+      );
+      const timeline = fillUsageTimelineBuckets(
+        mappedTimeline,
+        { fromMs: firstMidnight, toMs: threeAm },
+        'hour'
+      );
+
+      expect(timeline.map((point) => point.bucketMs)).toEqual([firstMidnight, firstOneAm, twoAm]);
+      expect(timeline.some((point) => point.bucketMs === repeatedOneAm)).toBe(false);
+      expect(timeline).toEqual(mappedTimeline);
+      expect(timeline.map((point) => point.requestCount)).toEqual([1, 2, 3]);
+      expect(timeline.map((point) => point.totalTokens)).toEqual([10, 20, 30]);
+      expect(timeline.map((point) => point.estimatedCost)).toEqual([1, 2, 3]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it('fills missing daily buckets and respects the exclusive range end', () => {
