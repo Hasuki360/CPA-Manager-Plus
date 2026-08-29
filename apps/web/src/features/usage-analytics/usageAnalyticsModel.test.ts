@@ -1,8 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type {
-  MonitoringAnalyticsApiKeyStatRow,
-  MonitoringAnalyticsResponse,
-} from '@/services/api/usageService';
+import type { MonitoringAnalyticsResponse } from '@/services/api/usageService';
 import { buildSourceInfoMap } from '@/utils/sourceResolver';
 import type { UsageRankRow, UsageTimelinePoint } from './usageAnalyticsModel';
 import {

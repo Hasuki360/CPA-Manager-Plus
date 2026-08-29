@@ -172,30 +172,36 @@ func assertConnectionPragmas(t *testing.T, conn *sql.Conn) {
 
 func TestOpenDiagnosticForGetTempPath(t *testing.T) {
 	message := openDiagnostic(sqlite3.SQLITE_IOERR_GETTEMPPATH, "/data/usage.sqlite")
-	for _, want := range []string{"temporary directory", "/tmp", "SQLITE_TMPDIR"} {
+	for _, want := range []string{"temporary directory", "writable"} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("diagnostic %q does not mention %q", message, want)
+		}
+	}
+	for _, platformSpecific := range []string{"/tmp", "SQLITE_TMPDIR"} {
+		if strings.Contains(message, platformSpecific) {
+			t.Fatalf("diagnostic %q must not hard-code platform-specific guidance %q", message, platformSpecific)
+		}
+	}
+}
+
+func TestOpenDiagnosticForReadonly(t *testing.T) {
+	message := openDiagnostic(sqlite3.SQLITE_READONLY, "/data/usage.sqlite")
+	for _, want := range []string{"not writable", "/data/usage.sqlite", "ownership", "permissions"} {
 		if !strings.Contains(message, want) {
 			t.Fatalf("diagnostic %q does not mention %q", message, want)
 		}
 	}
 }
 
-func TestOpenDiagnosticForReadonlyFamily(t *testing.T) {
+func TestOpenDiagnosticForUnrecognizedCodes(t *testing.T) {
 	for _, code := range []int{
-		sqlite3.SQLITE_READONLY,
+		sqlite3.SQLITE_CANTOPEN,
+		sqlite3.SQLITE_BUSY,
+		sqlite3.SQLITE_IOERR,
+		sqlite3.SQLITE_NOTADB,
 		sqlite3.SQLITE_READONLY_DIRECTORY,
 		sqlite3.SQLITE_READONLY_DBMOVED,
 	} {
-		message := openDiagnostic(code, "/data/usage.sqlite")
-		for _, want := range []string{"not writable", "/data/usage.sqlite", "ownership", "permissions"} {
-			if !strings.Contains(message, want) {
-				t.Fatalf("diagnostic %q for code %d does not mention %q", message, code, want)
-			}
-		}
-	}
-}
-
-func TestOpenDiagnosticForUnrecognizedCodes(t *testing.T) {
-	for _, code := range []int{sqlite3.SQLITE_CANTOPEN, sqlite3.SQLITE_BUSY, sqlite3.SQLITE_IOERR, sqlite3.SQLITE_NOTADB} {
 		if message := openDiagnostic(code, "/data/usage.sqlite"); message != "" {
 			t.Fatalf("diagnostic %q returned for code %d, want no diagnostic", message, code)
 		}

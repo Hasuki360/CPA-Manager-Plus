@@ -61,8 +61,8 @@ func enrichOpenError(dbPath string, err error) error {
 func openDiagnostic(code int, dbPath string) string {
 	switch {
 	case code == sqlite3.SQLITE_IOERR_GETTEMPPATH:
-		return "SQLite temporary directory is unavailable; configure a writable temporary directory (for example /tmp) or set SQLITE_TMPDIR to a writable path"
-	case code&0xff == sqlite3.SQLITE_READONLY:
+		return "SQLite temporary directory is unavailable; configure a writable operating-system temporary directory"
+	case code == sqlite3.SQLITE_READONLY:
 		return fmt.Sprintf("SQLite database is not writable at %q; check file ownership, permissions, and whether the database volume is writable", dbPath)
 	default:
 		return ""
