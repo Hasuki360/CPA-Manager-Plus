@@ -344,9 +344,8 @@ describe('useUsageAnalytics request orchestration', () => {
       latestResult?.setActiveTab('apiKeys');
     });
 
-    const selectedTimeline = () => lastParams(
-      (params) => Boolean(params.include?.timeline) && !params.include?.summary
-    );
+    const selectedTimeline = () =>
+      lastParams((params) => Boolean(params.include?.timeline) && !params.include?.summary);
     expect.soft(selectedTimeline()?.filters).toMatchObject({ api_key_hashes: ['real-key-hash'] });
 
     await act(async () => {
@@ -369,10 +368,12 @@ describe('useUsageAnalytics request orchestration', () => {
   });
 
   it('keeps fallback-only totals visible without enabling selected key timeline requests', async () => {
-    apiKeyStats = [createApiKeyStatRow({
-      id: 'unknown-client-api-key:legacy-group',
-      api_key_hash: '',
-    })];
+    apiKeyStats = [
+      createApiKeyStatRow({
+        id: 'unknown-client-api-key:legacy-group',
+        api_key_hash: '',
+      }),
+    ];
     await renderHook();
     await act(async () => {
       latestResult?.setActiveTab('apiKeys');
@@ -395,38 +396,52 @@ describe('useUsageAnalytics request orchestration', () => {
     { exact: false, fallbackOnly: false },
     { exact: true, fallbackOnly: true },
     { exact: false, fallbackOnly: true },
-  ])('excludes fallback trend series (exact: $exact, fallback-only: $fallbackOnly)', async ({ exact, fallbackOnly }) => {
-    const realKeys = fallbackOnly ? [] : ['key-a', 'key-b', 'key-c', 'key-d'];
-    apiKeyStats = [
-      createApiKeyStatRow({
-        id: 'unknown-client-api-key:legacy-group', api_key_hash: '', calls: 100, cost: 100,
-      }),
-      ...realKeys.map((hash, index) => createApiKeyStatRow({
-        id: hash, api_key_hash: hash, calls: 10 - index, cost: 10 - index,
-      })),
-    ];
-    apiKeyTimelineAvailable = exact;
-    await renderHook();
+  ])(
+    'excludes fallback trend series (exact: $exact, fallback-only: $fallbackOnly)',
+    async ({ exact, fallbackOnly }) => {
+      const realKeys = fallbackOnly ? [] : ['key-a', 'key-b', 'key-c', 'key-d'];
+      apiKeyStats = [
+        createApiKeyStatRow({
+          id: 'unknown-client-api-key:legacy-group',
+          api_key_hash: '',
+          calls: 100,
+          cost: 100,
+        }),
+        ...realKeys.map((hash, index) =>
+          createApiKeyStatRow({
+            id: hash,
+            api_key_hash: hash,
+            calls: 10 - index,
+            cost: 10 - index,
+          })
+        ),
+      ];
+      apiKeyTimelineAvailable = exact;
+      await renderHook();
 
-    expect(latestResult?.apiKeyRows[0].id).toBe('unknown-client-api-key:legacy-group');
-    expect.soft(latestResult?.apiKeyTrendSeries.map((series) => series.id)).toEqual(realKeys);
-    const timelineRequest = lastParams((params) => Boolean(params.include?.api_key_timeline));
-    if (fallbackOnly) {
-      expect(timelineRequest?.fromMs).toBeUndefined();
-      expect(timelineRequest?.toMs).toBeUndefined();
-    } else {
-      expect(timelineRequest?.filters).toMatchObject({ api_key_hashes: realKeys });
-      if (exact) {
-        expect.soft(latestResult?.apiKeyTrendSeries[0].points.slice(0, 3).map((point) => point.value))
-          .toEqual([2, 0, 4]);
+      expect(latestResult?.apiKeyRows[0].id).toBe('unknown-client-api-key:legacy-group');
+      expect.soft(latestResult?.apiKeyTrendSeries.map((series) => series.id)).toEqual(realKeys);
+      const timelineRequest = lastParams((params) => Boolean(params.include?.api_key_timeline));
+      if (fallbackOnly) {
+        expect(timelineRequest?.fromMs).toBeUndefined();
+        expect(timelineRequest?.toMs).toBeUndefined();
+      } else {
+        expect(timelineRequest?.filters).toMatchObject({ api_key_hashes: realKeys });
+        if (exact) {
+          expect.soft(
+            latestResult?.apiKeyTrendSeries[0].points.slice(0, 3).map((point) => point.value)
+          ).toEqual([2, 0, 4]);
+        }
       }
     }
-  });
+  );
 
   it('uses complete API key totals for approximate trend shares while hiding fallback rows', async () => {
     apiKeyStats = [
       createApiKeyStatRow({
-        id: 'unknown-client-api-key:legacy-group', api_key_hash: '', calls: 90,
+        id: 'unknown-client-api-key:legacy-group',
+        api_key_hash: '',
+        calls: 90,
       }),
       createApiKeyStatRow({ id: 'real-key-row', api_key_hash: 'real-key-hash', calls: 10 }),
     ];
@@ -435,25 +450,32 @@ describe('useUsageAnalytics request orchestration', () => {
     await renderHook();
 
     expect(latestResult?.apiKeyRows.map((row) => row.id)).toEqual([
-      'unknown-client-api-key:legacy-group', 'real-key-hash',
+      'unknown-client-api-key:legacy-group',
+      'real-key-hash',
     ]);
     expect(latestResult?.apiKeyTrendSeries.map((series) => series.id)).toEqual(['real-key-hash']);
-    expect(latestResult?.apiKeyTrendSeries[0].points.slice(0, 3).map((point) => point.value))
-      .toEqual([5, 0, 5]);
+    expect(
+      latestResult?.apiKeyTrendSeries[0].points.slice(0, 3).map((point) => point.value)
+    ).toEqual([5, 0, 5]);
   });
 
   it('normalizes fallback API key filters from the URL and later filter updates', async () => {
     await renderHook('/usage-analytics?api_key_hash=unknown-client-api-key%3Alegacy-filter');
     expect.soft(latestResult?.filters.apiKeyHash).toBe('all');
-    expect.soft(lastParams((params) => Boolean(params.include?.summary))?.filters)
-      .not.toHaveProperty('api_key_hashes');
+    expect.soft(
+      lastParams((params) => Boolean(params.include?.summary))?.filters
+    ).not.toHaveProperty('api_key_hashes');
 
     await act(async () => {
-      latestResult?.setFilters({ apiKeyHash: ' UNKNOWN-CLIENT-API-KEY:legacy-filter ', model: 'gpt-a' });
+      latestResult?.setFilters({
+        apiKeyHash: ' UNKNOWN-CLIENT-API-KEY:legacy-filter ',
+        model: 'gpt-a',
+      });
     });
     expect.soft(latestResult?.filters.apiKeyHash).toBe('all');
-    expect.soft(lastParams((params) => Boolean(params.include?.summary))?.filters)
-      .toEqual({ models: ['gpt-a'] });
+    expect.soft(lastParams((params) => Boolean(params.include?.summary))?.filters).toEqual({
+      models: ['gpt-a'],
+    });
   });
 
   it('does not couple selector failures to the main page error and refreshes both requests', async () => {

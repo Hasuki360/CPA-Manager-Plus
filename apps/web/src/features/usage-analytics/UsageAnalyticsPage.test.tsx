@@ -786,10 +786,13 @@ describe('UsageAnalyticsPage', () => {
       ],
     });
     const renderer = renderPage();
-    const apiKeySelect = renderer.root.findAllByType(Select)
+    const apiKeySelect = renderer.root
+      .findAllByType(Select)
       .find((node) => node.props.ariaLabel === 'usage_analytics.filter_api_key');
     const values = apiKeySelect?.props.options.map((option: { value: string }) => option.value);
-    expect(values).toEqual(expect.arrayContaining(['all', 'real-filter-hash', 'real-stats-hash', 'real-row-hash']));
+    expect(values).toEqual(
+      expect.arrayContaining(['all', 'real-filter-hash', 'real-stats-hash', 'real-row-hash'])
+    );
     expect(values).toHaveLength(4);
   });
 
@@ -861,28 +864,34 @@ describe('UsageAnalyticsPage', () => {
         apiKeyRows: [fallbackRow],
         selectedApiKey: fallbackRow,
         selectedApiKeyTrendSeries: [],
-        keyAnomalies: [{
-          id: fallbackRow.id,
-          label: fallbackRow.label,
-          severity: 'medium',
-          reasonKey: 'usage_analytics.anomaly_reason_error_rate',
-          triggeredAtMs: 1_780_000_000_000,
-          row: fallbackRow,
-        }],
+        keyAnomalies: [
+          {
+            id: fallbackRow.id,
+            label: fallbackRow.label,
+            severity: 'medium',
+            reasonKey: 'usage_analytics.anomaly_reason_error_rate',
+            triggeredAtMs: 1_780_000_000_000,
+            row: fallbackRow,
+          },
+        ],
       });
       mocks.usageState = usageState;
       const renderer = renderPage();
-      const rankRow = renderer.root.findAllByType('tr')
+      const rankRow = renderer.root
+        .findAllByType('tr')
         .find((node) => getText(node).includes('Unknown client API key'));
       if (!rankRow) throw new Error('Fallback API key rank row not found');
       act(() => rankRow.props.onClick());
 
       expect(getText(renderer.root)).toContain('Unknown client API key');
       expect.soft(usageState.setSelectedApiKeyHash).not.toHaveBeenCalled();
-      expect.soft(renderer.root.findAllByType('button')
-        .filter((node) => getText(node).includes('usage_analytics.view_request_details')))
-        .toHaveLength(0);
-      const heatmapButton = findHostButtonByText(renderer, 'usage_analytics.view_exception_combinations');
+      expect.soft(
+        renderer.root.findAllByType('button')
+          .filter((node) => getText(node).includes('usage_analytics.view_request_details'))
+      ).toHaveLength(0);
+      const heatmapButton = findHostButtonByText(
+        renderer, 'usage_analytics.view_exception_combinations'
+      );
       expect.soft(heatmapButton.props.disabled).toBe(true);
       clickHostButton(heatmapButton);
       expect.soft(usageState.setFilters).not.toHaveBeenCalled();

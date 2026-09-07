@@ -2131,11 +2131,17 @@ function KeyAnomalyTable({
                 <td>{formatPercent(row.row.failureCount / Math.max(row.row.requestCount, 1))}</td>
                 {onOpen ? (
                   <td>
-                    {canOpen?.(row) ?? true ? (
-                      <button type="button" className={styles.linkButton} onClick={() => onOpen(row)}>
+                    {(canOpen?.(row) ?? true) ? (
+                      <button
+                        type="button"
+                        className={styles.linkButton}
+                        onClick={() => onOpen(row)}
+                      >
                         {t('usage_analytics.view_request_details')}
                       </button>
-                    ) : '-'}
+                    ) : (
+                      '-'
+                    )}
                   </td>
                 ) : null}
               </tr>
@@ -2478,14 +2484,21 @@ function UsageAnalyticsPageInner() {
       ...mergeSelectOptions([
         ...displayOptionCache.apiKeys,
         ...(selectedApiKeyHash
-          ? [{
-              value: selectedApiKeyHash,
-              label: resolveUsageApiKeyLabel(selectedApiKeyHash, usage.apiKeyDisplayMap),
-            }]
+          ? [
+              {
+                value: selectedApiKeyHash,
+                label: resolveUsageApiKeyLabel(selectedApiKeyHash, usage.apiKeyDisplayMap),
+              },
+            ]
           : []),
       ]),
     ];
-  }, [allApiKeyOptionLabel, displayOptionCache.apiKeys, usage.apiKeyDisplayMap, usage.filters.apiKeyHash]);
+  }, [
+    allApiKeyOptionLabel,
+    displayOptionCache.apiKeys,
+    usage.apiKeyDisplayMap,
+    usage.filters.apiKeyHash,
+  ]);
   const providerOptions = useMemo<SelectOption[]>(
     () =>
       buildStableSelectOptions(
@@ -3255,7 +3268,9 @@ function UsageAnalyticsPageInner() {
                       variant="secondary"
                       size="sm"
                       onClick={() => {
-                        const target = buildApiKeyMonitoringUrl(usage.selectedApiKey?.apiKeyHash || '');
+                        const target = buildApiKeyMonitoringUrl(
+                          usage.selectedApiKey?.apiKeyHash || ''
+                        );
                         if (target) navigate(target);
                       }}
                     >

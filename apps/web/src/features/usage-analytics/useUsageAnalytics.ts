@@ -498,7 +498,14 @@ export function useUsageAnalytics() {
             API_KEY_TREND_SERIES_LIMIT,
             adapted.apiKeyRows
           ),
-    [apiKeyTrendRows, adapted.apiKeyRows, adapted.timeline, apiKeyTimeline, hasExactAPIKeyTimeline, trendMetric]
+    [
+      apiKeyTrendRows,
+      adapted.apiKeyRows,
+      adapted.timeline,
+      apiKeyTimeline,
+      hasExactAPIKeyTimeline,
+      trendMetric,
+    ]
   );
   const selectedApiKeyFilterHash = getSelectableApiKeyHash(selectedApiKey?.apiKeyHash);
   const selectedApiKeyTimelineFilters = useMemo(
