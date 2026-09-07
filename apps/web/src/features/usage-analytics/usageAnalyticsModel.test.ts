@@ -70,6 +70,18 @@ const expectZeroTimelinePoint = (point: UsageTimelinePoint) => {
 };
 
 describe('usage analytics request model', () => {
+  it.each(['unknown-client-api-key:legacy-group', ' UNKNOWN-CLIENT-API-KEY:legacy-group '])(
+    'keeps synthetic fallback group %s out of API key filters and monitoring URLs',
+    (apiKeyHash) => {
+      expect.soft(buildUsageAnalyticsFilters({ apiKeyHash, model: 'gpt-4o' })).toEqual({
+        models: ['gpt-4o'],
+      });
+      expect.soft(
+        buildMonitoringDetailUrl({ bucketMs: 1000, bucketEndMs: 2000 }, { apiKeyHash })
+      ).toBe('/monitoring?from_ms=1000&to_ms=2000');
+    }
+  );
+
   it('resolves time ranges and default granularity rules', () => {
     expect(USAGE_ANALYTICS_DEFAULT_FILTERS.timeRange).toBe('24h');
     expect(getUsageRangeBounds({ timeRange: '24h', customRange: null }, NOW_MS)).toEqual({

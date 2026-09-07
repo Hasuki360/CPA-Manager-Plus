@@ -161,7 +161,13 @@ func (s *Service) Update(ctx context.Context, req UpdateRequest) (Status, error)
 	s.lastKnown = saved
 	s.hasKnown = true
 	s.mu.Unlock()
-	return s.statusFromSettings(saved), nil
+	status := s.statusFromSettings(saved)
+	// Saving the policy does not invalidate the last completed sync. A failed
+	// state read must not turn an already-persisted update into a reported failure.
+	if state, ok, stateErr := s.store.LoadCharityModelMonitorState(ctx); stateErr == nil && ok {
+		status.CharityModelMonitorState = &state
+	}
+	return status, nil
 }
 
 // RuntimeSettings returns the effective booleans used to gate runtime workers.

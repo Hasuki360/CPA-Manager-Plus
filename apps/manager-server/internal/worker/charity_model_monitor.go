@@ -43,9 +43,12 @@ type CharityModelMonitorWorker struct {
 	store  *store.Store
 	client *http.Client
 
-	mu     sync.RWMutex
-	config CharityModelMonitorConfig
-	runMu  sync.Mutex
+	mu        sync.RWMutex
+	config    CharityModelMonitorConfig
+	runMu     sync.Mutex
+	startOnce sync.Once
+	updateCh  chan struct{}
+	runCancel context.CancelFunc
 }
 
 type charityProviderEntry struct {
@@ -65,54 +68,78 @@ func (w *CharityModelMonitorWorker) Start(ctx context.Context) {
 	if w == nil {
 		return
 	}
-	go w.loop(ctx)
+	w.startOnce.Do(func() {
+		w.mu.Lock()
+		w.updateCh = make(chan struct{}, 1)
+		w.mu.Unlock()
+		go w.loop(ctx)
+	})
 }
 
-func (w *CharityModelMonitorWorker) UpdateConfig(ctx context.Context, cfg CharityModelMonitorConfig) {
+func (w *CharityModelMonitorWorker) UpdateConfig(_ context.Context, cfg CharityModelMonitorConfig) {
 	if w == nil {
 		return
 	}
 	w.mu.Lock()
 	w.config = normalizeCharityMonitorConfig(cfg)
-	w.mu.Unlock()
-	if w.snapshot().Enabled {
-		// Use a detached background context so a short-lived HTTP request
-		// context triggering this update does not cancel the initial sync cycle.
-		go w.runOnce(context.Background())
+	if w.runCancel != nil {
+		w.runCancel()
 	}
+	// Coalesce repeated saves without losing the last configuration. Only the
+	// service-owned loop runs cycles; an HTTP request never owns their lifetime.
+	if w.updateCh != nil {
+		select {
+		case w.updateCh <- struct{}{}:
+		default:
+		}
+	}
+	w.mu.Unlock()
 }
 
 func (w *CharityModelMonitorWorker) loop(ctx context.Context) {
-	w.runOnce(ctx)
-	for {
-		interval := time.Duration(w.snapshot().IntervalMinutes) * time.Minute
-		if interval <= 0 {
-			interval = time.Duration(model.DefaultCharityModelMonitorIntervalMinutes) * time.Minute
-		}
-		timer := time.NewTimer(interval)
+	for ctx.Err() == nil {
+		w.runOnce(ctx)
+		timer := time.NewTimer(time.Duration(w.snapshot().IntervalMinutes) * time.Minute)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
 			return
+		case <-w.updateCh:
+			timer.Stop()
 		case <-timer.C:
-			w.runOnce(ctx)
 		}
 	}
 }
 
 func (w *CharityModelMonitorWorker) runOnce(ctx context.Context) {
-	if w == nil {
+	if w == nil || ctx.Err() != nil {
 		return
 	}
-	if !w.runMu.TryLock() {
-		return
-	}
+	w.runMu.Lock()
 	defer w.runMu.Unlock()
-
-	cfg := w.snapshot()
-	if !cfg.Enabled {
+	w.mu.Lock()
+	if ctx.Err() != nil || !w.config.Enabled {
+		w.mu.Unlock()
 		return
 	}
+	cfg := normalizeCharityMonitorConfig(w.config)
+	ctx, cancel := context.WithCancel(ctx)
+	w.runCancel = cancel
+	// A queued update is now represented by this snapshot. Any later save
+	// cancels this cycle and queues a follow-up with the newer configuration.
+	if w.updateCh != nil {
+		select {
+		case <-w.updateCh:
+		default:
+		}
+	}
+	w.mu.Unlock()
+	defer func() {
+		cancel()
+		w.mu.Lock()
+		w.runCancel = nil
+		w.mu.Unlock()
+	}()
 	if strings.TrimSpace(cfg.CPAUpstreamURL) == "" || strings.TrimSpace(cfg.ManagementKey) == "" {
 		log.Printf("[charity-model-monitor] skipped: CPA upstream or management key is not configured")
 		return

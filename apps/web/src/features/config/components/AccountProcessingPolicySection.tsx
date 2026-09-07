@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/Button';
@@ -39,12 +39,27 @@ const toneClassByStatus: Record<AccountPolicyViewItem['statusTone'], string> = {
 };
 
 export function AccountProcessingPolicySection() {
+  const managementKey = useAuthStore((state) => state.managementKey);
+  const { managerServiceBase } = usePanelFeatureAvailability();
+  return (
+    <AccountProcessingPolicyContent
+      key={JSON.stringify([managerServiceBase, managementKey])}
+      managerServiceBase={managerServiceBase}
+      managementKey={managementKey}
+    />
+  );
+}
+
+function AccountProcessingPolicyContent({
+  managerServiceBase,
+  managementKey,
+}: {
+  managerServiceBase: string;
+  managementKey: string;
+}) {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const managementKey = useAuthStore((state) => state.managementKey);
   const { showNotification } = useNotificationStore();
-  const featureAvailability = usePanelFeatureAvailability();
-  const managerServiceBase = featureAvailability.managerServiceBase;
 
   const [status, setStatus] = useState<AccountProcessingPolicy | null>(null);
   const [loading, setLoading] = useState(false);
@@ -61,28 +76,89 @@ export function AccountProcessingPolicySection() {
   const [charityDraftDirty, setCharityDraftDirty] = useState(false);
   const [charityConfigError, setCharityConfigError] = useState('');
   const [savingCharityConfig, setSavingCharityConfig] = useState(false);
+  const [refreshAfterSave, setRefreshAfterSave] = useState(0);
+  const requestVersion = useRef(0);
+  const mutationPending = useRef(false);
+  const saving = savingCharityConfig || savingKey !== null;
+
+  useEffect(
+    () => () => {
+      requestVersion.current += 1;
+    },
+    []
+  );
 
   const charityState = status?.charityModelMonitorState;
+  const providerSync = charityState?.lastProviderSync ?? [];
+  const providerCount = (field: 'matchedProviders' | 'updatedProviders') =>
+    providerSync.every((entry) => typeof entry[field] === 'number')
+      ? providerSync.reduce((sum, entry) => sum + entry[field]!, 0)
+      : t('accountPolicy.charityModelMonitor_state_unknown');
+
+  useEffect(() => {
+    if (!refreshAfterSave || !managerServiceBase || !managementKey) return;
+    let cancelled = false;
+    const request = requestVersion.current;
+    let attempts = 0;
+    let timer: ReturnType<typeof setTimeout>;
+    const refreshState = async () => {
+      if (cancelled || request !== requestVersion.current) return;
+      attempts += 1;
+      try {
+        const data = await usageServiceApi.getAccountProcessingPolicy(
+          managerServiceBase,
+          managementKey
+        );
+        if (!cancelled && request === requestVersion.current) {
+          // Refresh runtime state only: a delayed GET must not replace saved policy or drafts.
+          setStatus(
+            (previous) =>
+              previous && {
+                ...previous,
+                charityModelMonitorState:
+                  data.charityModelMonitorState ?? previous.charityModelMonitorState,
+              }
+          );
+        }
+      } catch {
+        // The PATCH succeeded. A failed background read must not report a failed save.
+      }
+      if (!cancelled && request === requestVersion.current && attempts < 2) {
+        timer = setTimeout(() => void refreshState(), 3000);
+      }
+    };
+    timer = setTimeout(() => void refreshState(), 1500);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [refreshAfterSave, managerServiceBase, managementKey]);
 
   useEffect(() => {
     if (!status || charityDraftDirty) return;
     setCharityIntervalDraft(String(status.charityModelMonitorIntervalMinutes ?? 1440));
-    setCharitySitesDraft(
-      JSON.stringify(status.charityModelMonitorSites ?? [], null, 2)
-    );
+    setCharitySitesDraft(JSON.stringify(status.charityModelMonitorSites ?? [], null, 2));
   }, [status, charityDraftDirty]);
 
   const saveCharityConfig = useCallback(async () => {
-    if (!managerServiceBase || !managementKey) return;
-    const interval = Number.parseInt(charityIntervalDraft, 10);
-    if (!Number.isFinite(interval) || interval <= 0) {
+    if (!managerServiceBase || !managementKey || mutationPending.current) return;
+    const interval = Number(charityIntervalDraft);
+    if (
+      !/^\d+$/.test(charityIntervalDraft.trim()) ||
+      !Number.isInteger(interval) ||
+      interval < 5 ||
+      interval > 10080
+    ) {
       setCharityConfigError(t('accountPolicy.charity_interval_invalid'));
       return;
     }
     let sites: CharityModelMonitorSite[];
     try {
       const parsed: unknown = JSON.parse(charitySitesDraft || '[]');
-      if (!Array.isArray(parsed) || parsed.some((item) => typeof item !== 'object' || item === null)) {
+      if (
+        !Array.isArray(parsed) ||
+        parsed.some((item) => typeof item !== 'object' || item === null)
+      ) {
         throw new Error('expected an array of site objects');
       }
       sites = parsed as CharityModelMonitorSite[];
@@ -94,6 +170,9 @@ export function AccountProcessingPolicySection() {
       );
       return;
     }
+    const request = ++requestVersion.current;
+    mutationPending.current = true;
+    setLoading(false);
     setSavingCharityConfig(true);
     setCharityConfigError('');
     try {
@@ -106,8 +185,14 @@ export function AccountProcessingPolicySection() {
         managementKey,
         patch
       );
-      setStatus(data);
+      if (request !== requestVersion.current) return;
+      setStatus((previous) => ({
+        ...data,
+        charityModelMonitorState:
+          data.charityModelMonitorState ?? previous?.charityModelMonitorState,
+      }));
       setCharityDraftDirty(false);
+      setRefreshAfterSave((value) => value + 1);
       showNotification(
         t('accountPolicy.charity_config_saved', {
           defaultValue: 'Sync configuration saved.',
@@ -115,6 +200,7 @@ export function AccountProcessingPolicySection() {
         'success'
       );
     } catch (err) {
+      if (request !== requestVersion.current) return;
       const message = err instanceof Error ? err.message : String(err || 'request failed');
       setCharityConfigError(message);
       showNotification(
@@ -122,12 +208,21 @@ export function AccountProcessingPolicySection() {
         'error'
       );
     } finally {
-      setSavingCharityConfig(false);
+      mutationPending.current = false;
+      if (request === requestVersion.current) setSavingCharityConfig(false);
     }
-  }, [charityIntervalDraft, charitySitesDraft, managerServiceBase, managementKey, showNotification, t]);
+  }, [
+    charityIntervalDraft,
+    charitySitesDraft,
+    managerServiceBase,
+    managementKey,
+    showNotification,
+    t,
+  ]);
 
   const load = useCallback(async () => {
-    if (!managerServiceBase || !managementKey) return;
+    if (!managerServiceBase || !managementKey || mutationPending.current) return;
+    const request = ++requestVersion.current;
     setLoading(true);
     setLoadError('');
     setSaveError(null);
@@ -136,8 +231,10 @@ export function AccountProcessingPolicySection() {
         managerServiceBase,
         managementKey
       );
+      if (request !== requestVersion.current) return;
       setStatus(data);
     } catch (err) {
+      if (request !== requestVersion.current) return;
       const message = err instanceof Error ? err.message : String(err || 'request failed');
       setLoadError(message);
       showNotification(
@@ -145,7 +242,7 @@ export function AccountProcessingPolicySection() {
         'error'
       );
     } finally {
-      setLoading(false);
+      if (request === requestVersion.current) setLoading(false);
     }
   }, [managerServiceBase, managementKey, showNotification, t]);
 
@@ -155,7 +252,10 @@ export function AccountProcessingPolicySection() {
 
   const persistCapability = useCallback(
     async (key: AccountPolicyCapabilityKey, value: boolean) => {
-      if (!managerServiceBase || !managementKey) return;
+      if (!managerServiceBase || !managementKey || mutationPending.current) return;
+      const request = ++requestVersion.current;
+      mutationPending.current = true;
+      setLoading(false);
       setSavingKey(key);
       setSaveError(null);
       try {
@@ -165,12 +265,19 @@ export function AccountProcessingPolicySection() {
           managementKey,
           patch
         );
-        setStatus(data);
+        if (request !== requestVersion.current) return;
+        setStatus((previous) => ({
+          ...data,
+          charityModelMonitorState:
+            data.charityModelMonitorState ?? previous?.charityModelMonitorState,
+        }));
+        setRefreshAfterSave((value) => value + 1);
         showNotification(
           t('accountPolicy.save_success', { defaultValue: 'Account processing policy updated.' }),
           'success'
         );
       } catch (err) {
+        if (request !== requestVersion.current) return;
         const code = getUsageServiceErrorCode(err);
         const message =
           code === 'account_processing_policy_env_locked'
@@ -187,7 +294,8 @@ export function AccountProcessingPolicySection() {
           'error'
         );
       } finally {
-        setSavingKey(null);
+        mutationPending.current = false;
+        if (request === requestVersion.current) setSavingKey(null);
       }
     },
     [managerServiceBase, managementKey, showNotification, t]
@@ -316,10 +424,8 @@ export function AccountProcessingPolicySection() {
               </span>
               <span>
                 {t('accountPolicy.charityModelMonitor_state_sync_value', {
-                  changed: (charityState.lastProviderSync ?? []).filter(
-                    (entry) => entry.headersChanged || entry.switchChanged
-                  ).length,
-                  total: (charityState.lastProviderSync ?? []).length,
+                  changed: providerCount('updatedProviders'),
+                  total: providerCount('matchedProviders'),
                   errors: (charityState.lastProviderError ?? []).length,
                 })}
               </span>
@@ -335,12 +441,13 @@ export function AccountProcessingPolicySection() {
               type="number"
               min={5}
               max={10080}
+              step={1}
               value={charityIntervalDraft}
               onChange={(event) => {
                 setCharityIntervalDraft(event.target.value);
                 setCharityDraftDirty(true);
               }}
-              disabled={savingCharityConfig}
+              disabled={saving}
             />
             <div className={styles.charityConfigRow}>
               <span className={styles.charityConfigLabel}>
@@ -350,7 +457,7 @@ export function AccountProcessingPolicySection() {
                 className={styles.charitySitesJson}
                 value={charitySitesDraft}
                 spellCheck={false}
-                disabled={savingCharityConfig}
+                disabled={saving}
                 onChange={(event) => {
                   setCharitySitesDraft(event.target.value);
                   setCharityDraftDirty(true);
@@ -370,6 +477,7 @@ export function AccountProcessingPolicySection() {
                 variant="secondary"
                 size="sm"
                 loading={savingCharityConfig}
+                disabled={savingKey !== null}
                 onClick={() => void saveCharityConfig()}
               >
                 {t('accountPolicy.charity_config_save')}
@@ -394,7 +502,10 @@ export function AccountProcessingPolicySection() {
   };
 
   const groups = status
-    ? buildAccountProcessingPolicyViewModel(status, { loading, savingKey })
+    ? buildAccountProcessingPolicyViewModel(status, {
+        loading: loading || savingCharityConfig,
+        savingKey,
+      })
     : [];
 
   return (
@@ -411,12 +522,7 @@ export function AccountProcessingPolicySection() {
             })}
           </p>
         </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => void load()}
-          disabled={loading || savingKey !== null}
-        >
+        <Button variant="ghost" size="sm" onClick={() => void load()} disabled={loading || saving}>
           <IconRefreshCw size={14} />
           {t('accountPolicy.refresh', { defaultValue: 'Refresh' })}
         </Button>

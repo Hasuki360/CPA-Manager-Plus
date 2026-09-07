@@ -149,6 +149,9 @@ export interface CharityModelMonitorProviderState {
   changed?: boolean;
   switchChanged?: boolean;
   headersChanged?: boolean;
+  // Counts of real channels; absent in legacy history means unknown, not one.
+  matchedProviders?: number;
+  updatedProviders?: number;
   checkMode?: string;
   customModels?: string[];
   matchedModels?: string[];

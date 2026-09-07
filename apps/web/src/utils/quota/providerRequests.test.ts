@@ -29,6 +29,7 @@ import {
   CLAUDE_PROFILE_URL,
   CLAUDE_USAGE_URL,
   CODEX_RATE_LIMIT_RESET_CREDITS_URL,
+  CODEX_REQUEST_HEADERS,
   CODEX_USAGE_URL,
   XAI_BILLING_MONTHLY_URL,
   XAI_BILLING_WEEKLY_URL,
@@ -75,6 +76,15 @@ beforeEach(() => {
 });
 
 describe('fetchCodexQuota', () => {
+  it('pins the quota request headers to the Codex TUI identity', () => {
+    expect(CODEX_REQUEST_HEADERS).toEqual({
+      Authorization: 'Bearer $TOKEN$',
+      'Content-Type': 'application/json',
+      'User-Agent':
+        'codex-tui/0.149.1 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.149.1)',
+    });
+  });
+
   it('fetches reset credit details after usage and prefers detail counts', async () => {
     mocks.request
       .mockResolvedValueOnce({
@@ -125,6 +135,9 @@ describe('fetchCodexQuota', () => {
       url: CODEX_USAGE_URL,
       header: expect.objectContaining({
         Authorization: 'Bearer $TOKEN$',
+        'Content-Type': 'application/json',
+        'User-Agent':
+          'codex-tui/0.149.1 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.149.1)',
         'Chatgpt-Account-Id': 'acct-1',
       }),
     });
@@ -133,6 +146,10 @@ describe('fetchCodexQuota', () => {
       method: 'GET',
       url: CODEX_RATE_LIMIT_RESET_CREDITS_URL,
       header: expect.objectContaining({
+        Authorization: 'Bearer $TOKEN$',
+        'Content-Type': 'application/json',
+        'User-Agent':
+          'codex-tui/0.149.1 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.149.1)',
         Accept: 'application/json',
         'OpenAI-Beta': 'codex-1',
         Originator: 'Codex Desktop',

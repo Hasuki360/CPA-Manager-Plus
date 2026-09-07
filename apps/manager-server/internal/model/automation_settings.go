@@ -15,6 +15,6 @@ type AutomationSettings struct {
 	AccountActionsAutoDisable          *bool                     `json:"authIssueAutoDisableEnabled,omitempty"`
 	CharityModelMonitorEnabled         *bool                     `json:"charityModelMonitorEnabled,omitempty"`
 	CharityModelMonitorIntervalMinutes *int                      `json:"charityModelMonitorIntervalMinutes,omitempty"`
-	CharityModelMonitorSites           []CharityModelMonitorSite `json:"charityModelMonitorSites,omitempty"`
+	CharityModelMonitorSites           []CharityModelMonitorSite `json:"charityModelMonitorSites"`
 	UpdatedAtMS                        int64                     `json:"updatedAtMs,omitempty"`
 }

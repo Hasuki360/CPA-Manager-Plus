@@ -3817,6 +3817,8 @@
     "author": "作者"
   },
   "accountPolicy": {
+    "charityModelMonitor_state_unknown": "未知",
+    "charity_interval_invalid": "同步間隔必須是 5–10080 分鐘之間的整數。",
     "section_title": "憑證自動化維運",
     "section_hint": "依真實請求監控事件記錄異常或自動處理憑證；這不是主動巡檢。已排隊任務會繼續完成。",
     "runtime_note": "沒有被啟動環境鎖定的開關會儲存到目前 Manager Server，且無需重啟即可生效。被環境變數鎖定的開關仍需修改服務環境變數。",
