@@ -168,7 +168,7 @@ func LoadWithOptions(options LoadOptions) (Config, error) {
 		AccountActionsAutoDisable:          envBool("USAGE_ACCOUNT_ACTIONS_AUTO_DISABLE", cfgFile.AccountActionsAutoDisable),
 		DashboardHourlyRollupEnabled:       envBool("USAGE_DASHBOARD_HOURLY_ROLLUP_ENABLED", true),
 		CharityModelMonitorEnabled:         envBool("USAGE_CHARITY_MODEL_MONITOR_ENABLED", cfgFile.CharityModelMonitorEnabled),
-		CharityModelMonitorIntervalMinutes: envInt("USAGE_CHARITY_MODEL_MONITOR_INTERVAL_MINUTES", intFallback(cfgFile.CharityModelMonitorIntervalMinutes, 15)),
+			CharityModelMonitorIntervalMinutes: envInt("USAGE_CHARITY_MODEL_MONITOR_INTERVAL_MINUTES", intFallback(cfgFile.CharityModelMonitorIntervalMinutes, 1440)),
 		UsageImportChunkBytes: envInt64(
 			"USAGE_IMPORT_CHUNK_BYTES",
 			int64Fallback(cfgFile.UsageImportChunkBytes, DefaultUsageImportChunkBytes),

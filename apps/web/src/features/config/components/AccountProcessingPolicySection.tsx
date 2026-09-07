@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/Button';
+import { Input } from '@/components/ui/Input';
 import { IconRefreshCw } from '@/components/ui/icons';
 import { Modal } from '@/components/ui/Modal';
 import { ToggleSwitch } from '@/components/ui/ToggleSwitch';
@@ -16,6 +17,7 @@ import {
   getUsageServiceErrorCode,
   type AccountProcessingPolicy,
   type AccountProcessingPolicyPatch,
+  type CharityModelMonitorSite,
 } from '@/services/api/usageService';
 import { useAuthStore, useNotificationStore } from '@/stores';
 import styles from './AccountProcessingPolicySection.module.scss';
@@ -26,6 +28,7 @@ const patchKeyByCapability: Record<AccountPolicyCapabilityKey, keyof AccountProc
     antigravityQuotaCooldown: 'antigravityQuotaCooldownEnabled',
     authIssueQueue: 'authIssueQueueEnabled',
     authIssueAutoDisable: 'authIssueAutoDisableEnabled',
+    charityModelMonitor: 'charityModelMonitorEnabled',
   };
 
 const toneClassByStatus: Record<AccountPolicyViewItem['statusTone'], string> = {
@@ -52,6 +55,76 @@ export function AccountProcessingPolicySection() {
     message: string;
   } | null>(null);
   const [confirmAutoDisableOpen, setConfirmAutoDisableOpen] = useState(false);
+
+  const [charityIntervalDraft, setCharityIntervalDraft] = useState('1440');
+  const [charitySitesDraft, setCharitySitesDraft] = useState('');
+  const [charityDraftDirty, setCharityDraftDirty] = useState(false);
+  const [charityConfigError, setCharityConfigError] = useState('');
+  const [savingCharityConfig, setSavingCharityConfig] = useState(false);
+
+  const charityState = status?.charityModelMonitorState;
+
+  useEffect(() => {
+    if (!status || charityDraftDirty) return;
+    setCharityIntervalDraft(String(status.charityModelMonitorIntervalMinutes ?? 1440));
+    setCharitySitesDraft(
+      JSON.stringify(status.charityModelMonitorSites ?? [], null, 2)
+    );
+  }, [status, charityDraftDirty]);
+
+  const saveCharityConfig = useCallback(async () => {
+    if (!managerServiceBase || !managementKey) return;
+    const interval = Number.parseInt(charityIntervalDraft, 10);
+    if (!Number.isFinite(interval) || interval <= 0) {
+      setCharityConfigError(t('accountPolicy.charity_interval_invalid'));
+      return;
+    }
+    let sites: CharityModelMonitorSite[];
+    try {
+      const parsed: unknown = JSON.parse(charitySitesDraft || '[]');
+      if (!Array.isArray(parsed) || parsed.some((item) => typeof item !== 'object' || item === null)) {
+        throw new Error('expected an array of site objects');
+      }
+      sites = parsed as CharityModelMonitorSite[];
+    } catch (err) {
+      setCharityConfigError(
+        t('accountPolicy.charity_sites_invalid', {
+          message: err instanceof Error ? err.message : String(err),
+        })
+      );
+      return;
+    }
+    setSavingCharityConfig(true);
+    setCharityConfigError('');
+    try {
+      const patch: AccountProcessingPolicyPatch = {
+        charityModelMonitorIntervalMinutes: interval,
+        charityModelMonitorSites: sites,
+      };
+      const data = await usageServiceApi.updateAccountProcessingPolicy(
+        managerServiceBase,
+        managementKey,
+        patch
+      );
+      setStatus(data);
+      setCharityDraftDirty(false);
+      showNotification(
+        t('accountPolicy.charity_config_saved', {
+          defaultValue: 'Sync configuration saved.',
+        }),
+        'success'
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err || 'request failed');
+      setCharityConfigError(message);
+      showNotification(
+        t('accountPolicy.save_failed', { message, defaultValue: `Save failed: ${message}` }),
+        'error'
+      );
+    } finally {
+      setSavingCharityConfig(false);
+    }
+  }, [charityIntervalDraft, charitySitesDraft, managerServiceBase, managementKey, showNotification, t]);
 
   const load = useCallback(async () => {
     if (!managerServiceBase || !managementKey) return;
@@ -218,6 +291,92 @@ export function AccountProcessingPolicySection() {
             </div>
           </div>
         </details>
+
+        {item.key === 'charityModelMonitor' && charityState ? (
+          <div className={styles.charityState}>
+            <div className={styles.charityStateRow}>
+              <span className={styles.charityStateLabel}>
+                {t('accountPolicy.charityModelMonitor_state_last_check')}
+              </span>
+              <span>
+                {charityState.lastCheck
+                  ? new Date(charityState.lastCheck).toLocaleString()
+                  : t('accountPolicy.charityModelMonitor_state_never')}
+              </span>
+            </div>
+            <div className={styles.charityStateRow}>
+              <span className={styles.charityStateLabel}>
+                {t('accountPolicy.charityModelMonitor_state_codex_version')}
+              </span>
+              <span>{charityState.lastCodexCliVersion || '-'}</span>
+            </div>
+            <div className={styles.charityStateRow}>
+              <span className={styles.charityStateLabel}>
+                {t('accountPolicy.charityModelMonitor_state_sync')}
+              </span>
+              <span>
+                {t('accountPolicy.charityModelMonitor_state_sync_value', {
+                  changed: (charityState.lastProviderSync ?? []).filter(
+                    (entry) => entry.headersChanged || entry.switchChanged
+                  ).length,
+                  total: (charityState.lastProviderSync ?? []).length,
+                  errors: (charityState.lastProviderError ?? []).length,
+                })}
+              </span>
+            </div>
+          </div>
+        ) : null}
+
+        {item.key === 'charityModelMonitor' ? (
+          <div className={styles.charityConfig}>
+            <Input
+              label={t('accountPolicy.charity_interval')}
+              hint={t('accountPolicy.charity_interval_hint')}
+              type="number"
+              min={5}
+              max={10080}
+              value={charityIntervalDraft}
+              onChange={(event) => {
+                setCharityIntervalDraft(event.target.value);
+                setCharityDraftDirty(true);
+              }}
+              disabled={savingCharityConfig}
+            />
+            <div className={styles.charityConfigRow}>
+              <span className={styles.charityConfigLabel}>
+                {t('accountPolicy.charity_sites_json')}
+              </span>
+              <textarea
+                className={styles.charitySitesJson}
+                value={charitySitesDraft}
+                spellCheck={false}
+                disabled={savingCharityConfig}
+                onChange={(event) => {
+                  setCharitySitesDraft(event.target.value);
+                  setCharityDraftDirty(true);
+                }}
+              />
+              <span className={styles.charityConfigHint}>
+                {t('accountPolicy.charity_sites_hint')}
+              </span>
+            </div>
+            {charityConfigError ? (
+              <div className={styles.charityConfigError} role="alert">
+                {charityConfigError}
+              </div>
+            ) : null}
+            <div className={styles.cardActions}>
+              <Button
+                variant="secondary"
+                size="sm"
+                loading={savingCharityConfig}
+                onClick={() => void saveCharityConfig()}
+              >
+                {t('accountPolicy.charity_config_save')}
+              </Button>
+            </div>
+          </div>
+        ) : null}
 
         {item.key === 'authIssueQueue' ? (
           <div className={styles.cardActions}>

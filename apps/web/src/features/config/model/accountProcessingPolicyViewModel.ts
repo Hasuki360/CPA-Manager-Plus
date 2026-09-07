@@ -4,9 +4,10 @@ export type AccountPolicyCapabilityKey =
   | 'providerQuotaCooldown'
   | 'antigravityQuotaCooldown'
   | 'authIssueQueue'
-  | 'authIssueAutoDisable';
+  | 'authIssueAutoDisable'
+  | 'charityModelMonitor';
 
-export type AccountPolicyGroupKey = 'quota' | 'authIssues';
+export type AccountPolicyGroupKey = 'quota' | 'authIssues' | 'extensions';
 
 export interface AccountPolicyViewOptions {
   loading?: boolean;
@@ -46,16 +47,22 @@ const capabilityKeys: AccountPolicyCapabilityKey[] = [
   'antigravityQuotaCooldown',
   'authIssueQueue',
   'authIssueAutoDisable',
+  'charityModelMonitor',
 ];
 
 const capabilitySourceKey: Record<
   AccountPolicyCapabilityKey,
-  'codexQuotaCooldown' | 'antigravityQuotaCooldown' | 'authIssueQueue' | 'authIssueAutoDisable'
+  | 'codexQuotaCooldown'
+  | 'antigravityQuotaCooldown'
+  | 'authIssueQueue'
+  | 'authIssueAutoDisable'
+  | 'charityModelMonitor'
 > = {
   providerQuotaCooldown: 'codexQuotaCooldown',
   antigravityQuotaCooldown: 'antigravityQuotaCooldown',
   authIssueQueue: 'authIssueQueue',
   authIssueAutoDisable: 'authIssueAutoDisable',
+  charityModelMonitor: 'charityModelMonitor',
 };
 
 const capabilityMetadata: Record<
@@ -97,6 +104,14 @@ const capabilityMetadata: Record<
     toggleLabelKey: 'accountPolicy.authIssueAutoDisable_toggle',
     nested: true,
   },
+  charityModelMonitor: {
+    titleKey: 'accountPolicy.charityModelMonitor_title',
+    descriptionKey: 'accountPolicy.charityModelMonitor_description',
+    behaviorKey: 'accountPolicy.charityModelMonitor_behavior',
+    summaryKey: 'accountPolicy.charityModelMonitor_summary',
+    toggleLabelKey: 'accountPolicy.charityModelMonitor_toggle',
+    nested: false,
+  },
 };
 
 const groupDefinitions: Array<{
@@ -116,6 +131,12 @@ const groupDefinitions: Array<{
     titleKey: 'accountPolicy.group_auth_issues_title',
     descriptionKey: 'accountPolicy.group_auth_issues_description',
     itemKeys: ['authIssueQueue', 'authIssueAutoDisable'],
+  },
+  {
+    key: 'extensions',
+    titleKey: 'accountPolicy.group_extensions_title',
+    descriptionKey: 'accountPolicy.group_extensions_description',
+    itemKeys: ['charityModelMonitor'],
   },
 ];
 
@@ -141,7 +162,12 @@ function buildItem(
   options: AccountPolicyViewOptions
 ): AccountPolicyViewItem {
   const capability = status[capabilitySourceKey[key]];
-  const configured = capability.configured ?? capability.enabled;
+  // charityModelMonitor's backend "configured" flag only means "explicitly set
+  // in the database"; the toggle should reflect the effective switch instead.
+  const configured =
+    key === 'charityModelMonitor'
+      ? Boolean(capability.enabled)
+      : (capability.configured ?? capability.enabled);
   const enabled = Boolean(capability.enabled);
   const locked = Boolean(capability.locked);
   const dependencyKey = parseCapabilityKey(capability.dependsOn);

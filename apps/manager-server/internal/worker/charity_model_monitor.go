@@ -23,8 +23,12 @@ const (
 	charityMonitorUserAgent            = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/126 Safari/537.36"
 	charityMonitorCodexVersionFallback = "0.142.5"
 	charityMonitorCodexNpmLatestURL    = "https://registry.npmjs.org/@openai%2Fcodex/latest"
-	charityMonitorCodexVersionTTL      = 6 * time.Hour
+	charityMonitorCodexVersionTTL      = 48 * time.Hour
 	charityMonitorDisableAllModelsRule = "*"
+	// charityMonitorMatchAllBaseURL as a site's codex/claude base URL matches
+	// every provider entry in the target section, so one site can keep headers
+	// in sync across all Codex channels without listing each base URL.
+	charityMonitorMatchAllBaseURL = "*"
 )
 
 type CharityModelMonitorConfig struct {
@@ -41,6 +45,7 @@ type CharityModelMonitorWorker struct {
 
 	mu     sync.RWMutex
 	config CharityModelMonitorConfig
+	runMu  sync.Mutex
 }
 
 type charityProviderEntry struct {
@@ -71,7 +76,9 @@ func (w *CharityModelMonitorWorker) UpdateConfig(ctx context.Context, cfg Charit
 	w.config = normalizeCharityMonitorConfig(cfg)
 	w.mu.Unlock()
 	if w.snapshot().Enabled {
-		go w.runOnce(ctx)
+		// Use a detached background context so a short-lived HTTP request
+		// context triggering this update does not cancel the initial sync cycle.
+		go w.runOnce(context.Background())
 	}
 }
 
@@ -94,6 +101,14 @@ func (w *CharityModelMonitorWorker) loop(ctx context.Context) {
 }
 
 func (w *CharityModelMonitorWorker) runOnce(ctx context.Context) {
+	if w == nil {
+		return
+	}
+	if !w.runMu.TryLock() {
+		return
+	}
+	defer w.runMu.Unlock()
+
 	cfg := w.snapshot()
 	if !cfg.Enabled {
 		return
@@ -609,8 +624,19 @@ func (w *CharityModelMonitorWorker) syncProvider(ctx context.Context, cfg Charit
 	if section == "" || baseURL == "" {
 		return model.CharityModelMonitorProviderState{}, errors.New("provider section or base URL is empty")
 	}
+	matchAll := baseURL == charityMonitorMatchAllBaseURL
 	entries, ok := configData[section].([]any)
 	if !ok {
+		if matchAll && configData[section] == nil {
+			return model.CharityModelMonitorProviderState{
+				Site:           site.Name,
+				Label:          label,
+				Section:        section,
+				Provider:       baseURL,
+				DesiredEnabled: false,
+				Reason:         "no providers configured",
+			}, nil
+		}
 		return model.CharityModelMonitorProviderState{}, fmt.Errorf("CPA config section %q is not a list", section)
 	}
 	matched := make([]charityProviderEntry, 0)
@@ -619,7 +645,7 @@ func (w *CharityModelMonitorWorker) syncProvider(ctx context.Context, cfg Charit
 		if !ok {
 			continue
 		}
-		if normalizeURL(fmt.Sprint(entry["base-url"])) == normalizeURL(baseURL) {
+		if matchAll || normalizeURL(fmt.Sprint(entry["base-url"])) == normalizeURL(baseURL) {
 			matched = append(matched, charityProviderEntry{
 				Entry:        entry,
 				CustomModels: providerCustomModels(entry),
@@ -627,6 +653,16 @@ func (w *CharityModelMonitorWorker) syncProvider(ctx context.Context, cfg Charit
 		}
 	}
 	if len(matched) == 0 {
+		if matchAll {
+			return model.CharityModelMonitorProviderState{
+				Site:           site.Name,
+				Label:          label,
+				Section:        section,
+				Provider:       baseURL,
+				DesiredEnabled: false,
+				Reason:         "no providers configured",
+			}, nil
+		}
 		return model.CharityModelMonitorProviderState{}, fmt.Errorf("CPA config provider not found: %s %s", section, baseURL)
 	}
 	checkMode := "pattern"

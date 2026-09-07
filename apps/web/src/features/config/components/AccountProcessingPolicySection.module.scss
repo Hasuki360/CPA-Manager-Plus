@@ -259,3 +259,74 @@
     grid-template-columns: 1fr;
   }
 }
+
+.charityState {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 12px;
+}
+
+.charityStateRow {
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--cpamp-text-secondary, #64748b);
+}
+
+.charityStateLabel {
+  flex-shrink: 0;
+  min-width: 96px;
+  color: var(--cpamp-text-tertiary, #94a3b8);
+}
+
+.charityConfig {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--cpamp-border-soft, #e2e8f0);
+}
+
+.charityConfigRow {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.charityConfigLabel {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--cpamp-text-secondary, #475569);
+}
+
+.charityConfigHint {
+  font-size: 11px;
+  color: var(--cpamp-text-tertiary, #94a3b8);
+}
+
+.charitySitesJson {
+  width: 100%;
+  min-height: 168px;
+  padding: 8px 10px;
+  border: 1px solid var(--cpamp-border-soft, #cbd5e1);
+  border-radius: 8px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+  resize: vertical;
+  box-sizing: border-box;
+
+  &:focus {
+    outline: none;
+    border-color: var(--cpamp-primary, #2563eb);
+  }
+}
+
+.charityConfigError {
+  font-size: 12px;
+  color: var(--cpamp-danger, #dc2626);
+  white-space: pre-wrap;
+}

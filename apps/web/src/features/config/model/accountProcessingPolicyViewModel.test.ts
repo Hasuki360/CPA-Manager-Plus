@@ -51,10 +51,10 @@ function policy(overrides: Partial<AccountProcessingPolicy> = {}): AccountProces
 }
 
 describe('buildAccountProcessingPolicyViewModel', () => {
-  it('groups quota handling and auth issue handling separately', () => {
+  it('groups quota, auth issue, and header auto-update handling separately', () => {
     const groups = buildAccountProcessingPolicyViewModel(policy());
 
-    expect(groups).toHaveLength(2);
+    expect(groups).toHaveLength(3);
     expect(groups[0].key).toBe('quota');
     expect(groups[0].items.map((item) => item.key)).toEqual([
       'providerQuotaCooldown',
@@ -65,6 +65,29 @@ describe('buildAccountProcessingPolicyViewModel', () => {
       'authIssueQueue',
       'authIssueAutoDisable',
     ]);
+    expect(groups[2].key).toBe('extensions');
+    expect(groups[2].items.map((item) => item.key)).toEqual(['charityModelMonitor']);
+  });
+
+  it('reflects the effective enabled state for the header auto-update toggle', () => {
+    const groups = buildAccountProcessingPolicyViewModel(
+      policy({
+        charityModelMonitor: {
+          enabled: true,
+          configured: false,
+          source: 'startup',
+          locked: false,
+          envKey: 'USAGE_CHARITY_MODEL_MONITOR_ENABLED',
+          configFileKey: 'charityModelMonitorEnabled',
+        },
+      })
+    );
+
+    const charity = groups[2].items[0];
+    expect(charity.configured).toBe(true);
+    expect(charity.enabled).toBe(true);
+    expect(charity.statusTone).toBe('on');
+    expect(charity.toggleDisabled).toBe(false);
   });
 
   it('marks auto-disable as configured but blocked when its dependency is off', () => {

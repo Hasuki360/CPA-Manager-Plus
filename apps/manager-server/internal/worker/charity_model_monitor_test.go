@@ -2,7 +2,9 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -324,5 +326,173 @@ func TestJoinModelsForLog(t *testing.T) {
 	got := joinModelsForLog(values)
 	if !strings.Contains(got, "...(+1)") {
 		t.Fatalf("truncated log = %q", got)
+	}
+}
+
+func TestDefaultCharityModelMonitorSitesWildcardHeadersOnly(t *testing.T) {
+	t.Parallel()
+
+	sites := model.NormalizeCharityModelMonitorSites(model.DefaultCharityModelMonitorSites())
+	if len(sites) != 1 {
+		t.Fatalf("sites = %#v, want single all-codex wildcard site", sites)
+	}
+	site := sites[0]
+	if site.Key != "all-codex" || !site.Enabled {
+		t.Fatalf("site = %#v, want enabled all-codex", site)
+	}
+	if site.CodexBaseURL != "*" || site.CodexProviderSection != "codex-api-key" {
+		t.Fatalf("codex target = %s %s, want codex-api-key *", site.CodexProviderSection, site.CodexBaseURL)
+	}
+	if !site.SyncCodexHeadersOnly {
+		t.Fatal("default site must be headers-only so channel switches are untouched")
+	}
+	if site.ClaudeBaseURL != "" || site.MonitorGPT || site.MonitorClaude {
+		t.Fatalf("default site must not monitor models: %#v", site)
+	}
+}
+
+func newCharityCPAServer(t *testing.T, captured *[]any) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut && r.URL.Path == "/v0/management/codex-api-key" {
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			var entries []any
+			if err := json.Unmarshal(body, &entries); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			*captured = entries
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte("{}"))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+}
+
+func TestSyncProviderWildcardUpdatesAllCodexEntries(t *testing.T) {
+	t.Parallel()
+
+	var captured []any
+	server := newCharityCPAServer(t, &captured)
+	defer server.Close()
+
+	worker := &CharityModelMonitorWorker{client: server.Client()}
+	cfg := CharityModelMonitorConfig{CPAUpstreamURL: server.URL, ManagementKey: "k"}
+	configData := map[string]any{
+		"codex-api-key": []any{
+			map[string]any{
+				"api-key":  "sk-a",
+				"base-url": "https://a.example/v1",
+				"headers": map[string]any{
+					"User-Agent": "codex_cli_rs/0.1.0 (Old OS; x64)",
+					"X-Custom":   "keep-me",
+				},
+			},
+			map[string]any{
+				"api-key":         "sk-b",
+				"base-url":        "https://b.example/v1",
+				"excluded-models": []any{"*"},
+			},
+			map[string]any{
+				"api-key":  "sk-c",
+				"base-url": "https://c.example/v1",
+				"priority": 9,
+			},
+		},
+		"openai-compatibility": []any{
+			map[string]any{"base-url": "https://other.example/v1"},
+		},
+	}
+	site := model.CharityModelMonitorSite{
+		Key:                  "all-codex",
+		Name:                 "全部 Codex 提供商",
+		Enabled:              true,
+		CodexProviderSection: "codex-api-key",
+		CodexBaseURL:         "*",
+		SyncCodexHeadersOnly: true,
+	}
+
+	result, err := worker.syncProvider(context.Background(), cfg, configData, site, "Codex", site.CodexProviderSection, site.CodexBaseURL, nil, codexProviderHeaders("0.99.0"), true)
+	if err != nil {
+		t.Fatalf("syncProvider() error = %v", err)
+	}
+	if !result.Changed || !result.HeadersChanged || result.SwitchChanged {
+		t.Fatalf("result = %#v, want headers-only change", result)
+	}
+	if len(captured) != 3 {
+		t.Fatalf("PUT entries = %d, want 3 (every codex-api-key entry)", len(captured))
+	}
+	for _, item := range captured {
+		entry, _ := item.(map[string]any)
+		headers, _ := entry["headers"].(map[string]any)
+		agent, _ := headers["User-Agent"].(string)
+		if !strings.Contains(agent, "codex_cli_rs/0.99.0") {
+			t.Fatalf("entry %v User-Agent = %q, want 0.99.0", entry["base-url"], agent)
+		}
+		if headers["originator"] != "codex_cli_rs" || headers["x-openai-subagent"] != "codex-mcp-client" {
+			t.Fatalf("entry %v headers = %#v", entry["base-url"], headers)
+		}
+		if _, ok := entry["auth-index"]; ok {
+			t.Fatalf("entry %v must drop auth-index", entry["base-url"])
+		}
+	}
+	first, _ := captured[0].(map[string]any)
+	firstHeaders, _ := first["headers"].(map[string]any)
+	if firstHeaders["X-Custom"] != "keep-me" {
+		t.Fatalf("custom headers must be preserved, got %#v", firstHeaders)
+	}
+	second, _ := captured[1].(map[string]any)
+	excluded, ok := second["excluded-models"].([]any)
+	if !ok || len(excluded) != 1 || excluded[0] != "*" {
+		t.Fatalf("headers-only mode must not touch channel switches, got %#v", second["excluded-models"])
+	}
+}
+
+func TestSyncProviderExactURLMatchesSingleEntry(t *testing.T) {
+	t.Parallel()
+
+	var captured []any
+	server := newCharityCPAServer(t, &captured)
+	defer server.Close()
+
+	worker := &CharityModelMonitorWorker{client: server.Client()}
+	cfg := CharityModelMonitorConfig{CPAUpstreamURL: server.URL, ManagementKey: "k"}
+	configData := map[string]any{
+		"codex-api-key": []any{
+			map[string]any{"api-key": "sk-a", "base-url": "https://a.example/v1"},
+			map[string]any{"api-key": "sk-b", "base-url": "https://b.example/v1/"},
+		},
+	}
+	site := model.CharityModelMonitorSite{
+		Key:                  "a",
+		Name:                 "A",
+		Enabled:              true,
+		CodexProviderSection: "codex-api-key",
+		CodexBaseURL:         "https://a.example/v1",
+		SyncCodexHeadersOnly: true,
+	}
+
+	result, err := worker.syncProvider(context.Background(), cfg, configData, site, "Codex", site.CodexProviderSection, site.CodexBaseURL, nil, codexProviderHeaders("0.99.0"), true)
+	if err != nil {
+		t.Fatalf("syncProvider() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatalf("result = %#v, want change", result)
+	}
+	if len(captured) != 2 {
+		t.Fatalf("PUT entries = %d, want 2 (whole section rewrite)", len(captured))
+	}
+	first, _ := captured[0].(map[string]any)
+	if _, ok := first["headers"]; !ok {
+		t.Fatalf("matched entry must gain headers, got %#v", first)
+	}
+	second, _ := captured[1].(map[string]any)
+	if _, ok := second["headers"]; ok {
+		t.Fatalf("unmatched entry must keep no headers, got %#v", second)
 	}
 }

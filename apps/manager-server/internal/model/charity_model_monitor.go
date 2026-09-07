@@ -7,9 +7,9 @@ import (
 )
 
 const (
-	DefaultCharityModelMonitorIntervalMinutes = 15
+	DefaultCharityModelMonitorIntervalMinutes = 1440
 	MinCharityModelMonitorIntervalMinutes     = 5
-	MaxCharityModelMonitorIntervalMinutes     = 1440
+	MaxCharityModelMonitorIntervalMinutes     = 10080
 )
 
 type CharityModelMonitorSite struct {
@@ -125,25 +125,14 @@ func filterRemovedCharityErrors(errors []string) []string {
 func DefaultCharityModelMonitorSites() []CharityModelMonitorSite {
 	return []CharityModelMonitorSite{
 		{
-			Key:                   "x666",
-			Name:                  "薄荷公益站",
-			Enabled:               true,
-			PricingURL:            "https://x666.me/api/pricing",
-			Referer:               "https://x666.me/pricing",
-			CodexProviderSection:  "codex-api-key",
-			CodexBaseURL:          "https://x666.me/v1",
-			ClaudeProviderSection: "claude-api-key",
-			ClaudeBaseURL:         "https://x666.me",
-			MonitorGPT:            true,
-			MonitorClaude:         true,
-		},
-		{
-			Key:                  "anyrouter",
-			Name:                 "AnyRouter",
+			// Wildcard base URL: keep the Codex request headers (User-Agent /
+			// originator / x-openai-subagent) of every provider in the
+			// codex-api-key section in sync with the latest Codex CLI version.
+			Key:                  "all-codex",
+			Name:                 "全部 Codex 提供商",
 			Enabled:              true,
-			Referer:              "https://anyrouter.top",
 			CodexProviderSection: "codex-api-key",
-			CodexBaseURL:         "https://anyrouter.top/v1",
+			CodexBaseURL:         "*",
 			SyncCodexHeadersOnly: true,
 		},
 	}

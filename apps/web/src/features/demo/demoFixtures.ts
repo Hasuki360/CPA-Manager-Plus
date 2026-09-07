@@ -3357,22 +3357,35 @@ export const getDemoAccountProcessingPolicy = (): AccountProcessingPolicy => ({
     envKey: 'USAGE_CHARITY_MODEL_MONITOR_ENABLED',
     configFileKey: 'charityModelMonitorEnabled',
   },
-  charityModelMonitorIntervalMinutes: 15,
+  charityModelMonitorIntervalMinutes: 1440,
   charityModelMonitorSites: [
     {
-      key: 'x666',
-      name: '薄荷公益站',
+      key: 'all-codex',
+      name: '全部 Codex 提供商',
       enabled: true,
-      pricingUrl: 'https://x666.me/api/pricing',
-      referer: 'https://x666.me/pricing',
       codexProviderSection: 'codex-api-key',
-      codexBaseUrl: 'https://x666.me/v1',
-      claudeProviderSection: 'claude-api-key',
-      claudeBaseUrl: 'https://x666.me',
-      monitorGpt: true,
-      monitorClaude: true,
+      codexBaseUrl: '*',
+      syncCodexHeadersOnly: true,
     },
   ],
+  charityModelMonitorState: {
+    updatedAtMs: now() - 3 * minute,
+    lastCheck: new Date(now() - 3 * minute).toISOString(),
+    lastCodexCliVersion: '0.153.0',
+    lastProviderSync: [
+      {
+        site: '全部 Codex 提供商',
+        label: 'Codex',
+        section: 'codex-api-key',
+        provider: '*',
+        desiredEnabled: true,
+        changed: true,
+        headersChanged: true,
+        reason: 'headers only',
+      },
+    ],
+    lastProviderError: [],
+  },
 });
 
 export const getDemoQuotaCooldowns = (): QuotaCooldownInfo[] => {
