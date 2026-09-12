@@ -3880,13 +3880,22 @@
     "antigravityQuotaCooldown_toggle": "Enable Antigravity quota cooldown handling",
     "antigravityQuotaCooldown_description": "When request monitoring confirms short-term Antigravity quota is exhausted, it temporarily pauses the matching login file and enables it again after quota recovers.",
     "antigravityQuotaCooldown_behavior": [
-      "Handles Antigravity only",
-      "Handles only clear quota-exhausted errors (429 / 404)",
-      "Requires a known recovery time",
-      "Temporarily pauses the login file",
-      "429 quota exhausted: auto-recovers after the bucket window reset",
-      "503 server timeout: temporarily pauses for 5 minutes then recovers",
-      "Extends the cooldown automatically while quota exhaustion continues"
+      "Only processes Antigravity",
+      "Only handles unambiguous quota exhaustion errors (429 / 404)",
+      "Requires identifiable recovery time",
+      "Temporarily disables credentials",
+      "429 quota exhausted: automatically recovers after quota window reset",
+      "503 server timeout: temporarily disables for 5 minutes then auto-recovers",
+      "If quota exhaustion occurs again during cooldown, extends the cooldown window"
+    ],
+    "antigravityReverseProxy_title": "Antigravity Reverse Proxy",
+    "antigravityReverseProxy_summary": "Routes Antigravity API requests and OAuth token refresh through an accelerated reverse proxy.",
+    "antigravityReverseProxy_toggle": "Enable Antigravity reverse proxy",
+    "antigravityReverseProxy_description": "When enabled, Antigravity model generation, streaming, quota checks, and token refresh route through https://ag.hasuki.top. When disabled, connects directly to Google official endpoints.",
+    "antigravityReverseProxy_behavior": [
+      "When enabled: requests route to https://ag.hasuki.top and tokens to /token",
+      "When disabled: falls back to Google official endpoints (daily-cloudcode-pa / oauth2)",
+      "Changes apply immediately in real-time without restarting services"
     ],
     "charityModelMonitor_title": "Auto-update Codex request headers",
     "charityModelMonitor_summary": "Periodically fetches the latest Codex CLI version and syncs request headers across all Codex providers.",

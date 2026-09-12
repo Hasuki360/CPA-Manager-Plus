@@ -3873,6 +3873,15 @@
       "只恢復 CPAMP 自動停用的帳號",
       "不會恢復使用者手動停用的登入檔案"
     ],
+    "antigravityReverseProxy_title": "Antigravity 專用反向代理",
+    "antigravityReverseProxy_summary": "透過反向代理加速站轉發 Antigravity API 請求與 OAuth Token 重新整理，規避直連限制。",
+    "antigravityReverseProxy_toggle": "啟用 Antigravity 反向代理",
+    "antigravityReverseProxy_description": "開啟後，所有 Antigravity 用戶端的模型生成、串流響應、配額查詢以及 Token 重新整理將經由反代站 (https://ag.hasuki.top) 轉發；關閉時直连 Google 官方網域名稱。",
+    "antigravityReverseProxy_behavior": [
+      "開啟後：模型請求路由至 https://ag.hasuki.top，Token 重新整理路由至 https://ag.hasuki.top/token",
+      "關閉後：所有請求回退為 Google 官方直連 (daily-cloudcode-pa / oauth2)",
+      "設定在 CPA 底層即時寫入儲存並熱生效，無需重啟服務"
+    ],
     "providerQuotaCooldown_title": "Provider 額度冷卻自動化",
     "providerQuotaCooldown_summary": "真實 Codex 或 xAI 請求回傳明確額度耗盡訊號後，暫時停用對應憑證，並在恢復時間後重新啟用。",
     "providerQuotaCooldown_toggle": "啟用 Provider 額度冷卻",

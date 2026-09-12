@@ -3333,6 +3333,14 @@ export const getDemoAccountProcessingPolicy = (): AccountProcessingPolicy => ({
       envKey: 'USAGE_ANTIGRAVITY_QUOTA_COOLDOWN_ENABLED',
       configFileKey: 'antigravityQuotaCooldownEnabled',
     },
+    antigravityReverseProxy: {
+      enabled: false,
+      configured: false,
+      source: 'db',
+      locked: false,
+      envKey: '',
+      configFileKey: 'antigravity.reverse-proxy.enabled',
+    },
     authIssueQueue: {
       enabled: true,
     configured: true,

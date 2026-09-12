@@ -185,6 +185,7 @@ export interface AccountProcessingPolicy {
   updatedAtMs?: number;
   codexQuotaCooldown: AccountPolicyCapability;
   antigravityQuotaCooldown: AccountPolicyCapability;
+  antigravityReverseProxy: AccountPolicyCapability;
   authIssueQueue: AccountPolicyCapability;
   authIssueAutoDisable: AccountPolicyCapability;
   charityModelMonitor: AccountPolicyCapability;
@@ -196,6 +197,7 @@ export interface AccountProcessingPolicy {
 export interface AccountProcessingPolicyPatch {
   codexQuotaCooldownEnabled?: boolean;
   antigravityQuotaCooldownEnabled?: boolean;
+  antigravityReverseProxyEnabled?: boolean;
   authIssueQueueEnabled?: boolean;
   authIssueAutoDisableEnabled?: boolean;
   charityModelMonitorEnabled?: boolean;
@@ -1533,6 +1535,11 @@ const getDemoPatchedAccountProcessingPolicy = (
       ...policy.antigravityQuotaCooldown,
       enabled:
         patch.antigravityQuotaCooldownEnabled ?? policy.antigravityQuotaCooldown.enabled,
+    },
+    antigravityReverseProxy: {
+      ...policy.antigravityReverseProxy,
+      enabled:
+        patch.antigravityReverseProxyEnabled ?? policy.antigravityReverseProxy.enabled,
     },
     authIssueQueue: {
       ...policy.authIssueQueue,

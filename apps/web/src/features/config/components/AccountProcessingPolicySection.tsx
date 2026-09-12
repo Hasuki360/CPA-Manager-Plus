@@ -26,6 +26,7 @@ const patchKeyByCapability: Record<AccountPolicyCapabilityKey, keyof AccountProc
   {
     providerQuotaCooldown: 'codexQuotaCooldownEnabled',
     antigravityQuotaCooldown: 'antigravityQuotaCooldownEnabled',
+    antigravityReverseProxy: 'antigravityReverseProxyEnabled',
     authIssueQueue: 'authIssueQueueEnabled',
     authIssueAutoDisable: 'authIssueAutoDisableEnabled',
     charityModelMonitor: 'charityModelMonitorEnabled',

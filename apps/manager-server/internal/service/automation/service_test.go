@@ -34,6 +34,10 @@ func (s *stubSettingsStore) LoadCharityModelMonitorState(ctx context.Context) (s
 	return store.CharityModelMonitorState{}, false, nil
 }
 
+func (s *stubSettingsStore) LoadSetup(ctx context.Context) (store.Setup, bool, error) {
+	return store.Setup{}, false, nil
+}
+
 func mustStatus(t *testing.T, svc *Service, ctx context.Context) Status {
 	t.Helper()
 	status, err := svc.Status(ctx)
@@ -281,5 +285,14 @@ func TestUpdateReturnsPersistedRecordWithoutRereading(t *testing.T) {
 	runtime := svc.RuntimeSettings(context.Background())
 	if !runtime.QuotaCooldownEnabled {
 		t.Fatalf("runtime cache should reflect persisted value after Update, got %#v", runtime)
+	}
+}
+
+func TestStatusExposesAntigravityReverseProxy(t *testing.T) {
+	loader := &stubSettingsStore{ok: false}
+	svc := &Service{cfg: config.Config{}, store: loader}
+	status := mustStatus(t, svc, context.Background())
+	if status.AntigravityReverseProxy.ConfigFileKey != "antigravity.reverse-proxy.enabled" {
+		t.Fatalf("expected ConfigFileKey = antigravity.reverse-proxy.enabled, got %q", status.AntigravityReverseProxy.ConfigFileKey)
 	}
 }

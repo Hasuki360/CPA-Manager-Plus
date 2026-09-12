@@ -3888,6 +3888,15 @@
       "503 服务端超时：临时停用 5 分钟后自动恢复",
       "冷却期间继续发生额度耗尽，会自动延长冷却时间"
     ],
+    "antigravityReverseProxy_title": "Antigravity 专用反向代理",
+    "antigravityReverseProxy_summary": "通过反向代理加速站转发 Antigravity API 请求与 OAuth Token 刷新，规避直连限制。",
+    "antigravityReverseProxy_toggle": "启用 Antigravity 反向代理",
+    "antigravityReverseProxy_description": "开启后，所有 Antigravity 客户端的模型生成、流式响应、配额查询以及 Token 刷新将经由反代站 (https://ag.hasuki.top) 转发；关闭时直连 Google 官方域名。",
+    "antigravityReverseProxy_behavior": [
+      "开启后：模型请求路由至 https://ag.hasuki.top，Token 刷新路由至 https://ag.hasuki.top/token",
+      "关闭后：所有请求回退为 Google 官方直连 (daily-cloudcode-pa / oauth2)",
+      "配置在 CPA 底层实时写盘保存并热生效，无需重启服务"
+    ],
     "charityModelMonitor_title": "自动更新 Codex 请求头",
     "charityModelMonitor_summary": "后台定时获取最新 Codex CLI 版本，自动更新 AI 提供商中全部 Codex 渠道的请求头。",
     "charityModelMonitor_toggle": "启用 Codex 请求头自动更新",

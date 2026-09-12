@@ -21,6 +21,14 @@ function policy(overrides: Partial<AccountProcessingPolicy> = {}): AccountProces
       envKey: 'USAGE_ANTIGRAVITY_QUOTA_COOLDOWN_ENABLED',
       configFileKey: 'antigravityQuotaCooldownEnabled',
     },
+    antigravityReverseProxy: {
+      enabled: false,
+      configured: false,
+      source: 'startup',
+      locked: false,
+      envKey: '',
+      configFileKey: 'antigravity.reverse-proxy.enabled',
+    },
     authIssueQueue: {
       enabled: false,
       configured: false,
@@ -59,6 +67,7 @@ describe('buildAccountProcessingPolicyViewModel', () => {
     expect(groups[0].items.map((item) => item.key)).toEqual([
       'providerQuotaCooldown',
       'antigravityQuotaCooldown',
+      'antigravityReverseProxy',
     ]);
     expect(groups[1].key).toBe('authIssues');
     expect(groups[1].items.map((item) => item.key)).toEqual([

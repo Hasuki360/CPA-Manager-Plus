@@ -3873,6 +3873,15 @@
       "Restores only accounts paused by CPAMP",
       "Does not restore login files you disabled manually"
     ],
+    "antigravityReverseProxy_title": "Обратный прокси Antigravity",
+    "antigravityReverseProxy_summary": "Перенаправляет запросы Antigravity и обновление токенов через обратный прокси.",
+    "antigravityReverseProxy_toggle": "Включить обратный прокси Antigravity",
+    "antigravityReverseProxy_description": "При включении запросы направляются через https://ag.hasuki.top. При отключении подключается напрямую к Google.",
+    "antigravityReverseProxy_behavior": [
+      "Включено: маршрутизация на https://ag.hasuki.top",
+      "Отключено: прямое подключение к Google",
+      "Применяется мгновенно без перезапуска"
+    ],
     "providerQuotaCooldown_title": "Автоматизация охлаждения квоты провайдера",
     "providerQuotaCooldown_summary": "Временно отключает соответствующие учётные данные после явного сигнала об исчерпании квоты в реальном запросе Codex или xAI и восстанавливает их после времени восстановления.",
     "providerQuotaCooldown_toggle": "Включить охлаждение квоты провайдера",

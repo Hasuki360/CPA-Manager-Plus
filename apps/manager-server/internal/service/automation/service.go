@@ -3,10 +3,12 @@ package automation
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"sync"
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/config"
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/cpa"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/store"
 )
 
@@ -22,6 +24,7 @@ type settingsStore interface {
 	LoadAutomationSettings(ctx context.Context) (store.AutomationSettings, bool, error)
 	SaveAutomationSettings(ctx context.Context, settings store.AutomationSettings) (store.AutomationSettings, error)
 	LoadCharityModelMonitorState(ctx context.Context) (store.CharityModelMonitorState, bool, error)
+	LoadSetup(ctx context.Context) (store.Setup, bool, error)
 }
 
 type Capability struct {
@@ -39,6 +42,7 @@ type Status struct {
 	UpdatedAtMS                        int64                           `json:"updatedAtMs,omitempty"`
 	QuotaCooldown                      Capability                      `json:"codexQuotaCooldown"`
 	AntigravityQuotaCooldown           Capability                      `json:"antigravityQuotaCooldown"`
+	AntigravityReverseProxy            Capability                      `json:"antigravityReverseProxy"`
 	AccountActions                     Capability                      `json:"authIssueQueue"`
 	AccountActionsAutoDisable          Capability                      `json:"authIssueAutoDisable"`
 	CharityModelMonitor                Capability                      `json:"charityModelMonitor"`
@@ -50,6 +54,7 @@ type Status struct {
 type UpdateRequest struct {
 	QuotaCooldownEnabled               *bool                           `json:"codexQuotaCooldownEnabled,omitempty"`
 	AntigravityQuotaCooldownEnabled    *bool                           `json:"antigravityQuotaCooldownEnabled,omitempty"`
+	AntigravityReverseProxyEnabled     *bool                           `json:"antigravityReverseProxyEnabled,omitempty"`
 	AccountActionsEnabled              *bool                           `json:"authIssueQueueEnabled,omitempty"`
 	AccountActionsAutoDisable          *bool                           `json:"authIssueAutoDisableEnabled,omitempty"`
 	CharityModelMonitorEnabled         *bool                           `json:"charityModelMonitorEnabled,omitempty"`
@@ -78,6 +83,17 @@ func New(cfg config.Config, st ...*store.Store) *Service {
 	return &Service{cfg: cfg, store: storeRef}
 }
 
+func (s *Service) resolveCPAConnection(ctx context.Context) (string, string) {
+	if s.store != nil {
+		if setup, ok, err := s.store.LoadSetup(ctx); err == nil && ok {
+			if setup.CPAUpstreamURL != "" {
+				return setup.CPAUpstreamURL, setup.ManagementKey
+			}
+		}
+	}
+	return s.cfg.CPAUpstreamURL, s.cfg.ManagementKey
+}
+
 // Status returns the effective account-processing policy. Unlike the runtime
 // gating path, a read failure is surfaced to the caller so the UI does not
 // silently show a stale/default state.
@@ -87,6 +103,13 @@ func (s *Service) Status(ctx context.Context) (Status, error) {
 		return Status{}, err
 	}
 	status := s.statusFromSettings(settings)
+	baseURL, key := s.resolveCPAConnection(ctx)
+	if baseURL != "" {
+		if rpCfg, err := cpa.FetchAntigravityReverseProxy(ctx, baseURL, key); err == nil {
+			status.AntigravityReverseProxy.Enabled = rpCfg.Enabled
+			status.AntigravityReverseProxy.Configured = rpCfg.Enabled
+		}
+	}
 	if s.store != nil {
 		state, ok, err := s.store.LoadCharityModelMonitorState(ctx)
 		if err != nil {
@@ -112,6 +135,14 @@ func (s *Service) Update(ctx context.Context, req UpdateRequest) (Status, error)
 	current, _, err := s.loadSettings(ctx)
 	if err != nil {
 		return Status{}, err
+	}
+	if req.AntigravityReverseProxyEnabled != nil {
+		baseURL, key := s.resolveCPAConnection(ctx)
+		if baseURL != "" {
+			if err := cpa.SetAntigravityReverseProxy(ctx, baseURL, key, *req.AntigravityReverseProxyEnabled); err != nil {
+				return Status{}, fmt.Errorf("failed to update Antigravity reverse proxy: %w", err)
+			}
+		}
 	}
 	if req.QuotaCooldownEnabled != nil {
 		if s.cfg.QuotaCooldownEnvSet {
@@ -162,6 +193,18 @@ func (s *Service) Update(ctx context.Context, req UpdateRequest) (Status, error)
 	s.hasKnown = true
 	s.mu.Unlock()
 	status := s.statusFromSettings(saved)
+	if req.AntigravityReverseProxyEnabled != nil {
+		status.AntigravityReverseProxy.Enabled = *req.AntigravityReverseProxyEnabled
+		status.AntigravityReverseProxy.Configured = *req.AntigravityReverseProxyEnabled
+	} else {
+		baseURL, key := s.resolveCPAConnection(ctx)
+		if baseURL != "" {
+			if rpCfg, err := cpa.FetchAntigravityReverseProxy(ctx, baseURL, key); err == nil {
+				status.AntigravityReverseProxy.Enabled = rpCfg.Enabled
+				status.AntigravityReverseProxy.Configured = rpCfg.Enabled
+			}
+		}
+	}
 	// Saving the policy does not invalidate the last completed sync. A failed
 	// state read must not turn an already-persisted update into a reported failure.
 	if state, ok, stateErr := s.store.LoadCharityModelMonitorState(ctx); stateErr == nil && ok {
@@ -272,6 +315,14 @@ func (s *Service) statusFromSettings(settings store.AutomationSettings) Status {
 			Locked:        r.antigravityLocked,
 			EnvKey:        "USAGE_ANTIGRAVITY_QUOTA_COOLDOWN_ENABLED",
 			ConfigFileKey: "antigravityQuotaCooldownEnabled",
+		},
+		AntigravityReverseProxy: Capability{
+			Enabled:       false,
+			Configured:    false,
+			Source:        SourceDB,
+			Locked:        false,
+			EnvKey:        "",
+			ConfigFileKey: "antigravity.reverse-proxy.enabled",
 		},
 		AccountActions: Capability{
 			Enabled:       r.accountValue,

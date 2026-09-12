@@ -47,6 +47,7 @@ const policy = (overrides: Partial<AccountProcessingPolicy> = {}): AccountProces
     source: 'db',
     codexQuotaCooldown: capability,
     antigravityQuotaCooldown: capability,
+    antigravityReverseProxy: capability,
     authIssueQueue: capability,
     authIssueAutoDisable: capability,
     charityModelMonitor: capability,

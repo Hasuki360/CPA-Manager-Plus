@@ -22,6 +22,74 @@ type ManagementConfig struct {
 	ProxyURL string `json:"proxyUrl,omitempty"`
 }
 
+type AntigravityReverseProxyConfig struct {
+	Enabled  bool   `json:"enabled"`
+	Value    bool   `json:"value"`
+	BaseURL  string `json:"base-url"`
+	TokenURL string `json:"token-url"`
+}
+
+func FetchAntigravityReverseProxy(ctx context.Context, baseURL string, key string) (AntigravityReverseProxyConfig, error) {
+	if strings.TrimSpace(baseURL) == "" {
+		return AntigravityReverseProxyConfig{}, errors.New("cpa baseURL is required")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, NormalizeBaseURL(baseURL)+"/v0/management/antigravity/reverse-proxy", nil)
+	if err != nil {
+		return AntigravityReverseProxyConfig{}, err
+	}
+	if key != "" {
+		req.Header.Set("Authorization", "Bearer "+key)
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+	res, err := client.Do(req)
+	if err != nil {
+		return AntigravityReverseProxyConfig{}, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return AntigravityReverseProxyConfig{}, errors.New("fetch antigravity reverse proxy failed: " + res.Status)
+	}
+	var cfg AntigravityReverseProxyConfig
+	if err := json.NewDecoder(res.Body).Decode(&cfg); err != nil {
+		return AntigravityReverseProxyConfig{}, err
+	}
+	return cfg, nil
+}
+
+func SetAntigravityReverseProxy(ctx context.Context, baseURL string, key string, enabled bool) error {
+	if strings.TrimSpace(baseURL) == "" {
+		return errors.New("cpa baseURL is required")
+	}
+	payload := map[string]any{"enabled": enabled}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPut,
+		NormalizeBaseURL(baseURL)+"/v0/management/antigravity/reverse-proxy",
+		strings.NewReader(string(data)),
+	)
+	if err != nil {
+		return err
+	}
+	if key != "" {
+		req.Header.Set("Authorization", "Bearer "+key)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	client := &http.Client{Timeout: 10 * time.Second}
+	res, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode >= 200 && res.StatusCode < 300 {
+		return nil
+	}
+	return errors.New("update antigravity reverse proxy failed: " + res.Status)
+}
+
 func ValidateManagementAPI(ctx context.Context, baseURL string, key string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, NormalizeBaseURL(baseURL)+"/v0/management/config", nil)
 	if err != nil {
