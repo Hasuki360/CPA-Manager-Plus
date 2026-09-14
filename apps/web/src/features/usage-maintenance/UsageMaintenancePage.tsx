@@ -535,36 +535,43 @@ export function UsageMaintenancePage() {
     };
   }, [invalidateOperation, invalidatePreview, managementKey, serviceBase]);
 
-  const loadHistory = useCallback(async () => {
-    if (!mountedRef.current || !serviceBase || view !== 'history') return;
-    const generation = ++historyGenerationRef.current;
-    historyControllerRef.current?.abort();
-    const controller = new AbortController();
-    historyControllerRef.current = controller;
-    setHistoryLoading(true);
-    try {
-      const result = await usageServiceApi.listUsageArchives(
-        serviceBase,
-        managementKey,
-        {
-          status: archiveHistoryFilterStatus(historyFilter),
-          limit: 20,
-          cursor: historyCursor,
-        },
-        controller.signal
-      );
-      if (controller.signal.aborted || generation !== historyGenerationRef.current) return;
-      if (!isUsageArchiveList(result)) {
-        setError(
-          t('usage_maintenance.archive_response_invalid', {
-            defaultValue: 'The server returned an invalid archive task response.',
-          })
+  const loadHistory = useCallback(
+    async ({
+      clearErrorOnSuccess = true,
+    }: {
+      clearErrorOnSuccess?: boolean;
+    } = {}) => {
+      if (!mountedRef.current || !serviceBase || view !== 'history') return;
+      const generation = ++historyGenerationRef.current;
+      historyControllerRef.current?.abort();
+      const controller = new AbortController();
+      historyControllerRef.current = controller;
+      setHistoryLoading(true);
+      try {
+        const result = await usageServiceApi.listUsageArchives(
+          serviceBase,
+          managementKey,
+          {
+            status: archiveHistoryFilterStatus(historyFilter),
+            limit: 20,
+            cursor: historyCursor,
+          },
+          controller.signal
         );
-        return;
-      }
-      setHistoryList(result);
-      setError(null);
-    } catch (cause) {
+        if (controller.signal.aborted || generation !== historyGenerationRef.current) return;
+        if (!isUsageArchiveList(result)) {
+          setError(
+            t('usage_maintenance.archive_response_invalid', {
+              defaultValue: 'The server returned an invalid archive task response.',
+            })
+          );
+          return;
+        }
+        setHistoryList(result);
+        if (clearErrorOnSuccess) {
+          setError(null);
+        }
+      } catch (cause) {
       if (controller.signal.aborted || generation !== historyGenerationRef.current) return;
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -1090,13 +1097,20 @@ export function UsageMaintenancePage() {
         if (refreshedMaintenance !== null && operationIsCurrent(operation)) {
           setPostDeleteNoticeVisible(true);
           navigateTo('overview');
+        } else if (operationIsCurrent(operation)) {
+          if (view === 'history') {
+            await loadHistory({ clearErrorOnSuccess: false });
+          }
+          if (selectedRunId === run.id && (view === 'detail' || view === 'active')) {
+            setSelectedArchive(updated);
+          }
         }
       } else if (view === 'history') {
         await loadHistory();
       }
       if (operationIsCurrent(operation)) {
         setPreviewRefreshToken((value) => value + 1);
-        if (selectedRunId === run.id) {
+        if (!destructiveCompleted && selectedRunId === run.id) {
           setSelectedArchiveRefreshToken((value) => value + 1);
         }
       }

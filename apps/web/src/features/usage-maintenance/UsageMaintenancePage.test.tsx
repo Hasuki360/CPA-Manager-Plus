@@ -1927,6 +1927,15 @@ describe('UsageMaintenancePage', () => {
     mocks.deleteUsageArchive.mockResolvedValueOnce(archiveStatus(completedRun));
     // Refresh fails
     mocks.getUsageMaintenance.mockRejectedValueOnce(new Error('refresh failed'));
+    // Focused history reload returns updated completed list
+    mocks.listUsageArchives.mockImplementation(
+      (_base: string, _key: string | undefined, options: unknown) => {
+        if (typeof options === 'object') {
+          return Promise.resolve({ runs: [completedRun] });
+        }
+        return Promise.resolve({ runs: [] });
+      }
+    );
 
     act(() => findButtons(renderer, 'Delete raw')[0].props.onClick());
     const confirmation = mocks.showConfirmation.mock.calls[0][0] as {
@@ -1934,6 +1943,8 @@ describe('UsageMaintenancePage', () => {
     };
     await act(async () => {
       await confirmation.onConfirm();
+      await Promise.resolve();
+      await Promise.resolve();
     });
 
     // Delete success notification is still shown
@@ -1944,11 +1955,71 @@ describe('UsageMaintenancePage', () => {
     expect(text).toContain('refresh failed');
     expect(text).not.toContain('can be reclaimed');
 
-    // Asserts no unnecessary extra history refresh was triggered after destructive completed failure
+    // Delete raw button is removed because history was updated to completed run
+    expect(findButtons(renderer, 'Delete raw')).toHaveLength(0);
+    expect(text).toContain('post-delete-run-d');
+
+    // Asserts focused history refresh was triggered once to update list without clearing error
     const historyListCallsAfterDelete = mocks.listUsageArchives.mock.calls.filter(
       ([, , options]) => typeof options === 'object'
     ).length;
-    expect(historyListCallsAfterDelete).toBe(historyListCallsBeforeDelete);
+    expect(historyListCallsAfterDelete).toBe(historyListCallsBeforeDelete + 1);
+
+    act(() => renderer.unmount());
+  });
+
+  it('preserves maintenance refresh failure in detail view after deletion without extra archive fetch', async () => {
+    const targetRun = archive('verified', 'detail-delete-refresh-failure');
+    mocks.getUsageArchive.mockResolvedValue(archiveStatus(targetRun));
+
+    const renderer = await renderOverviewPage(maintenance(), [targetRun]);
+
+    // Open detail view
+    await act(async () => {
+      findButtons(renderer, 'Details')[0].props.onClick();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(getText(renderer.root)).toContain('Archive task details');
+    expect(getText(renderer.root)).toContain('Delete raw');
+
+    const archiveCallsBeforeDelete = mocks.getUsageArchive.mock.calls.length;
+
+    const completedRun = {
+      ...targetRun,
+      status: 'completed' as const,
+      deleted_event_count: 10,
+    };
+    mocks.deleteUsageArchive.mockResolvedValueOnce(archiveStatus(completedRun));
+    mocks.getUsageMaintenance.mockRejectedValueOnce(new Error('refresh failed'));
+    // If buggy implementation triggers getUsageArchive, it would succeed and clear error
+    mocks.getUsageArchive.mockResolvedValueOnce(archiveStatus(completedRun));
+
+    act(() => findButtons(renderer, 'Delete raw')[0].props.onClick());
+    const confirmation = mocks.showConfirmation.mock.calls[0][0] as {
+      onConfirm: () => Promise<void>;
+    };
+    await act(async () => {
+      await confirmation.onConfirm();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // 1. Success notification for deletion is shown
+    expect(mocks.showNotification).toHaveBeenCalledWith('Logical deletion completed.', 'success');
+
+    // 2. Refresh failure error is preserved
+    const text = getText(renderer.root);
+    expect(text).toContain('refresh failed');
+
+    // 3. Detail view updated to completed directly from response, without Delete raw button
+    expect(findButtons(renderer, 'Delete raw')).toHaveLength(0);
+    expect(text).toContain('Archive task details');
+    expect(text).toContain('completed');
+
+    // 4. No extra getUsageArchive call was made
+    expect(mocks.getUsageArchive.mock.calls.length).toBe(archiveCallsBeforeDelete);
 
     act(() => renderer.unmount());
   });
