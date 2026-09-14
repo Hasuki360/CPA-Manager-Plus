@@ -1113,7 +1113,7 @@ func (m *archiveManager) buildManifest(ctx context.Context, run store.UsageArchi
 		if segment.Sequence != index+1 || (index > 0 && segment.FirstEventID <= previousLastEventID) {
 			return ArchiveManifest{}, fmt.Errorf("%w: archive segment ordering is invalid at sequence %d", ErrArchiveCoverageIncomplete, segment.Sequence)
 		}
-		inspection, err := m.inspectSegment(segment, overallDigest)
+		inspection, err := m.inspectSegment(segment, overallDigest, false)
 		if err != nil {
 			return ArchiveManifest{}, err
 		}
@@ -1254,7 +1254,7 @@ func (m *archiveManager) verifyManifest(ctx context.Context, run store.UsageArch
 		if manifest.Segments[index] != manifestSegment(segment) {
 			return fmt.Errorf("usage archive manifest segment %d does not match repository metadata", segment.Sequence)
 		}
-		inspection, err := m.inspectSegment(segment, overallDigest)
+		inspection, err := m.inspectSegment(segment, overallDigest, true)
 		if err != nil {
 			return err
 		}
@@ -1278,7 +1278,7 @@ func (m *archiveManager) verifyManifest(ctx context.Context, run store.UsageArch
 	return nil
 }
 
-func (m *archiveManager) inspectSegment(segment store.UsageArchiveSegment, overallDigest hash.Hash) (archiveFileInspection, error) {
+func (m *archiveManager) inspectSegment(segment store.UsageArchiveSegment, overallDigest hash.Hash, requireRestorableEventHash bool) (archiveFileInspection, error) {
 	path, err := m.resolveArchivePath(segment.FileName)
 	if err != nil {
 		return archiveFileInspection{}, err
@@ -1333,6 +1333,13 @@ func (m *archiveManager) inspectSegment(segment store.UsageArchiveSegment, overa
 		restored := parsed.Events[0]
 		if !restored.PreserveArchiveDerivedFields || restored.EventHash != envelope.EventHash || restored.TimestampMS != envelope.TimestampMS {
 			return archiveFileInspection{}, fmt.Errorf("usage archive segment %d record envelope does not match restored event", segment.Sequence)
+		}
+		if requireRestorableEventHash && !usageparser.IsCanonicalSHA256Hex(restored.EventHash) {
+			return archiveFileInspection{}, fmt.Errorf(
+				"usage archive segment %d record %d contains an event hash that cannot be restored under the current persistence policy",
+				segment.Sequence,
+				inspection.EventCount+1,
+			)
 		}
 		if inspection.EventCount > 0 && envelope.EventID <= inspection.LastEventID {
 			return archiveFileInspection{}, fmt.Errorf("usage archive segment %d event ids are not ordered", segment.Sequence)

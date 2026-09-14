@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -1029,7 +1030,7 @@ func TestUsageArchiveRecordLimitMatchesImporter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("write exact-limit archive record: %v", err)
 	}
-	inspection, err := service.archive.inspectSegment(segment, sha256.New())
+	inspection, err := service.archive.inspectSegment(segment, sha256.New(), false)
 	if err != nil {
 		t.Fatalf("inspect exact-limit archive record: %v", err)
 	}
@@ -1059,7 +1060,7 @@ func TestUsageArchiveInspectionRejectsUnrestorableRecord(t *testing.T) {
 	if err != nil {
 		t.Fatalf("write unrestorable archive record: %v", err)
 	}
-	if _, err := service.archive.inspectSegment(segment, sha256.New()); !errors.Is(err, usageparser.ErrInvalidArchiveRecord) {
+	if _, err := service.archive.inspectSegment(segment, sha256.New(), false); !errors.Is(err, usageparser.ErrInvalidArchiveRecord) {
 		t.Fatalf("inspect unrestorable archive record error = %v", err)
 	}
 }
@@ -2010,5 +2011,141 @@ func TestManualArchiveReadinessRequiresResponseMetadataBackfill(t *testing.T) {
 	}
 	if !strings.Contains(metaJSON, "Retry-After") && !strings.Contains(metaJSON, "45") && !strings.Contains(metaJSON, "retry_after") {
 		t.Fatalf("response_metadata_json = %q, expected retry_after data", metaJSON)
+	}
+}
+
+func TestUsageArchiveInspectionRequireRestorableEventHash(t *testing.T) {
+	service, _, _ := newArchiveTestService(t, 1, 1, nil)
+	runID := strings.Repeat("d", 32)
+	if err := service.archive.ensureRunDirectory(runID); err != nil {
+		t.Fatalf("prepare archive directory: %v", err)
+	}
+	legacyHash := "legacy-noncanonical-test-hash"
+	payload := fmt.Sprintf(`{"_cpamp_archive_schema_version":1,"_cpamp_archive_event_id":1,"event_hash":%q,"timestamp_ms":1000,"timestamp":"1970-01-01T00:00:01Z","model":"gpt-test","input_tokens":100,"output_tokens":20,"reasoning_tokens":0,"cached_tokens":0,"cache_tokens":0,"cache_read_tokens":0,"cache_creation_tokens":0,"failed":0,"fail_status_code":0,"fail_summary":"","fail_body":"","created_at_ms":1000,"cache_input_mode":"included_in_input","normalized_uncached_input_tokens":100,"normalized_total_input_tokens":100,"normalized_cache_read_tokens":0,"normalized_cache_creation_tokens":0,"total_tokens":120,"header_quota_recover_at_ms":0,"raw_json":"{}"}`, legacyHash)
+	record := store.UsageArchiveRecord{
+		EventID:     1,
+		EventHash:   legacyHash,
+		TimestampMS: 1_000,
+		Payload:     []byte(payload),
+	}
+	segment, _, err := service.archive.writeSegment(runID, 1, []store.UsageArchiveRecord{record})
+	if err != nil {
+		t.Fatalf("write segment with legacy hash: %v", err)
+	}
+
+	// With requireRestorableEventHash = false, inspection should succeed
+	inspection, err := service.archive.inspectSegment(segment, sha256.New(), false)
+	if err != nil {
+		t.Fatalf("inspectSegment with requireRestorableEventHash=false failed: %v", err)
+	}
+	if inspection.EventCount != 1 {
+		t.Fatalf("inspection event count = %d, want 1", inspection.EventCount)
+	}
+
+	// With requireRestorableEventHash = true, inspection must fail
+	_, err = service.archive.inspectSegment(segment, sha256.New(), true)
+	if err == nil {
+		t.Fatal("inspectSegment with requireRestorableEventHash=true succeeded, want error")
+	}
+	if !strings.Contains(err.Error(), "cannot be restored under the current persistence policy") {
+		t.Fatalf("inspectSegment error = %v, want policy error", err)
+	}
+}
+
+func TestUsageArchiveVerificationRejectsLegacyNoncanonicalEventHashBeforeRawDelete(t *testing.T) {
+	service, st, rawDB, _ := newRawArchiveTestService(t, 1, 1)
+	ctx := context.Background()
+
+	legacyHash := "legacy-noncanonical-archive-hash"
+	timestampMS := int64(1_000)
+	rawJSON := `{"request":{"model":"gpt-test"}}`
+	responseMetadataJSON := `{}`
+
+	// Directly insert a legacy usage event with a noncanonical event_hash into usage_events.
+	// All other fields are valid and fully compliant with current schema and derived rules.
+	if _, err := rawDB.ExecContext(ctx, `insert into usage_events (
+		event_hash, timestamp_ms, timestamp, model,
+		input_tokens, output_tokens, total_tokens,
+		cache_input_mode,
+		normalized_uncached_input_tokens, normalized_total_input_tokens,
+		normalized_cache_read_tokens, normalized_cache_creation_tokens,
+		response_metadata_json, raw_json, created_at_ms
+	) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		legacyHash,
+		timestampMS,
+		time.UnixMilli(timestampMS).UTC().Format(time.RFC3339Nano),
+		"gpt-test",
+		int64(100),
+		int64(20),
+		int64(120),
+		usageparser.CacheInputModeIncluded,
+		int64(100),
+		int64(100),
+		int64(0),
+		int64(0),
+		responseMetadataJSON,
+		rawJSON,
+		timestampMS,
+	); err != nil {
+		t.Fatalf("insert legacy event: %v", err)
+	}
+
+	// Ensure migration status is marked completed so readiness checks pass
+	if _, err := rawDB.ExecContext(ctx, `update usage_data_migrations set
+		status = 'completed', last_error = null
+		where name = 'usage_cache_accounting_v2'`); err != nil {
+		t.Fatalf("mark migration completed: %v", err)
+	}
+
+	// Catch up aggregates so aggregate reads requirement is satisfied
+	catchUpUsageAggregate(t, st)
+
+	// Step 1: Create archive and resume until archived (buildManifest passes with requireRestorableEventHash=false)
+	created, err := service.CreateArchive(ctx, 2_000)
+	if err != nil {
+		t.Fatalf("create archive: %v", err)
+	}
+	archived, err := service.ResumeArchive(ctx, created.Run.ID)
+	if err != nil {
+		t.Fatalf("resume archive: %v", err)
+	}
+	if archived.Run.Status != usagearchive.StatusArchived {
+		t.Fatalf("archived status = %s, want %s", archived.Run.Status, usagearchive.StatusArchived)
+	}
+
+	// Step 2: Verify archive - must fail because legacyHash cannot be restored under current persistence policy
+	_, err = service.VerifyArchive(ctx, created.Run.ID)
+	if err == nil {
+		t.Fatal("verify archive succeeded for noncanonical event hash, want failure")
+	}
+	if !strings.Contains(err.Error(), "cannot be restored") && !strings.Contains(err.Error(), "current persistence policy") {
+		t.Fatalf("verify archive error = %v, want cannot be restored / current persistence policy", err)
+	}
+
+	// Step 3: Check ArchiveStatus - status must be failed, resume status verifying, not verified
+	status, err := service.ArchiveStatus(ctx, created.Run.ID)
+	if err != nil {
+		t.Fatalf("archive status: %v", err)
+	}
+	if status.Run.Status != usagearchive.StatusFailed {
+		t.Fatalf("run status = %s, want %s", status.Run.Status, usagearchive.StatusFailed)
+	}
+	if status.Run.ResumeStatus != usagearchive.StatusVerifying {
+		t.Fatalf("resume status = %s, want %s", status.Run.ResumeStatus, usagearchive.StatusVerifying)
+	}
+
+	// Step 4: Attempt DeleteArchive - must fail with ErrArchiveInvalidState
+	_, err = service.DeleteArchive(ctx, created.Run.ID)
+	if !errors.Is(err, ErrArchiveInvalidState) {
+		t.Fatalf("delete archive error = %v, want %v", err, ErrArchiveInvalidState)
+	}
+
+	// Step 5: Assert raw event in database still exists
+	var count int
+	if err := rawDB.QueryRowContext(ctx, `select count(*) from usage_events where event_hash = ?`, legacyHash).Scan(&count); err != nil {
+		t.Fatalf("query legacy event count: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("legacy event count = %d, want 1 (event must be preserved)", count)
 	}
 }
