@@ -1165,6 +1165,222 @@ func TestUsageArchiveServiceRejectsChecksumMismatch(t *testing.T) {
 	}
 }
 
+func TestUsageArchiveServiceCanAbandonFailedVerificationAndRearchiveRawEvents(t *testing.T) {
+	service, st, rawDB, _ := newRawArchiveTestService(t, 2, 1)
+	events := archiveTestServiceEvents(2)
+	if _, err := st.InsertEvents(context.Background(), events); err != nil {
+		t.Fatalf("insert test events: %v", err)
+	}
+	catchUpUsageAggregate(t, st)
+	ctx := context.Background()
+
+	// 1. CreateArchive -> ResumeArchive -> archived (2 events)
+	created, err := service.CreateArchive(ctx, 3_000)
+	if err != nil {
+		t.Fatalf("create archive: %v", err)
+	}
+	archived, err := service.ResumeArchive(ctx, created.Run.ID)
+	if err != nil {
+		t.Fatalf("resume archive: %v", err)
+	}
+	if archived.Run.ArchivedEventCount != 2 {
+		t.Fatalf("archived event count = %d, want 2", archived.Run.ArchivedEventCount)
+	}
+
+	// 2. Corrupt one segment file
+	segmentPath, err := service.archive.resolveArchivePath(archived.Segments[0].FileName)
+	if err != nil {
+		t.Fatalf("resolve segment: %v", err)
+	}
+	file, err := os.OpenFile(segmentPath, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatalf("open segment for corruption: %v", err)
+	}
+	if _, err := file.WriteString("corrupt"); err != nil {
+		_ = file.Close()
+		t.Fatalf("corrupt segment: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("close corrupt segment: %v", err)
+	}
+
+	// 3. VerifyArchive must fail -> status failed, resume_status verifying
+	if _, err := service.VerifyArchive(ctx, created.Run.ID); err == nil {
+		t.Fatal("verify archive succeeded for corrupt segment, want error")
+	}
+	failed, err := service.ArchiveStatus(ctx, created.Run.ID)
+	if err != nil {
+		t.Fatalf("get archive status: %v", err)
+	}
+	if failed.Run.Status != usagearchive.StatusFailed || failed.Run.ResumeStatus != usagearchive.StatusVerifying {
+		t.Fatalf("failed verification run = %#v", failed.Run)
+	}
+
+	// 4. Confirm refs exist before cancel
+	var refCountBefore int
+	if err := rawDB.QueryRowContext(ctx, `select count(*) from usage_archive_event_refs where run_id = ?`, created.Run.ID).Scan(&refCountBefore); err != nil {
+		t.Fatalf("query refs before cancel: %v", err)
+	}
+	if refCountBefore != 2 {
+		t.Fatalf("refs count before cancel = %d, want 2", refCountBefore)
+	}
+
+	// 5. CancelArchive must succeed -> status cancelled, resume_status empty
+	cancelled, err := service.CancelArchive(ctx, created.Run.ID)
+	if err != nil {
+		t.Fatalf("cancel archive: %v", err)
+	}
+	if cancelled.Run.Status != usagearchive.StatusCancelled || cancelled.Run.ResumeStatus != "" {
+		t.Fatalf("cancelled run = %#v", cancelled.Run)
+	}
+
+	// 6. Confirm refs are released (count == 0)
+	var refCountAfter int
+	if err := rawDB.QueryRowContext(ctx, `select count(*) from usage_archive_event_refs where run_id = ?`, created.Run.ID).Scan(&refCountAfter); err != nil {
+		t.Fatalf("query refs after cancel: %v", err)
+	}
+	if refCountAfter != 0 {
+		t.Fatalf("refs count after cancel = %d, want 0", refCountAfter)
+	}
+
+	// 7. Raw events in usage_events must be fully preserved (count == 2)
+	var rawCount int
+	if err := rawDB.QueryRowContext(ctx, `select count(*) from usage_events`).Scan(&rawCount); err != nil {
+		t.Fatalf("query raw events: %v", err)
+	}
+	if rawCount != 2 {
+		t.Fatalf("raw events count = %d, want 2", rawCount)
+	}
+
+	// 8. Identity ledger rows must be preserved
+	var ledgerCount int
+	if err := rawDB.QueryRowContext(ctx, `select count(*) from usage_event_identity_ledger`).Scan(&ledgerCount); err != nil {
+		t.Fatalf("query ledger: %v", err)
+	}
+	if ledgerCount != 2 {
+		t.Fatalf("ledger count = %d, want 2", ledgerCount)
+	}
+
+	// 9. Segments and files must be preserved
+	var segmentCount int
+	if err := rawDB.QueryRowContext(ctx, `select count(*) from usage_archive_segments where run_id = ?`, created.Run.ID).Scan(&segmentCount); err != nil {
+		t.Fatalf("query segments: %v", err)
+	}
+	if segmentCount != len(archived.Segments) {
+		t.Fatalf("segment count = %d, want %d", segmentCount, len(archived.Segments))
+	}
+	if _, err := os.Stat(segmentPath); err != nil {
+		t.Fatalf("corrupted segment file missing: %v", err)
+	}
+
+	// 10. Old run is no longer active
+	active, found, err := service.ActiveArchiveRun(ctx)
+	if err != nil {
+		t.Fatalf("active archive run check: %v", err)
+	}
+	if found && active.ID == created.Run.ID {
+		t.Fatalf("cancelled run is still active = %#v", active)
+	}
+
+	// 11. Same raw events can be re-archived with same cutoff
+	second, err := service.CreateArchive(ctx, 3_000)
+	if err != nil {
+		t.Fatalf("create second archive: %v", err)
+	}
+	secondArchived, err := service.ResumeArchive(ctx, second.Run.ID)
+	if err != nil {
+		t.Fatalf("resume second archive: %v", err)
+	}
+	if secondArchived.Run.Status != usagearchive.StatusArchived || secondArchived.Run.ArchivedEventCount != 2 {
+		t.Fatalf("second archive status = %#v", secondArchived.Run)
+	}
+
+	// 12. Verify refs for second run now exist with second run ID
+	var secondRefCount int
+	if err := rawDB.QueryRowContext(ctx, `select count(*) from usage_archive_event_refs where run_id = ?`, second.Run.ID).Scan(&secondRefCount); err != nil {
+		t.Fatalf("query second run refs: %v", err)
+	}
+	if secondRefCount != 2 {
+		t.Fatalf("second run ref count = %d, want 2", secondRefCount)
+	}
+
+	// 13. Verify second archive succeeds
+	secondVerified, err := service.VerifyArchive(ctx, second.Run.ID)
+	if err != nil {
+		t.Fatalf("verify second archive: %v", err)
+	}
+	if secondVerified.Run.Status != usagearchive.StatusVerified {
+		t.Fatalf("second verified status = %#v", secondVerified.Run)
+	}
+}
+
+func TestUsageArchiveServiceCancelFailsWhenRawEventIsMissing(t *testing.T) {
+	service, st, rawDB, _ := newRawArchiveTestService(t, 2, 1)
+	events := archiveTestServiceEvents(2)
+	if _, err := st.InsertEvents(context.Background(), events); err != nil {
+		t.Fatalf("insert test events: %v", err)
+	}
+	catchUpUsageAggregate(t, st)
+	ctx := context.Background()
+
+	created, err := service.CreateArchive(ctx, 3_000)
+	if err != nil {
+		t.Fatalf("create archive: %v", err)
+	}
+	archived, err := service.ResumeArchive(ctx, created.Run.ID)
+	if err != nil {
+		t.Fatalf("resume archive: %v", err)
+	}
+
+	// Corrupt a segment so verification fails
+	segmentPath, err := service.archive.resolveArchivePath(archived.Segments[0].FileName)
+	if err != nil {
+		t.Fatalf("resolve segment: %v", err)
+	}
+	file, err := os.OpenFile(segmentPath, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatalf("open segment: %v", err)
+	}
+	_, _ = file.WriteString("corrupt")
+	_ = file.Close()
+
+	if _, err := service.VerifyArchive(ctx, created.Run.ID); err == nil {
+		t.Fatal("verify should fail for corrupt segment")
+	}
+
+	// Simulate raw event data loss externally
+	if _, err := rawDB.ExecContext(ctx, `delete from usage_events where event_hash = ?`, events[0].EventHash); err != nil {
+		t.Fatalf("delete raw event: %v", err)
+	}
+
+	// CancelArchive must fail closed
+	_, err = service.CancelArchive(ctx, created.Run.ID)
+	if err == nil {
+		t.Fatal("cancel archive succeeded with missing raw event, want error")
+	}
+	if !errors.Is(err, ErrArchiveCoverageIncomplete) {
+		t.Fatalf("cancel archive error = %v, want ErrArchiveCoverageIncomplete", err)
+	}
+
+	// Status must remain failed/verifying
+	status, err := service.ArchiveStatus(ctx, created.Run.ID)
+	if err != nil {
+		t.Fatalf("get archive status: %v", err)
+	}
+	if status.Run.Status != usagearchive.StatusFailed || status.Run.ResumeStatus != usagearchive.StatusVerifying {
+		t.Fatalf("status after rejected cancel = %#v", status.Run)
+	}
+
+	// Refs must still exist
+	var refCount int
+	if err := rawDB.QueryRowContext(ctx, `select count(*) from usage_archive_event_refs where run_id = ?`, created.Run.ID).Scan(&refCount); err != nil {
+		t.Fatalf("count refs: %v", err)
+	}
+	if refCount != 2 {
+		t.Fatalf("ref count after rejected cancel = %d, want 2", refCount)
+	}
+}
+
 func TestUsageArchiveServiceRejectsSymlinkDirectory(t *testing.T) {
 	cfg := testutil.NewConfig(t)
 	st := testutil.NewStore(t, cfg)
@@ -2109,6 +2325,9 @@ func TestUsageArchivePreflightRejectsLegacyNoncanonicalEventHash(t *testing.T) {
 	if !errors.Is(err, ErrArchiveCoverageIncomplete) {
 		t.Fatalf("preview archive error = %v, want ErrArchiveCoverageIncomplete", err)
 	}
+	if !errors.Is(err, ErrArchiveUnrestorableEventHash) {
+		t.Fatalf("preview archive error = %v, want ErrArchiveUnrestorableEventHash", err)
+	}
 	if !strings.Contains(err.Error(), "cannot be restored") && !strings.Contains(err.Error(), "current persistence policy") {
 		t.Fatalf("preview archive error = %v, want persistence policy error", err)
 	}
@@ -2121,6 +2340,9 @@ func TestUsageArchivePreflightRejectsLegacyNoncanonicalEventHash(t *testing.T) {
 	if !errors.Is(err, ErrArchiveCoverageIncomplete) {
 		t.Fatalf("create archive error = %v, want ErrArchiveCoverageIncomplete", err)
 	}
+	if !errors.Is(err, ErrArchiveUnrestorableEventHash) {
+		t.Fatalf("create archive error = %v, want ErrArchiveUnrestorableEventHash", err)
+	}
 	if !strings.Contains(err.Error(), "cannot be restored") && !strings.Contains(err.Error(), "current persistence policy") {
 		t.Fatalf("create archive error = %v, want persistence policy error", err)
 	}
@@ -2132,6 +2354,9 @@ func TestUsageArchivePreflightRejectsLegacyNoncanonicalEventHash(t *testing.T) {
 	}
 	if !errors.Is(err, ErrArchiveCoverageIncomplete) {
 		t.Fatalf("create retention archive error = %v, want ErrArchiveCoverageIncomplete", err)
+	}
+	if !errors.Is(err, ErrArchiveUnrestorableEventHash) {
+		t.Fatalf("create retention archive error = %v, want ErrArchiveUnrestorableEventHash", err)
 	}
 
 	// Step 4: Verify no active run exists and no run record was written

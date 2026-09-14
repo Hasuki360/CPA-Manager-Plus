@@ -91,25 +91,10 @@ describe('usage maintenance model', () => {
     expect(getArchiveRunAction('completed')).toBeNull();
   });
 
-  it('only marks safe pre-publication archive runs as cancellable', () => {
+  it('only marks safe pre-delete archive runs as cancellable', () => {
     const base = { archived_event_count: 0, deleted_event_count: 0 };
     expect(isArchiveRunCancellable({ ...base, status: 'previewed' })).toBe(true);
     expect(isArchiveRunCancellable({ ...base, status: 'failed', resume_status: 'archiving' })).toBe(true);
-    expect(isArchiveRunCancellable({ ...base, status: 'failed' })).toBe(true);
-
-    expect(isArchiveRunCancellable({ ...base, status: 'previewed', archived_event_count: 1 })).toBe(false);
-    expect(isArchiveRunCancellable({ ...base, status: 'archived', archived_event_count: 5 })).toBe(false);
-    expect(isArchiveRunCancellable({ ...base, status: 'archived', archived_event_count: 0 })).toBe(false);
-    expect(isArchiveRunCancellable({ ...base, status: 'verified', archived_event_count: 5 })).toBe(false);
-    expect(isArchiveRunCancellable({ ...base, status: 'verified', archived_event_count: 0 })).toBe(false);
-    expect(
-      isArchiveRunCancellable({
-        ...base,
-        status: 'failed',
-        resume_status: 'verifying',
-        archived_event_count: 1,
-      })
-    ).toBe(false);
     expect(
       isArchiveRunCancellable({
         ...base,
@@ -117,8 +102,33 @@ describe('usage maintenance model', () => {
         resume_status: 'archiving',
         archived_event_count: 1,
       })
-    ).toBe(false);
+    ).toBe(true);
+    expect(
+      isArchiveRunCancellable({
+        ...base,
+        status: 'failed',
+        resume_status: 'verifying',
+        archived_event_count: 1,
+      })
+    ).toBe(true);
+    expect(isArchiveRunCancellable({ ...base, status: 'failed' })).toBe(true);
+    expect(isArchiveRunCancellable({ ...base, status: 'failed', archived_event_count: 1 })).toBe(true);
 
+    expect(isArchiveRunCancellable({ ...base, status: 'previewed', archived_event_count: 1 })).toBe(false);
+    expect(isArchiveRunCancellable({ ...base, status: 'archived', archived_event_count: 5 })).toBe(false);
+    expect(isArchiveRunCancellable({ ...base, status: 'archived', archived_event_count: 0 })).toBe(false);
+    expect(isArchiveRunCancellable({ ...base, status: 'verified', archived_event_count: 5 })).toBe(false);
+    expect(isArchiveRunCancellable({ ...base, status: 'verified', archived_event_count: 0 })).toBe(false);
+
+    expect(
+      isArchiveRunCancellable({
+        ...base,
+        status: 'failed',
+        resume_status: 'deleting',
+        archived_event_count: 5,
+        deleted_event_count: 0,
+      })
+    ).toBe(false);
     expect(
       isArchiveRunCancellable({ ...base, status: 'failed', resume_status: 'deleting' })
     ).toBe(false);
@@ -126,7 +136,13 @@ describe('usage maintenance model', () => {
       isArchiveRunCancellable({ ...base, status: 'deleting', delete_started_at_ms: 1 })
     ).toBe(false);
     expect(
+      isArchiveRunCancellable({ ...base, status: 'previewed', delete_started_at_ms: 1 })
+    ).toBe(false);
+    expect(
       isArchiveRunCancellable({ ...base, status: 'previewed', deleted_event_count: 1 })
+    ).toBe(false);
+    expect(
+      isArchiveRunCancellable({ ...base, status: 'previewed', last_deleted_event_id: 1 })
     ).toBe(false);
     expect(isArchiveRunCancellable({ ...base, status: 'completed' })).toBe(false);
   });

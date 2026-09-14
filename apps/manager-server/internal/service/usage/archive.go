@@ -50,7 +50,8 @@ var (
 	ErrArchiveCancelPublished     = usagearchive.ErrCancelPublished
 	ErrArchiveCancelCleanupFailed = errors.New("usage archive cancel cleanup failed")
 	ErrArchiveMaintenanceLocked   = usagearchive.ErrMaintenanceLocked
-	ErrArchiveCoverageIncomplete  = usagearchive.ErrCoverageIncomplete
+	ErrArchiveCoverageIncomplete    = usagearchive.ErrCoverageIncomplete
+	ErrArchiveUnrestorableEventHash = usagearchive.ErrUnrestorableEventHash
 )
 
 type ArchiveConfig struct {
@@ -684,12 +685,19 @@ func (s *Service) CancelArchive(ctx context.Context, runID string) (ArchiveStatu
 		(current.Status == usagearchive.StatusFailed && current.ResumeStatus == usagearchive.StatusDeleting) {
 		return ArchiveStatus{}, ErrArchiveCancelUnsafe
 	}
-	if current.Status != usagearchive.StatusCancelled && current.ArchivedEventCount > 0 {
+	failedPreDelete := current.Status == usagearchive.StatusFailed &&
+		(current.ResumeStatus == usagearchive.StatusArchiving || current.ResumeStatus == usagearchive.StatusVerifying) &&
+		current.DeleteStartedAtMS == 0 &&
+		current.DeletedEventCount == 0 &&
+		current.LastDeletedEventID == 0
+	if current.Status != usagearchive.StatusCancelled && current.ArchivedEventCount > 0 && !failedPreDelete {
+		return ArchiveStatus{}, ErrArchiveCancelPublished
+	}
+	if current.Status == usagearchive.StatusArchived || current.Status == usagearchive.StatusVerified {
 		return ArchiveStatus{}, ErrArchiveCancelPublished
 	}
 	switch current.Status {
-	case usagearchive.StatusPreviewed, usagearchive.StatusArchived, usagearchive.StatusVerified,
-		usagearchive.StatusFailed, usagearchive.StatusCancelled:
+	case usagearchive.StatusPreviewed, usagearchive.StatusFailed, usagearchive.StatusCancelled:
 		// Cleanup is safe for these terminal/pre-delete states. The repository
 		// repeats the state and deletion-evidence checks in its transaction.
 	default:

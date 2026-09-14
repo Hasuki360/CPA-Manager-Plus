@@ -483,6 +483,42 @@ describe('UsageMaintenancePage', () => {
     act(() => renderer.unmount());
   });
 
+  it('shows an abandon action for a failed verification run with published events and releases it through the API', async () => {
+    const run = {
+      ...archive('failed', 'failed-verifying-published-run'),
+      resume_status: 'verifying' as const,
+      archived_event_count: 5,
+      deleted_event_count: 0,
+    };
+    const renderer = await renderHistoryPage(maintenance(), [run]);
+    const cancelButton = findButtons(renderer, 'Abandon task')[0];
+    expect(cancelButton).toBeDefined();
+
+    act(() => cancelButton.props.onClick());
+    const confirmation = mocks.showConfirmation.mock.calls[
+      mocks.showConfirmation.mock.calls.length - 1
+    ]?.[0] as {
+      message: string;
+      onConfirm: () => Promise<void>;
+    };
+    expect(confirmation.message).toContain('without deleting raw usage data');
+    await act(async () => {
+      await confirmation.onConfirm();
+    });
+
+    expect(mocks.cancelUsageArchive).toHaveBeenCalledWith(
+      'http://manager-a.local:18317',
+      run.id,
+      'management-key-a',
+      expect.any(AbortSignal)
+    );
+    expect(mocks.showNotification).toHaveBeenCalledWith(
+      'Archive task abandoned; raw usage data was not deleted.',
+      'success'
+    );
+    act(() => renderer.unmount());
+  });
+
   it('does not expose abandon for a run that has entered raw deletion', async () => {
     const partiallyDeleted = {
       ...archive('failed', 'partial-delete-run'),

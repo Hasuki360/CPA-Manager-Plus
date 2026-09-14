@@ -47,8 +47,12 @@ var (
 	ErrInvalidState       = errors.New("usage archive run is in an invalid state")
 	ErrCancelUnsafe       = errors.New("usage archive cancel is unsafe after raw deletion started")
 	ErrCancelPublished    = errors.New("usage archive cancel is unsafe after archive publication")
-	ErrMaintenanceLocked  = errors.New("usage maintenance is already active")
-	ErrCoverageIncomplete = errors.New("usage archive coverage is incomplete")
+	ErrMaintenanceLocked     = errors.New("usage maintenance is already active")
+	ErrCoverageIncomplete    = errors.New("usage archive coverage is incomplete")
+	ErrUnrestorableEventHash = fmt.Errorf(
+		"%w: usage archive contains unrestorable event hash",
+		ErrCoverageIncomplete,
+	)
 )
 
 type Preview struct {
@@ -650,14 +654,53 @@ func (r *Repository) CancelRun(ctx context.Context, runID string, nowMS int64) (
 		}
 		return r.Run(ctx, runID)
 	}
+	failedPreDelete := run.Status == StatusFailed &&
+		(run.ResumeStatus == StatusArchiving || run.ResumeStatus == StatusVerifying)
 	if run.ArchivedEventCount > 0 {
-		return Run{}, ErrCancelPublished
+		if !failedPreDelete {
+			return Run{}, ErrCancelPublished
+		}
+		var refCount, deletedRefCount, missingRawCount int64
+		if err := tx.QueryRowContext(ctx, `select
+			count(*),
+			coalesce(sum(case when archived.raw_deleted_at_ms is not null then 1 else 0 end), 0),
+			coalesce(sum(case when e.id is null then 1 else 0 end), 0)
+		from usage_archive_event_refs archived
+		left join usage_events e
+			on e.id = archived.raw_event_id
+			and e.event_hash = archived.event_hash
+		where archived.run_id = ?`, runID).Scan(&refCount, &deletedRefCount, &missingRawCount); err != nil {
+			return Run{}, err
+		}
+		if deletedRefCount > 0 {
+			return Run{}, ErrCancelUnsafe
+		}
+		if missingRawCount > 0 {
+			return Run{}, fmt.Errorf("%w: cannot abandon archive run because %d raw event(s) are missing", ErrCoverageIncomplete, missingRawCount)
+		}
+		if refCount != run.ArchivedEventCount {
+			return Run{}, fmt.Errorf("%w: cannot abandon archive run because ref count (%d) does not match archived event count (%d)", ErrCoverageIncomplete, refCount, run.ArchivedEventCount)
+		}
+		res, err := tx.ExecContext(ctx, `delete from usage_archive_event_refs where run_id = ?`, runID)
+		if err != nil {
+			return Run{}, err
+		}
+		rowsAffected, err := res.RowsAffected()
+		if err != nil {
+			return Run{}, err
+		}
+		if rowsAffected != refCount {
+			return Run{}, fmt.Errorf("%w: expected to delete %d archive refs, got %d", ErrCoverageIncomplete, refCount, rowsAffected)
+		}
 	}
 	if run.Status == StatusCompleted {
 		return Run{}, fmt.Errorf("%w: cannot cancel completed run", ErrInvalidState)
 	}
+	if run.Status == StatusArchived || run.Status == StatusVerified {
+		return Run{}, ErrCancelPublished
+	}
 	switch run.Status {
-	case StatusPreviewed, StatusArchived, StatusVerified, StatusFailed:
+	case StatusPreviewed, StatusFailed:
 		// Safe abandon states. A failed run is safe only when it has never
 		// entered the deleting stage (checked above).
 	default:
@@ -1319,7 +1362,7 @@ func previewQuery(ctx context.Context, queryer interface {
 		), 0),
 		coalesce(min(e.timestamp_ms), 0),
 		coalesce(max(e.timestamp_ms), 0),
-		coalesce(sum(case when length(e.event_hash) != 64 or e.event_hash glob '*[^0-9a-f]*' then 1 else 0 end), 0)
+		coalesce(sum(case when length(e.event_hash) != 64 or lower(e.event_hash) glob '*[^0-9a-f]*' then 1 else 0 end), 0)
 	from usage_events e
 	where e.timestamp_ms < ?
 		and not exists (
@@ -1338,7 +1381,7 @@ func previewQuery(ctx context.Context, queryer interface {
 	if preview.EventCount > 0 && noncanonicalCount > 0 {
 		return Preview{}, fmt.Errorf(
 			"%w: archive scope contains %d event hash(es) that cannot be restored under the current persistence policy",
-			ErrCoverageIncomplete,
+			ErrUnrestorableEventHash,
 			noncanonicalCount,
 		)
 	}

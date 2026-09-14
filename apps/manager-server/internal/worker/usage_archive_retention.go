@@ -99,6 +99,9 @@ func (w *UsageArchiveRetentionWorker) runOnce(ctx context.Context) bool {
 		}
 		if err := w.advance(ctx, active.ID); err != nil {
 			log.Printf("[usage-retention] resume archive run %s: %v", active.ID, err)
+			if errors.Is(err, usageservice.ErrArchiveUnrestorableEventHash) {
+				return false
+			}
 			return ctx.Err() == nil
 		}
 		return false
@@ -124,11 +127,17 @@ func (w *UsageArchiveRetentionWorker) runOnce(ctx context.Context) bool {
 		if !errors.Is(err, usagearchive.ErrNoEvents) && !errors.Is(err, usagearchive.ErrMaintenanceLocked) {
 			log.Printf("[usage-retention] create retention archive: %v", err)
 		}
+		if errors.Is(err, usageservice.ErrArchiveUnrestorableEventHash) {
+			return false
+		}
 		return ctx.Err() == nil &&
 			!errors.Is(err, usagearchive.ErrNoEvents)
 	}
 	if err := w.advance(ctx, status.Run.ID); err != nil {
 		log.Printf("[usage-retention] process retention archive %s: %v", status.Run.ID, err)
+		if errors.Is(err, usageservice.ErrArchiveUnrestorableEventHash) {
+			return false
+		}
 		return ctx.Err() == nil
 	}
 	return false

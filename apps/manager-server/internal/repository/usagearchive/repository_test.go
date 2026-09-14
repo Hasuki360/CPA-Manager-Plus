@@ -330,7 +330,7 @@ func TestRepositoryCancelFailedRunWithoutDeletionReleasesRetentionLock(t *testin
 	}
 }
 
-func TestRepositoryCancelFailedArchivingRunWithPublishedSegmentIsRejected(t *testing.T) {
+func TestRepositoryCancelFailedArchivingRunWithPublishedSegmentReleasesRefs(t *testing.T) {
 	db := openArchiveTestDB(t)
 	ctx := context.Background()
 	events := archiveTestEvents()[:1]
@@ -360,15 +360,46 @@ func TestRepositoryCancelFailedArchivingRunWithPublishedSegmentIsRejected(t *tes
 	if err != nil || failed.Status != StatusFailed || failed.ResumeStatus != StatusArchiving || failed.ArchivedEventCount != 1 {
 		t.Fatalf("failed archive = %#v error=%v", failed, err)
 	}
-	if _, err := repository.CancelRun(ctx, run.ID, 30_204); !errors.Is(err, ErrCancelPublished) {
-		t.Fatalf("cancel published archive error = %v, want ErrCancelPublished", err)
+
+	// Verify refs exist before cancel
+	var refCountBefore int
+	if err := db.QueryRowContext(ctx, `select count(*) from usage_archive_event_refs where run_id = ?`, run.ID).Scan(&refCountBefore); err != nil {
+		t.Fatalf("count refs before cancel: %v", err)
 	}
+	if refCountBefore != 1 {
+		t.Fatalf("ref count before cancel = %d, want 1", refCountBefore)
+	}
+
+	cancelled, err := repository.CancelRun(ctx, run.ID, 30_204)
+	if err != nil {
+		t.Fatalf("cancel failed archiving run error = %v", err)
+	}
+	if cancelled.Status != StatusCancelled || cancelled.ResumeStatus != "" {
+		t.Fatalf("cancelled run = %#v", cancelled)
+	}
+
+	// Verify refs are released
+	var refCountAfter int
+	if err := db.QueryRowContext(ctx, `select count(*) from usage_archive_event_refs where run_id = ?`, run.ID).Scan(&refCountAfter); err != nil {
+		t.Fatalf("count refs after cancel: %v", err)
+	}
+	if refCountAfter != 0 {
+		t.Fatalf("ref count after cancel = %d, want 0", refCountAfter)
+	}
+
+	// Segments are preserved
+	segments, err := repository.Segments(ctx, run.ID)
+	if err != nil || len(segments) != 1 {
+		t.Fatalf("segments after cancel: len=%d err=%v", len(segments), err)
+	}
+
+	// Raw event is eligible for archive again
 	preview, err := repository.Preview(ctx, 2_000)
 	if err != nil {
-		t.Fatalf("preview after rejected cancel: %v", err)
+		t.Fatalf("preview after cancel: %v", err)
 	}
-	if preview.EventCount != 0 {
-		t.Fatalf("published event became eligible after rejected cancel: %#v", preview)
+	if preview.EventCount != 1 {
+		t.Fatalf("published event did not become eligible after cancel: %#v", preview)
 	}
 }
 
@@ -468,7 +499,7 @@ func TestRepositoryCancelVerifiedRunIsRejectedAndCanDelete(t *testing.T) {
 	}
 }
 
-func TestRepositoryCancelFailedVerificationRunWithPublishedSegmentIsRejectedAndCanResume(t *testing.T) {
+func TestRepositoryCancelFailedVerificationRunWithPublishedSegmentReleasesRefs(t *testing.T) {
 	db := openArchiveTestDB(t)
 	ctx := context.Background()
 	events := archiveTestEvents()[:1]
@@ -506,13 +537,119 @@ func TestRepositoryCancelFailedVerificationRunWithPublishedSegmentIsRejectedAndC
 		t.Fatalf("failed run = %#v error=%v", failed, err)
 	}
 
-	if _, err := repository.CancelRun(ctx, run.ID, 30_506); !errors.Is(err, ErrCancelPublished) {
-		t.Fatalf("cancel failed verify error = %v, want ErrCancelPublished", err)
+	// Verify refs exist before cancel
+	var refCountBefore int
+	if err := db.QueryRowContext(ctx, `select count(*) from usage_archive_event_refs where run_id = ?`, run.ID).Scan(&refCountBefore); err != nil {
+		t.Fatalf("count refs before cancel: %v", err)
+	}
+	if refCountBefore != 1 {
+		t.Fatalf("ref count before cancel = %d, want 1", refCountBefore)
 	}
 
-	resumed, err := repository.BeginVerification(ctx, run.ID, 30_507)
-	if err != nil || resumed.Status != StatusVerifying {
-		t.Fatalf("resume verification after rejected cancel: %v", err)
+	cancelled, err := repository.CancelRun(ctx, run.ID, 30_506)
+	if err != nil {
+		t.Fatalf("cancel failed verify error = %v", err)
+	}
+	if cancelled.Status != StatusCancelled || cancelled.ResumeStatus != "" {
+		t.Fatalf("cancelled run = %#v", cancelled)
+	}
+
+	var refCountAfter int
+	if err := db.QueryRowContext(ctx, `select count(*) from usage_archive_event_refs where run_id = ?`, run.ID).Scan(&refCountAfter); err != nil {
+		t.Fatalf("count refs after cancel: %v", err)
+	}
+	if refCountAfter != 0 {
+		t.Fatalf("ref count after cancel = %d, want 0", refCountAfter)
+	}
+
+	segments, err := repository.Segments(ctx, run.ID)
+	if err != nil || len(segments) != 1 {
+		t.Fatalf("segments after cancel: len=%d err=%v", len(segments), err)
+	}
+
+	preview, err := repository.Preview(ctx, 2_000)
+	if err != nil {
+		t.Fatalf("preview after cancel: %v", err)
+	}
+	if preview.EventCount != 1 {
+		t.Fatalf("published event did not become eligible after cancel: %#v", preview)
+	}
+}
+
+func TestRepositoryCancelFailsWhenRawEventIsMissing(t *testing.T) {
+	db := openArchiveTestDB(t)
+	ctx := context.Background()
+	events := archiveTestEvents()[:1]
+	if _, err := usageevent.New(db).InsertBatch(ctx, events); err != nil {
+		t.Fatalf("insert usage events: %v", err)
+	}
+	repository := New(db)
+	run, err := repository.CreateRun(ctx, "cancel-missing-raw", 2_000, 30_600)
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	run, err = repository.BeginArchive(ctx, run.ID, 30_601)
+	if err != nil {
+		t.Fatalf("begin archive: %v", err)
+	}
+	records, err := repository.Records(ctx, run.ID, 0, 10, 1<<20)
+	if err != nil {
+		t.Fatalf("read archive records: %v", err)
+	}
+	if _, err := repository.RecordSegment(ctx, run.ID, archiveTestSegment(run.ID, records), archiveRecordRefs(records), 30_602); err != nil {
+		t.Fatalf("record published segment: %v", err)
+	}
+	if _, err := repository.MarkArchived(ctx, run.ID, "test-digest", "manifest.json", "test-manifest-sha", 30_603); err != nil {
+		t.Fatalf("mark archived: %v", err)
+	}
+	if _, err := repository.BeginVerification(ctx, run.ID, 30_604); err != nil {
+		t.Fatalf("begin verification: %v", err)
+	}
+	if _, err := repository.RecordFailure(ctx, run.ID, StatusVerifying, errors.New("simulated verify failure"), 30_605); err != nil {
+		t.Fatalf("record failure: %v", err)
+	}
+
+	// External data loss: raw usage event is deleted
+	archiveTestExec(t, db, `delete from usage_events where event_hash = ?`, events[0].EventHash)
+
+	// CancelRun must fail closed with ErrCoverageIncomplete
+	if _, err := repository.CancelRun(ctx, run.ID, 30_606); !errors.Is(err, ErrCoverageIncomplete) {
+		t.Fatalf("cancel run with missing raw event error = %v, want ErrCoverageIncomplete", err)
+	}
+
+	// Status must remain failed/verifying
+	runAfter, err := repository.Run(ctx, run.ID)
+	if err != nil || runAfter.Status != StatusFailed || runAfter.ResumeStatus != StatusVerifying {
+		t.Fatalf("run after failed cancel = %#v, err = %v", runAfter, err)
+	}
+
+	// Refs must still exist
+	var refCount int
+	if err := db.QueryRowContext(ctx, `select count(*) from usage_archive_event_refs where run_id = ?`, run.ID).Scan(&refCount); err != nil {
+		t.Fatalf("count refs after rejected cancel: %v", err)
+	}
+	if refCount != 1 {
+		t.Fatalf("ref count after rejected cancel = %d, want 1", refCount)
+	}
+}
+
+func TestRepositoryCancelRejectsFailedDeletingRun(t *testing.T) {
+	db := openArchiveTestDB(t)
+	ctx := context.Background()
+	events := archiveTestEvents()[:1]
+	if _, err := usageevent.New(db).InsertBatch(ctx, events); err != nil {
+		t.Fatalf("insert usage events: %v", err)
+	}
+	repository := New(db)
+	run, err := repository.CreateRun(ctx, "cancel-failed-deleting", 2_000, 30_700)
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	archiveTestExec(t, db, `update usage_archive_runs set status = ?, resume_status = ?, archived_event_count = 1 where id = ?`,
+		StatusFailed, StatusDeleting, run.ID)
+
+	if _, err := repository.CancelRun(ctx, run.ID, 30_701); !errors.Is(err, ErrCancelUnsafe) {
+		t.Fatalf("cancel failed deleting run error = %v, want ErrCancelUnsafe", err)
 	}
 }
 
@@ -1661,7 +1798,7 @@ func TestRepositoryPreflightRejectsNoncanonicalEventHash(t *testing.T) {
 
 	repository := New(db)
 
-	// Preview must fail with ErrCoverageIncomplete
+	// Preview must fail with ErrCoverageIncomplete and ErrUnrestorableEventHash
 	_, err := repository.Preview(ctx, 2_000)
 	if err == nil {
 		t.Fatal("preview succeeded for noncanonical event hash, want error")
@@ -1669,17 +1806,23 @@ func TestRepositoryPreflightRejectsNoncanonicalEventHash(t *testing.T) {
 	if !errors.Is(err, ErrCoverageIncomplete) {
 		t.Fatalf("preview error = %v, want ErrCoverageIncomplete", err)
 	}
+	if !errors.Is(err, ErrUnrestorableEventHash) {
+		t.Fatalf("preview error = %v, want ErrUnrestorableEventHash", err)
+	}
 	if !strings.Contains(err.Error(), "cannot be restored under the current persistence policy") {
 		t.Fatalf("preview error = %v, want policy error message", err)
 	}
 
-	// CreateRun must fail with ErrCoverageIncomplete
+	// CreateRun must fail with ErrCoverageIncomplete and ErrUnrestorableEventHash
 	_, err = repository.CreateRun(ctx, "run-legacy-preflight", 2_000, 10_000)
 	if err == nil {
 		t.Fatal("create run succeeded for noncanonical event hash, want error")
 	}
 	if !errors.Is(err, ErrCoverageIncomplete) {
 		t.Fatalf("create run error = %v, want ErrCoverageIncomplete", err)
+	}
+	if !errors.Is(err, ErrUnrestorableEventHash) {
+		t.Fatalf("create run error = %v, want ErrUnrestorableEventHash", err)
 	}
 
 	// Verify no run was inserted
@@ -1690,4 +1833,114 @@ func TestRepositoryPreflightRejectsNoncanonicalEventHash(t *testing.T) {
 	if found {
 		t.Fatalf("active run exists = %#v, want none", active)
 	}
+}
+
+func TestRepositoryPreflightCanonicalAndNoncanonicalEventHashes(t *testing.T) {
+	tests := []struct {
+		name      string
+		eventHash string
+		wantPass  bool
+	}{
+		{
+			name:      "64-char lowercase hex",
+			eventHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+			wantPass:  true,
+		},
+		{
+			name:      "64-char uppercase hex",
+			eventHash: "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF",
+			wantPass:  true,
+		},
+		{
+			name:      "64-char mixed-case hex",
+			eventHash: "0123456789aBcDeF0123456789AbCdEf0123456789aBcDeF0123456789AbCdEf",
+			wantPass:  true,
+		},
+		{
+			name:      "length 63 (short)",
+			eventHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde",
+			wantPass:  false,
+		},
+		{
+			name:      "length 65 (long)",
+			eventHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0",
+			wantPass:  false,
+		},
+		{
+			name:      "64-char containing g",
+			eventHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdeg",
+			wantPass:  false,
+		},
+		{
+			name:      "64-char containing z",
+			eventHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdez",
+			wantPass:  false,
+		},
+		{
+			name:      "64-char containing hyphen",
+			eventHash: "0123456789abcdef0123456789abcdef-123456789abcdef0123456789abcdef",
+			wantPass:  false,
+		},
+		{
+			name:      "64-char containing underscore",
+			eventHash: "0123456789abcdef0123456789abcdef_123456789abcdef0123456789abcdef",
+			wantPass:  false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			db := openArchiveTestDB(t)
+			ctx := context.Background()
+
+			archiveTestExec(t, db, `insert into usage_events (
+				event_hash, timestamp_ms, timestamp, model, total_tokens, created_at_ms
+			) values (?, ?, ?, ?, ?, ?)`,
+				tc.eventHash, 1_000, "1970-01-01T00:00:01Z", "gpt-test", 100, 1_000,
+			)
+
+			repo := New(db)
+			preview, err := repo.Preview(ctx, 2_000)
+			if tc.wantPass {
+				if err != nil {
+					t.Fatalf("preview unexpectedly failed: %v", err)
+				}
+				if preview.EventCount != 1 {
+					t.Fatalf("preview event count = %d, want 1", preview.EventCount)
+				}
+			} else {
+				if err == nil {
+					t.Fatal("preview succeeded, want rejection")
+				}
+				if !errors.Is(err, ErrCoverageIncomplete) {
+					t.Fatalf("preview error = %v, want ErrCoverageIncomplete", err)
+				}
+				if !errors.Is(err, ErrUnrestorableEventHash) {
+					t.Fatalf("preview error = %v, want ErrUnrestorableEventHash", err)
+				}
+			}
+		})
+	}
+
+	// Also verify CreateRun succeeds with uppercase canonical hash
+	t.Run("CreateRun with uppercase canonical hash", func(t *testing.T) {
+		db := openArchiveTestDB(t)
+		ctx := context.Background()
+		upperHash := "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"
+
+		archiveTestExec(t, db, `insert into usage_events (
+			event_hash, timestamp_ms, timestamp, model, total_tokens, created_at_ms
+		) values (?, ?, ?, ?, ?, ?)`,
+			upperHash, 1_000, "1970-01-01T00:00:01Z", "gpt-test", 100, 1_000,
+		)
+
+		repo := New(db)
+		run, err := repo.CreateRun(ctx, "run-upper-preflight", 2_000, 10_000)
+		if err != nil {
+			t.Fatalf("CreateRun failed for uppercase canonical hash: %v", err)
+		}
+		if run.EventCount != 1 {
+			t.Fatalf("run event count = %d, want 1", run.EventCount)
+		}
+	})
 }

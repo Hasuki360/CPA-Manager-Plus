@@ -734,9 +734,11 @@ func TestUsageArchiveRetentionWorkerDoesNotDeadlockOnNoncanonicalHash(t *testing
 		return time.UnixMilli(30*24*time.Hour.Milliseconds() + 5_000)
 	}
 
-	// Worker runs: CreateRetentionArchive fails closed due to noncanonical hash preflight
-	// runOnce returns true (requesting short retry), but MUST NOT create any active run!
-	worker.runOnce(ctx)
+	// Worker runs: CreateRetentionArchive fails closed due to noncanonical hash preflight.
+	// runOnce returns false (no short retry for unrestorable event hash), and MUST NOT create any active run!
+	if retry := worker.runOnce(ctx); retry {
+		t.Fatalf("worker.runOnce(ctx) = true, want false (no short retry on unrestorable event hash)")
+	}
 
 	// Verify no active run exists
 	active, found, err := service.ActiveArchiveRun(ctx)
