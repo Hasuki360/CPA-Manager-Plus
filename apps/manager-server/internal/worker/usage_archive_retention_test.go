@@ -2,6 +2,8 @@ package worker
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"reflect"
 	"strconv"
@@ -437,13 +439,21 @@ func resumeRetentionWorkerFixtureAfterRestart(t *testing.T, fixture *retentionWo
 	return completed
 }
 
+func canonicalRetentionTestHash(raw string) string {
+	if usageparser.IsCanonicalSHA256Hex(raw) {
+		return raw
+	}
+	sum := sha256.Sum256([]byte(raw))
+	return hex.EncodeToString(sum[:])
+}
+
 func retentionWorkerEvents(count int) []usageparser.Event {
 	events := make([]usageparser.Event, 0, count)
 	for index := range count {
 		timestampMS := int64(index+1) * 1_000
 		events = append(events, usageparser.Event{
 			RequestID:    "retention-request-" + strconv.Itoa(index),
-			EventHash:    "retention-event-" + strconv.Itoa(index),
+			EventHash:    canonicalRetentionTestHash("retention-event-" + strconv.Itoa(index)),
 			TimestampMS:  timestampMS,
 			Timestamp:    time.UnixMilli(timestampMS).UTC().Format(time.RFC3339Nano),
 			Provider:     "codex",

@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -536,6 +537,19 @@ func TestUsageArchiveSegmentsRestoreEventDataIntoFreshStore(t *testing.T) {
 	service, _, sourceDB, _ := newRawArchiveTestService(t, 1, 1)
 	insertArchiveTestEvents(t, service.store, events)
 	ctx := context.Background()
+
+	var sourceRespMeta string
+	if err := sourceDB.QueryRowContext(ctx, `select response_metadata_json from usage_events where event_hash = ?`, events[0].EventHash).Scan(&sourceRespMeta); err != nil {
+		t.Fatalf("read source response_metadata_json: %v", err)
+	}
+	var decodedMeta map[string]any
+	if err := json.Unmarshal([]byte(sourceRespMeta), &decodedMeta); err != nil {
+		t.Fatalf("unmarshal source response_metadata_json: %v", err)
+	}
+	decodedMeta["future_extension"] = map[string]any{"value": "preserve-me"}
+	sanitizedMetaBytes, _ := json.Marshal(decodedMeta)
+	sanitizedMeta := usageparser.SafeRawJSON(string(sanitizedMetaBytes))
+
 	if _, err := sourceDB.ExecContext(ctx, `update usage_events set
 		cache_input_mode = ?,
 		normalized_uncached_input_tokens = ?,
@@ -546,7 +560,7 @@ func TestUsageArchiveSegmentsRestoreEventDataIntoFreshStore(t *testing.T) {
 		service_tier = ?,
 		request_service_tier = null,
 		response_service_tier = ?,
-		response_metadata_json = ' ' || json_set(response_metadata_json, '$.future_extension.value', 'preserve-me') || ' ',
+		response_metadata_json = ?,
 		header_quota_recover_at_ms = ?,
 		header_quota_used_percent = ?,
 		header_quota_plan_type = ?,
@@ -562,6 +576,7 @@ func TestUsageArchiveSegmentsRestoreEventDataIntoFreshStore(t *testing.T) {
 		int64(0),
 		"archived-effective-tier",
 		"archived-response-tier",
+		sanitizedMeta,
 		int64(98_765),
 		12.5,
 		"stored-flat-plan",
@@ -572,11 +587,14 @@ func TestUsageArchiveSegmentsRestoreEventDataIntoFreshStore(t *testing.T) {
 	); err != nil {
 		t.Fatalf("prepare archived derived fields: %v", err)
 	}
+	rawJSONFixture := usageparser.SafeRawJSON(`{"future_extension":"preserve-me","request":{"model":"gpt-test"}}`)
+	failBodyFixture := "archived failure body"
+	failSummaryFixture := "archived failure summary"
 	if _, err := sourceDB.ExecContext(ctx, `update usage_events set
 		raw_json = ?, fail_body = ?, fail_summary = ? where event_hash = ?`,
-		`  {"request":{"model":"gpt-test"},"future_extension":"preserve-me"}  `,
-		"  archived failure body  ",
-		"  archived failure summary  ",
+		rawJSONFixture,
+		failBodyFixture,
+		failSummaryFixture,
 		events[1].EventHash,
 	); err != nil {
 		t.Fatalf("prepare archived opaque fields: %v", err)
@@ -1388,6 +1406,14 @@ func usageEventRowByHash(t *testing.T, db *sql.DB, eventHash string) map[string]
 	return row
 }
 
+func canonicalArchiveTestHash(raw string) string {
+	if usageparser.IsCanonicalSHA256Hex(raw) {
+		return raw
+	}
+	sum := sha256.Sum256([]byte(raw))
+	return hex.EncodeToString(sum[:])
+}
+
 func archiveTestServiceEvents(count int) []usageparser.Event {
 	events := make([]usageparser.Event, 0, count)
 	for index := range count {
@@ -1395,7 +1421,7 @@ func archiveTestServiceEvents(count int) []usageparser.Event {
 		failed := index%2 == 1
 		events = append(events, usageparser.Event{
 			RequestID:       "archive-request-" + strconv.Itoa(index),
-			EventHash:       "archive-service-event-" + strconv.Itoa(index),
+			EventHash:       canonicalArchiveTestHash("archive-service-event-" + strconv.Itoa(index)),
 			TimestampMS:     timestampMS,
 			Timestamp:       time.UnixMilli(timestampMS).UTC().Format(time.RFC3339Nano),
 			Provider:        "codex",
@@ -1540,7 +1566,7 @@ func TestUsageArchiveRoundTripPreservesAuthAccountIDSnapshot(t *testing.T) {
 	events := []usageparser.Event{
 		{
 			RequestID:             "archive-id-req-0",
-			EventHash:             "archive-id-hash-0",
+			EventHash:             canonicalArchiveTestHash("archive-id-hash-0"),
 			TimestampMS:           1_000,
 			Timestamp:             time.UnixMilli(1_000).UTC().Format(time.RFC3339Nano),
 			Provider:              "codex",
@@ -1560,7 +1586,7 @@ func TestUsageArchiveRoundTripPreservesAuthAccountIDSnapshot(t *testing.T) {
 		},
 		{
 			RequestID:             "archive-id-req-1",
-			EventHash:             "archive-id-hash-1",
+			EventHash:             canonicalArchiveTestHash("archive-id-hash-1"),
 			TimestampMS:           2_000,
 			Timestamp:             time.UnixMilli(2_000).UTC().Format(time.RFC3339Nano),
 			Provider:              "codex",
@@ -1704,7 +1730,7 @@ func TestUsageArchiveRoundTripPreservesCodexMemberIdentity(t *testing.T) {
 	events := []usageparser.Event{
 		{
 			RequestID:             "archive-codex-req-a",
-			EventHash:             "archive-codex-hash-a",
+			EventHash:             canonicalArchiveTestHash("archive-codex-hash-a"),
 			TimestampMS:           1_000,
 			Timestamp:             time.UnixMilli(1_000).UTC().Format(time.RFC3339Nano),
 			Provider:              "codex",
@@ -1725,7 +1751,7 @@ func TestUsageArchiveRoundTripPreservesCodexMemberIdentity(t *testing.T) {
 		},
 		{
 			RequestID:             "archive-codex-req-b",
-			EventHash:             "archive-codex-hash-b",
+			EventHash:             canonicalArchiveTestHash("archive-codex-hash-b"),
 			TimestampMS:           2_000,
 			Timestamp:             time.UnixMilli(2_000).UTC().Format(time.RFC3339Nano),
 			Provider:              "codex",

@@ -525,10 +525,10 @@ func TestInsertBatchSelectsServiceTierByProviderSemantics(t *testing.T) {
 	for _, event := range recent {
 		byHash[event.EventHash] = event
 	}
-	if event := byHash["codex-tier"]; event.ServiceTier != "priority" || event.RequestServiceTier != "priority" || event.ResponseServiceTier != "default" {
+	if event := byHash[codex.EventHash]; event.ServiceTier != "priority" || event.RequestServiceTier != "priority" || event.ResponseServiceTier != "default" {
 		t.Fatalf("codex tiers = %q/%q/%q", event.ServiceTier, event.RequestServiceTier, event.ResponseServiceTier)
 	}
-	if event := byHash["openai-tier"]; event.ServiceTier != "default" || event.RequestServiceTier != "priority" || event.ResponseServiceTier != "default" {
+	if event := byHash[nonCodex.EventHash]; event.ServiceTier != "default" || event.RequestServiceTier != "priority" || event.ResponseServiceTier != "default" {
 		t.Fatalf("non-Codex tiers = %q/%q/%q", event.ServiceTier, event.RequestServiceTier, event.ResponseServiceTier)
 	}
 }
@@ -613,12 +613,14 @@ func TestWriteFullExportJSONLIgnoresQueryLimitAndUsesSnapshotBoundary(t *testing
 	}
 
 	inserted := false
+	var lateHash string
 	writer := exportInsertWriter{onFirstWrite: func() {
 		if inserted {
 			return
 		}
 		inserted = true
 		newEvent := streamTestEvent("full-export-after-snapshot", 5, "POST /v1/responses", "gpt-test")
+		lateHash = newEvent.EventHash
 		if _, err := repo.InsertBatch(context.Background(), []usage.Event{newEvent}); err != nil {
 			t.Fatalf("insert concurrent event: %v", err)
 		}
@@ -640,7 +642,7 @@ func TestWriteFullExportJSONLIgnoresQueryLimitAndUsesSnapshotBoundary(t *testing
 			t.Fatalf("line %d timestamp %d is not ordered after %d", index, event.TimestampMS, previousTimestamp)
 		}
 		previousTimestamp = event.TimestampMS
-		if event.EventHash == "full-export-after-snapshot" {
+		if event.EventHash == lateHash {
 			t.Fatal("export included event inserted after snapshot boundary")
 		}
 	}
@@ -1003,7 +1005,7 @@ func explainCompatibleUsageQueryPlan(t *testing.T, db *sql.DB, query string, arg
 
 func streamTestEvent(hash string, timestampMS int64, endpoint, model string) usage.Event {
 	return usage.Event{
-		EventHash:    hash,
+		EventHash:    canonicalTestHash(hash),
 		TimestampMS:  timestampMS,
 		Timestamp:    fmt.Sprintf("2026-01-01T00:00:%02dZ", timestampMS%60),
 		Model:        model,

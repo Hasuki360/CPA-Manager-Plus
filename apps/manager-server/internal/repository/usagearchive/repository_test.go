@@ -3,7 +3,9 @@ package usagearchive
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1525,11 +1527,19 @@ func archiveTestString(t *testing.T, db *sql.DB, query string, args ...any) stri
 	return value
 }
 
+func canonicalArchiveTestHash(raw string) string {
+	if usage.IsCanonicalSHA256Hex(raw) {
+		return raw
+	}
+	sum := sha256.Sum256([]byte(raw))
+	return hex.EncodeToString(sum[:])
+}
+
 func archiveTestEvents() []model.UsageEvent {
 	return []model.UsageEvent{
 		{
 			RequestID:            "request-1",
-			EventHash:            "archive-event-1",
+			EventHash:            canonicalArchiveTestHash("archive-event-1"),
 			TimestampMS:          1_000,
 			Timestamp:            time.UnixMilli(1_000).UTC().Format(time.RFC3339Nano),
 			Provider:             "xai",
@@ -1554,7 +1564,7 @@ func archiveTestEvents() []model.UsageEvent {
 		},
 		{
 			RequestID:    "request-2",
-			EventHash:    "archive-event-2",
+			EventHash:    canonicalArchiveTestHash("archive-event-2"),
 			TimestampMS:  2_000,
 			Timestamp:    time.UnixMilli(2_000).UTC().Format(time.RFC3339Nano),
 			Provider:     "codex",
@@ -1568,7 +1578,7 @@ func archiveTestEvents() []model.UsageEvent {
 		},
 		{
 			RequestID:    "request-3",
-			EventHash:    "archive-event-3",
+			EventHash:    canonicalArchiveTestHash("archive-event-3"),
 			TimestampMS:  3_000,
 			Timestamp:    time.UnixMilli(3_000).UTC().Format(time.RFC3339Nano),
 			Provider:     "gemini",

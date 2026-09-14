@@ -382,7 +382,7 @@ func archiveBaselineEvent(index int) archiveBaselineRecord {
 		ArchiveEventID: int64(index + 1),
 		Event: usage.Event{
 			RequestID:             fmt.Sprintf("req-%08d", index),
-			EventHash:             fmt.Sprintf("usage-archive-baseline-%08d", index),
+			EventHash:             canonicalTestHash(fmt.Sprintf("usage-archive-baseline-%08d", index)),
 			TimestampMS:           timestampMS,
 			Timestamp:             time.UnixMilli(timestampMS).UTC().Format(time.RFC3339Nano),
 			Provider:              []string{"codex", "claude", "gemini"}[index%3],

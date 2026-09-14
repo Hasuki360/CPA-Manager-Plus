@@ -2,6 +2,7 @@ package usage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -96,6 +97,9 @@ func (s *Service) Import(ctx context.Context, reader io.Reader) (ImportResult, *
 	parsed, err := usageparser.StreamImportPayload(contextualReader, importBatchSize, func(events []usageparser.Event) error {
 		result, err := s.store.InsertEvents(ctx, events)
 		if err != nil {
+			if errors.Is(err, usageparser.ErrInvalidEventHash) {
+				return err
+			}
 			return &ImportPersistenceError{err: err}
 		}
 		added += result.Inserted
