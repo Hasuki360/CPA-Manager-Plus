@@ -124,12 +124,6 @@ type ConfirmationToken = {
   managementKey?: string;
 };
 
-type PostDeleteNotice = {
-  deletedEventCount: number;
-  reclaimableBytes: number;
-  totalBytes: number;
-};
-
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
 
@@ -385,7 +379,7 @@ export function UsageMaintenancePage() {
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [unsupported, setUnsupported] = useState(false);
-  const [postDeleteNotice, setPostDeleteNotice] = useState<PostDeleteNotice | null>(null);
+  const [postDeleteNoticeVisible, setPostDeleteNoticeVisible] = useState(false);
   const mountedRef = useRef(false);
   const loadControllerRef = useRef<AbortController | null>(null);
   const loadGenerationRef = useRef(0);
@@ -531,7 +525,7 @@ export function UsageMaintenancePage() {
     setPreviewError(null);
     setGuidedArchiveStage('idle');
     setGuidedArchiveRunId(null);
-    setPostDeleteNotice(null);
+    setPostDeleteNoticeVisible(false);
     setError(null);
     setUnsupported(false);
     setLoading(Boolean(serviceBase));
@@ -569,7 +563,7 @@ export function UsageMaintenancePage() {
         return;
       }
       setHistoryList(result);
-      setError((current) => (current ? current : null));
+      setError(null);
     } catch (cause) {
       if (controller.signal.aborted || generation !== historyGenerationRef.current) return;
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -1026,6 +1020,10 @@ export function UsageMaintenancePage() {
       );
       return;
     }
+    const destructive = actionIsDestructive(run, action);
+    if (destructive) {
+      setPostDeleteNoticeVisible(false);
+    }
     const operation = beginWorking(serviceBase, managementKey);
     if (!operation) return;
     try {
@@ -1067,7 +1065,6 @@ export function UsageMaintenancePage() {
         setGuidedArchiveStage('idle');
         setGuidedArchiveRunId(null);
       }
-      const destructive = actionIsDestructive(run, action);
       if (
         !destructive &&
         (updated.run.status === 'deleting' || updated.run.status === 'completed')
@@ -1087,15 +1084,16 @@ export function UsageMaintenancePage() {
         );
       }
       const refreshedMaintenance = await load({ background: true });
-      if (destructive && updated.run.status === 'completed' && refreshedMaintenance !== null) {
-        setPostDeleteNotice({
-          deletedEventCount: updated.run.deleted_event_count,
-          reclaimableBytes: refreshedMaintenance.storage.reclaimable_bytes,
-          totalBytes: refreshedMaintenance.storage.total_bytes,
-        });
-        navigateTo('overview');
+      const destructiveCompleted = destructive && updated.run.status === 'completed';
+
+      if (destructiveCompleted) {
+        if (refreshedMaintenance !== null && operationIsCurrent(operation)) {
+          setPostDeleteNoticeVisible(true);
+          navigateTo('overview');
+        }
+      } else if (view === 'history') {
+        await loadHistory();
       }
-      if (view === 'history') await loadHistory();
       if (operationIsCurrent(operation)) {
         setPreviewRefreshToken((value) => value + 1);
         if (selectedRunId === run.id) {
@@ -1415,32 +1413,32 @@ export function UsageMaintenancePage() {
     return (
       <div className={styles.page}>
         {error ? <div className={styles.error}>{error}</div> : null}
-        {postDeleteNotice ? (
+        {postDeleteNoticeVisible && maintenance ? (
           <section
             className={styles.postDeleteNotice}
             aria-live="polite"
             data-testid="usage-post-delete-notice"
           >
             <div className={styles.postDeleteNoticeHeader}>
-              <h2 className={styles.postDeleteNoticeTitle}>
+              <strong className={styles.postDeleteNoticeTitle}>
                 {t('usage_maintenance.cleanup_complete_title', {
                   defaultValue: 'Raw data cleanup complete',
                 })}
-              </h2>
+              </strong>
             </div>
             <div className={styles.postDeleteNoticeBody}>
               <p className={styles.postDeleteNoticeLead}>
-                {postDeleteNotice.reclaimableBytes > 0
+                {maintenance.storage.reclaimable_bytes > 0
                   ? t('usage_maintenance.cleanup_complete_reclaimable', {
-                      size: formatFileSize(postDeleteNotice.reclaimableBytes),
-                      defaultValue: `The SQLite database file does not shrink immediately. Approximately ${formatFileSize(postDeleteNotice.reclaimableBytes)} of space can be reclaimed via offline compaction.`,
+                      size: formatFileSize(maintenance.storage.reclaimable_bytes),
+                      defaultValue: `The SQLite database file does not shrink immediately. Approximately ${formatFileSize(maintenance.storage.reclaimable_bytes)} of space can be reclaimed via offline compaction.`,
                     })
                   : t('usage_maintenance.cleanup_complete_no_reclaimable', {
                       defaultValue:
                         'No significant reclaimable SQLite free pages were detected; physical compaction is not immediately necessary.',
                     })}
               </p>
-              {postDeleteNotice.reclaimableBytes > 0 ? (
+              {maintenance.storage.reclaimable_bytes > 0 ? (
                 <p className={styles.postDeleteNoticeNote}>
                   {t('usage_maintenance.cleanup_complete_reuse_note', {
                     defaultValue:
@@ -1474,7 +1472,7 @@ export function UsageMaintenancePage() {
                 type="button"
                 variant="ghost"
                 size="sm"
-                onClick={() => setPostDeleteNotice(null)}
+                onClick={() => setPostDeleteNoticeVisible(false)}
               >
                 {t('common.close', { defaultValue: 'Close' })}
               </Button>

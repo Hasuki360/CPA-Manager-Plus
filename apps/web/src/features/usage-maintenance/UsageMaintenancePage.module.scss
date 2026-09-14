@@ -295,7 +295,6 @@
   background: color-mix(in srgb, var(--primary-color) 7%, var(--bg-primary));
 }
 
-
 .guidedProgressHeader {
   display: flex;
   align-items: baseline;
@@ -691,6 +690,7 @@
 }
 
 .postDeleteNoticeTitle {
+  display: block;
   margin: 0;
   font-size: 16px;
   font-weight: 700;

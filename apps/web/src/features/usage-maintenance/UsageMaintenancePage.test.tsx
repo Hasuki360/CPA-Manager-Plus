@@ -1857,6 +1857,11 @@ describe('UsageMaintenancePage', () => {
     expect(findButtons(renderer, 'View advanced maintenance')).toHaveLength(1);
     expect(findButtons(renderer, 'Close')).toHaveLength(1);
 
+    // Verify heading accessibility: notice title does not use h2 before overview h1
+    const notice = renderer.root.findByProps({ 'data-testid': 'usage-post-delete-notice' });
+    expect(notice.findAllByType('h2')).toHaveLength(0);
+    expect(notice.findAllByType('strong')).toHaveLength(1);
+
     act(() => renderer.unmount());
   });
 
@@ -1910,6 +1915,10 @@ describe('UsageMaintenancePage', () => {
 
     const renderer = await renderHistoryPage(initialMaintenance, [targetRun]);
 
+    const historyListCallsBeforeDelete = mocks.listUsageArchives.mock.calls.filter(
+      ([, , options]) => typeof options === 'object'
+    ).length;
+
     const completedRun = {
       ...targetRun,
       status: 'completed' as const,
@@ -1933,6 +1942,193 @@ describe('UsageMaintenancePage', () => {
     const text = getText(renderer.root);
     expect(text).not.toContain('Raw data cleanup complete');
     expect(text).toContain('refresh failed');
+    expect(text).not.toContain('can be reclaimed');
+
+    // Asserts no unnecessary extra history refresh was triggered after destructive completed failure
+    const historyListCallsAfterDelete = mocks.listUsageArchives.mock.calls.filter(
+      ([, , options]) => typeof options === 'object'
+    ).length;
+    expect(historyListCallsAfterDelete).toBe(historyListCallsBeforeDelete);
+
+    act(() => renderer.unmount());
+  });
+
+  it('clears existing error when history list succeeds on subsequent request', async () => {
+    const targetRun = archive('completed', 'history-recovered-run');
+    const renderer = await renderOverviewPage(maintenance(), []);
+
+    // Initial history request fails
+    mocks.listUsageArchives.mockRejectedValueOnce(new Error('temporary history network error'));
+
+    await act(async () => {
+      findButtons(renderer, 'View all')[0].props.onClick();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(getText(renderer.root)).toContain('temporary history network error');
+
+    // Next history request succeeds
+    mocks.listUsageArchives.mockResolvedValueOnce({ runs: [targetRun] });
+
+    // Click refresh to reload history
+    const refreshButton =
+      findButtons(renderer, 'common.refresh')[0] ?? findButtons(renderer, 'failed')[0];
+    await act(async () => {
+      refreshButton.props.onClick();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const text = getText(renderer.root);
+    expect(text).not.toContain('temporary history network error');
+    expect(text).toContain('history-recovered-run');
+
+    act(() => renderer.unmount());
+  });
+
+  it('updates post-delete notice live as maintenance is refreshed without caching stale storage snapshot', async () => {
+    const targetRun = archive('verified', 'post-delete-live-update-run');
+    const initialMaintenance = maintenance({
+      storage: {
+        page_size: 4_096,
+        page_count: 20,
+        freelist_count: 1,
+        reclaimable_bytes: 4_096,
+        database_bytes: 81_920,
+        wal_bytes: 0,
+        shm_bytes: 0,
+        total_bytes: 81_920,
+      },
+    });
+    const afterDeleteMaintenance = maintenance({
+      storage: {
+        page_size: 4_096,
+        page_count: 100_000,
+        freelist_count: 655_360,
+        reclaimable_bytes: 2_684_354_560, // 2.50 GB
+        database_bytes: 5_000_000_000,
+        wal_bytes: 0,
+        shm_bytes: 0,
+        total_bytes: 5_000_000_000,
+      },
+    });
+
+    const renderer = await renderHistoryPage(initialMaintenance, [targetRun]);
+
+    mocks.deleteUsageArchive.mockResolvedValueOnce(
+      archiveStatus({ ...targetRun, status: 'completed', deleted_event_count: 50 })
+    );
+    mocks.getUsageMaintenance.mockResolvedValueOnce(afterDeleteMaintenance);
+
+    act(() => findButtons(renderer, 'Delete raw')[0].props.onClick());
+    const confirmation = mocks.showConfirmation.mock.calls[0][0] as {
+      onConfirm: () => Promise<void>;
+    };
+    await act(async () => {
+      await confirmation.onConfirm();
+    });
+
+    // 1. Initial notice after delete reflects 2.50 GB
+    let text = getText(renderer.root);
+    expect(text).toContain('Raw data cleanup complete');
+    expect(text).toContain('2.50 GB');
+
+    // 2. User clicks Refresh, API returns 512 MB reclaimable
+    const halfGbMaintenance = maintenance({
+      storage: {
+        ...afterDeleteMaintenance.storage,
+        reclaimable_bytes: 536_870_912, // 512 MB
+      },
+    });
+    mocks.getUsageMaintenance.mockResolvedValueOnce(halfGbMaintenance);
+
+    await act(async () => {
+      const refreshButton =
+        findButtons(renderer, 'common.refresh')[0] ?? findButtons(renderer, 'Refresh')[0];
+      refreshButton.props.onClick();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    text = getText(renderer.root);
+    expect(text).toContain('512.00 MB');
+    expect(text).not.toContain('2.50 GB');
+
+    // 3. User clicks Refresh again, API returns 0 reclaimable
+    const zeroReclaimableMaintenance = maintenance({
+      storage: {
+        ...afterDeleteMaintenance.storage,
+        freelist_count: 0,
+        reclaimable_bytes: 0,
+      },
+    });
+    mocks.getUsageMaintenance.mockResolvedValueOnce(zeroReclaimableMaintenance);
+
+    await act(async () => {
+      const refreshButton =
+        findButtons(renderer, 'common.refresh')[0] ?? findButtons(renderer, 'Refresh')[0];
+      refreshButton.props.onClick();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    text = getText(renderer.root);
+    expect(text).toContain('No significant reclaimable SQLite free pages were detected');
+    expect(text).not.toContain('0 B of space can be reclaimed');
+    expect(text).not.toContain('512.00 MB');
+
+    act(() => renderer.unmount());
+  });
+
+  it('clears post-delete notice when manager service context changes', async () => {
+    const targetRun = archive('verified', 'post-delete-context-run');
+    const initialMaintenance = maintenance();
+    const refreshedMaintenance = maintenance({
+      storage: {
+        page_size: 4_096,
+        page_count: 100_000,
+        freelist_count: 655_360,
+        reclaimable_bytes: 2_684_354_560,
+        database_bytes: 5_000_000_000,
+        wal_bytes: 0,
+        shm_bytes: 0,
+        total_bytes: 5_000_000_000,
+      },
+    });
+
+    const renderer = await renderHistoryPage(initialMaintenance, [targetRun]);
+
+    mocks.deleteUsageArchive.mockResolvedValueOnce(
+      archiveStatus({ ...targetRun, status: 'completed', deleted_event_count: 10 })
+    );
+    mocks.getUsageMaintenance.mockResolvedValueOnce(refreshedMaintenance);
+
+    act(() => findButtons(renderer, 'Delete raw')[0].props.onClick());
+    const confirmation = mocks.showConfirmation.mock.calls[0][0] as {
+      onConfirm: () => Promise<void>;
+    };
+    await act(async () => {
+      await confirmation.onConfirm();
+    });
+
+    expect(getText(renderer.root)).toContain('Raw data cleanup complete');
+
+    // Context changes (e.g. managerServiceBase changes)
+    await act(async () => {
+      mocks.availability.managerServiceBase = 'http://manager-b.local:18317';
+      mocks.getUsageMaintenance.mockResolvedValueOnce(maintenance());
+      mocks.listUsageArchives.mockResolvedValueOnce({ runs: [] });
+      renderer.update(<UsageMaintenancePage />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(getText(renderer.root)).not.toContain('Raw data cleanup complete');
 
     act(() => renderer.unmount());
   });
