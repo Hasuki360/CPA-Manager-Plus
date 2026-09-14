@@ -353,11 +353,14 @@ func (r *archiveJobRunner) shouldRetry(key archiveJobKey, runErr error) bool {
 	if run.RequestedStage != key.stage || archiveRequestedStageSatisfied(run, key.stage) {
 		return false
 	}
-	if errors.Is(runErr, ErrArchiveUnrestorableEventHash) {
-		return false
-	}
 	if run.Status == usagearchive.StatusFailed {
-		return run.ResumeStatus == key.stage && errors.Is(runErr, ErrArchiveCoverageIncomplete)
+		if run.ResumeStatus != key.stage {
+			return false
+		}
+		if errors.Is(runErr, ErrArchiveUnrestorableEventHash) {
+			return false
+		}
+		return errors.Is(runErr, ErrArchiveCoverageIncomplete)
 	}
 	return archiveRunCanExecuteStage(run, key.stage)
 }

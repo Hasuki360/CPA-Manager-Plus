@@ -355,21 +355,12 @@ func TestArchiveJobDoesNotRetryUnrestorableEventHash(t *testing.T) {
 		t.Fatalf("archive run: status=%#v err=%v", archived, err)
 	}
 
-	if _, err := st.UsageArchives.BeginVerification(ctx, created.Run.ID, time.Now().UnixMilli()); err != nil {
+	verifyingRun, err := st.UsageArchives.BeginVerification(ctx, created.Run.ID, time.Now().UnixMilli())
+	if err != nil {
 		t.Fatalf("begin verification: %v", err)
 	}
-	failed, err := st.UsageArchives.RecordFailure(
-		ctx,
-		created.Run.ID,
-		usagearchive.StatusVerifying,
-		ErrArchiveUnrestorableEventHash,
-		time.Now().UnixMilli(),
-	)
-	if err != nil {
-		t.Fatalf("record failure: %v", err)
-	}
-	if failed.Status != usagearchive.StatusFailed || failed.ResumeStatus != usagearchive.StatusVerifying {
-		t.Fatalf("failed run state = %#v", failed)
+	if verifyingRun.Status != usagearchive.StatusVerifying {
+		t.Fatalf("verifying run status = %s, want %s", verifyingRun.Status, usagearchive.StatusVerifying)
 	}
 	if _, _, err := st.UsageArchives.RequestStage(
 		ctx,
@@ -388,17 +379,38 @@ func TestArchiveJobDoesNotRetryUnrestorableEventHash(t *testing.T) {
 	service.archiveJobs.retryOnError[key] = true
 	service.archiveJobs.mu.Unlock()
 
-	// 1. Permanent error ErrArchiveUnrestorableEventHash must NOT be retried
+	// 1. While still verifying (e.g. RecordFailure had a transient DB error),
+	// errors joined with ErrArchiveUnrestorableEventHash must be retried
+	simulatedDBErr := errors.Join(ErrArchiveUnrestorableEventHash, errors.New("simulated DB error"))
+	if !service.archiveJobs.shouldRetry(key, simulatedDBErr) {
+		t.Fatal("shouldRetry = false for verifying stage with joined unrestorable and DB error, want true")
+	}
+
+	failed, err := st.UsageArchives.RecordFailure(
+		ctx,
+		created.Run.ID,
+		usagearchive.StatusVerifying,
+		ErrArchiveUnrestorableEventHash,
+		time.Now().UnixMilli(),
+	)
+	if err != nil {
+		t.Fatalf("record failure: %v", err)
+	}
+	if failed.Status != usagearchive.StatusFailed || failed.ResumeStatus != usagearchive.StatusVerifying {
+		t.Fatalf("failed run state = %#v", failed)
+	}
+
+	// 2. Once durable run has entered failed/verifying, ErrArchiveUnrestorableEventHash must NOT be retried
 	if service.archiveJobs.shouldRetry(key, ErrArchiveUnrestorableEventHash) {
-		t.Fatal("shouldRetry = true for ErrArchiveUnrestorableEventHash, want false")
+		t.Fatal("shouldRetry = true for failed/verifying with ErrArchiveUnrestorableEventHash, want false")
 	}
 
-	// 2. Ordinary transient ErrArchiveCoverageIncomplete must still be retried
+	// 3. Ordinary transient ErrArchiveCoverageIncomplete must still be retried on failed/verifying
 	if !service.archiveJobs.shouldRetry(key, ErrArchiveCoverageIncomplete) {
-		t.Fatal("shouldRetry = false for ErrArchiveCoverageIncomplete, want true")
+		t.Fatal("shouldRetry = false for failed/verifying with ErrArchiveCoverageIncomplete, want true")
 	}
 
-	// 3. Verify requested stage can be cleared and the runner will not claim it again
+	// 4. Verify requested stage can be cleared and the runner will not claim it again
 	if err := st.UsageArchives.ClearRequestedStage(ctx, created.Run.ID, usagearchive.StatusVerifying); err != nil {
 		t.Fatalf("clear requested stage: %v", err)
 	}
