@@ -8,6 +8,7 @@ import type {
   UsageMaintenanceStatus,
 } from '@/services/api/usageService';
 import { UsageMaintenancePage } from './UsageMaintenancePage';
+import { COMPACT_USAGE_COMMAND } from './UsageMaintenanceCapabilityViews';
 
 const { mocks } = vi.hoisted(() => {
   (
@@ -1147,6 +1148,8 @@ describe('UsageMaintenancePage', () => {
     expect(message).toContain('missing detail must not be interpreted as zero usage');
     expect(message).toContain('frozen');
     expect(message).toContain('complete pre-deletion backup');
+    expect(message).toContain('database file does not shrink immediately');
+    expect(message).toContain('offline compaction');
     expect(confirmation.confirmText).toContain(
       (run.event_count - run.deleted_event_count).toLocaleString('en')
     );
@@ -1791,6 +1794,212 @@ describe('UsageMaintenancePage', () => {
 
     expect(mocks.getUsageMaintenance).toHaveBeenCalledTimes(2);
     expect(mocks.listUsageArchives).toHaveBeenCalledTimes(2);
+    act(() => renderer.unmount());
+  });
+
+  it('surfaces post-delete notice on overview with freshly read reclaimable bytes when reclaimable > 0', async () => {
+    const targetRun = archive('verified', 'post-delete-run-b');
+    const initialMaintenance = maintenance({
+      storage: {
+        page_size: 4_096,
+        page_count: 20,
+        freelist_count: 1,
+        reclaimable_bytes: 4_096, // Old reclaimable = 4 KB
+        database_bytes: 81_920,
+        wal_bytes: 0,
+        shm_bytes: 0,
+        total_bytes: 81_920,
+      },
+    });
+    const refreshedMaintenance = maintenance({
+      storage: {
+        page_size: 4_096,
+        page_count: 100_000,
+        freelist_count: 655_360,
+        reclaimable_bytes: 2_684_354_560, // New reclaimable = 2.5 GB (A != B)
+        database_bytes: 5_000_000_000,
+        wal_bytes: 0,
+        shm_bytes: 0,
+        total_bytes: 5_000_000_000,
+      },
+    });
+
+    const renderer = await renderHistoryPage(initialMaintenance, [targetRun]);
+
+    // Mock delete API returns completed run
+    const completedRun = {
+      ...targetRun,
+      status: 'completed' as const,
+      deleted_event_count: 10,
+    };
+    mocks.deleteUsageArchive.mockResolvedValueOnce(archiveStatus(completedRun));
+    // Subsequent getUsageMaintenance returns the fresh maintenance with 2.5 GB reclaimable
+    mocks.getUsageMaintenance.mockResolvedValueOnce(refreshedMaintenance);
+
+    act(() => findButtons(renderer, 'Delete raw')[0].props.onClick());
+    const confirmation = mocks.showConfirmation.mock.calls[0][0] as {
+      onConfirm: () => Promise<void>;
+    };
+    await act(async () => {
+      await confirmation.onConfirm();
+    });
+
+    // Overview should be active
+    const text = getText(renderer.root);
+    expect(text).toContain('Usage maintenance overview');
+    expect(text).toContain('Raw data cleanup complete');
+    // Notice uses the newly refreshed value (2.50 GB), not the old 4 KB
+    expect(text).toContain('2.50 GB');
+    expect(text).not.toContain('4 KB of space can be reclaimed');
+    expect(text).toContain('database file does not shrink immediately');
+    expect(text).toContain('continue reusing these free pages');
+    expect(findButtons(renderer, 'Copy compact command')).toHaveLength(1);
+    expect(findButtons(renderer, 'View advanced maintenance')).toHaveLength(1);
+    expect(findButtons(renderer, 'Close')).toHaveLength(1);
+
+    act(() => renderer.unmount());
+  });
+
+  it('displays no-reclaimable note instead of 0 B when reclaimable == 0 after deletion', async () => {
+    const targetRun = archive('verified', 'post-delete-run-c');
+    const initialMaintenance = maintenance();
+    const refreshedMaintenance = maintenance({
+      storage: {
+        page_size: 4_096,
+        page_count: 20,
+        freelist_count: 0,
+        reclaimable_bytes: 0, // Zero reclaimable
+        database_bytes: 81_920,
+        wal_bytes: 0,
+        shm_bytes: 0,
+        total_bytes: 81_920,
+      },
+    });
+
+    const renderer = await renderHistoryPage(initialMaintenance, [targetRun]);
+
+    const completedRun = {
+      ...targetRun,
+      status: 'completed' as const,
+      deleted_event_count: 10,
+    };
+    mocks.deleteUsageArchive.mockResolvedValueOnce(archiveStatus(completedRun));
+    mocks.getUsageMaintenance.mockResolvedValueOnce(refreshedMaintenance);
+
+    act(() => findButtons(renderer, 'Delete raw')[0].props.onClick());
+    const confirmation = mocks.showConfirmation.mock.calls[0][0] as {
+      onConfirm: () => Promise<void>;
+    };
+    await act(async () => {
+      await confirmation.onConfirm();
+    });
+
+    const text = getText(renderer.root);
+    expect(text).toContain('Raw data cleanup complete');
+    expect(text).toContain('No significant reclaimable SQLite free pages were detected');
+    expect(text).toContain('physical compaction is not immediately necessary');
+    expect(text).not.toContain('0 B of space can be reclaimed');
+    expect(text).not.toContain('0.00 B of space can be reclaimed');
+
+    act(() => renderer.unmount());
+  });
+
+  it('handles maintenance refresh failure after deletion without rolling back delete or fabricating metrics', async () => {
+    const targetRun = archive('verified', 'post-delete-run-d');
+    const initialMaintenance = maintenance();
+
+    const renderer = await renderHistoryPage(initialMaintenance, [targetRun]);
+
+    const completedRun = {
+      ...targetRun,
+      status: 'completed' as const,
+      deleted_event_count: 10,
+    };
+    mocks.deleteUsageArchive.mockResolvedValueOnce(archiveStatus(completedRun));
+    // Refresh fails
+    mocks.getUsageMaintenance.mockRejectedValueOnce(new Error('refresh failed'));
+
+    act(() => findButtons(renderer, 'Delete raw')[0].props.onClick());
+    const confirmation = mocks.showConfirmation.mock.calls[0][0] as {
+      onConfirm: () => Promise<void>;
+    };
+    await act(async () => {
+      await confirmation.onConfirm();
+    });
+
+    // Delete success notification is still shown
+    expect(mocks.showNotification).toHaveBeenCalledWith('Logical deletion completed.', 'success');
+    // Notice card must NOT be displayed because fresh metrics are unavailable
+    const text = getText(renderer.root);
+    expect(text).not.toContain('Raw data cleanup complete');
+    expect(text).toContain('refresh failed');
+
+    act(() => renderer.unmount());
+  });
+
+  it('handles notice buttons: copy compact command, open advanced view, and dismiss', async () => {
+    const targetRun = archive('verified', 'post-delete-run-e');
+    const initialMaintenance = maintenance();
+    const refreshedMaintenance = maintenance({
+      storage: {
+        page_size: 4_096,
+        page_count: 100_000,
+        freelist_count: 655_360,
+        reclaimable_bytes: 2_684_354_560,
+        database_bytes: 5_000_000_000,
+        wal_bytes: 0,
+        shm_bytes: 0,
+        total_bytes: 5_000_000_000,
+      },
+    });
+
+    const renderer = await renderHistoryPage(initialMaintenance, [targetRun]);
+
+    mocks.deleteUsageArchive.mockResolvedValueOnce(
+      archiveStatus({ ...targetRun, status: 'completed', deleted_event_count: 10 })
+    );
+    mocks.getUsageMaintenance.mockResolvedValueOnce(refreshedMaintenance);
+
+    act(() => findButtons(renderer, 'Delete raw')[0].props.onClick());
+    const confirmation = mocks.showConfirmation.mock.calls[0][0] as {
+      onConfirm: () => Promise<void>;
+    };
+    await act(async () => {
+      await confirmation.onConfirm();
+    });
+
+    expect(getText(renderer.root)).toContain('Raw data cleanup complete');
+
+    // 1. Copy compact command button
+    const writeTextMock = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal('navigator', {
+      clipboard: { writeText: writeTextMock },
+    });
+    await act(async () => {
+      findButtons(renderer, 'Copy compact command')[0].props.onClick();
+      await Promise.resolve();
+    });
+    expect(writeTextMock).toHaveBeenCalledWith(COMPACT_USAGE_COMMAND);
+    expect(mocks.showNotification).toHaveBeenCalledWith('Offline compact command copied.', 'success');
+
+    // 2. Open advanced maintenance button
+    await act(async () => {
+      findButtons(renderer, 'View advanced maintenance')[0].props.onClick();
+      await Promise.resolve();
+    });
+    expect(getText(renderer.root)).toContain('Advanced maintenance / offline compact');
+
+    // Return to overview
+    await act(async () => {
+      findButtons(renderer, 'Back')[0].props.onClick();
+      await Promise.resolve();
+    });
+    expect(getText(renderer.root)).toContain('Raw data cleanup complete');
+
+    // 3. Dismiss button
+    act(() => findButtons(renderer, 'Close')[0].props.onClick());
+    expect(getText(renderer.root)).not.toContain('Raw data cleanup complete');
+
     act(() => renderer.unmount());
   });
 });

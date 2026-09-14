@@ -427,3 +427,90 @@ func TestModelPriceUpsertSyncedContextTierStructureChangeRejectedAfterRawDeletio
 		t.Fatalf("service tiers modified despite rollback: %+v", priceA.ServiceTiers)
 	}
 }
+
+// Case A: manual price + raw deletion + sync
+func TestModelPriceUpsertSyncedManualPricePreservedWithRawDeletion(t *testing.T) {
+	ctx := context.Background()
+	db, repo := openTestDB(t)
+
+	initialPrices := map[string]model.ModelPrice{
+		"model-a": {
+			Prompt:           10.0,
+			Completion:       20.0,
+			PromptConfigured: true,
+			Source:           "manual",
+		},
+	}
+	if err := repo.ReplaceAll(ctx, initialPrices); err != nil {
+		t.Fatalf("initial ReplaceAll: %v", err)
+	}
+
+	markRawDeleted(t, db)
+
+	// Sync contains model-a with different candidate prices
+	syncCandidate := map[string]model.ModelPrice{
+		"model-a": {Prompt: 5.0, Completion: 10.0, Source: "sync"},
+	}
+	result, err := repo.UpsertSynced(ctx, syncCandidate)
+	if err != nil {
+		t.Fatalf("UpsertSynced with manual price and raw deletion: %v", err)
+	}
+	if result.Imported != 0 {
+		t.Fatalf("expected Imported == 0, got %d", result.Imported)
+	}
+	if len(result.Preserved) != 1 || result.Preserved[0] != "model-a" {
+		t.Fatalf("expected Preserved == ['model-a'], got %+v", result.Preserved)
+	}
+
+	persisted, err := repo.LoadAll(ctx)
+	if err != nil {
+		t.Fatalf("LoadAll: %v", err)
+	}
+	if persisted["model-a"].Prompt != 10.0 || persisted["model-a"].Completion != 20.0 || persisted["model-a"].Source != "manual" {
+		t.Fatalf("manual price overwritten: %+v", persisted["model-a"])
+	}
+}
+
+// Case B: manual price + raw deletion + new model (rejected and transaction rolled back)
+func TestModelPriceUpsertSyncedManualPriceAndNewModelRejectedWithRawDeletion(t *testing.T) {
+	ctx := context.Background()
+	db, repo := openTestDB(t)
+
+	initialPrices := map[string]model.ModelPrice{
+		"model-a": {
+			Prompt:           10.0,
+			Completion:       20.0,
+			PromptConfigured: true,
+			Source:           "manual",
+		},
+	}
+	if err := repo.ReplaceAll(ctx, initialPrices); err != nil {
+		t.Fatalf("initial ReplaceAll: %v", err)
+	}
+
+	markRawDeleted(t, db)
+
+	// Sync contains model-a (manual) and model-b (new)
+	syncCandidate := map[string]model.ModelPrice{
+		"model-a": {Prompt: 5.0, Completion: 10.0, Source: "sync"},
+		"model-b": {Prompt: 3.0, Completion: 4.0, Source: "sync"},
+	}
+	result, err := repo.UpsertSynced(ctx, syncCandidate)
+	if !errors.Is(err, modelprice.ErrStructureChangeAfterRawDeletion) {
+		t.Fatalf("expected ErrStructureChangeAfterRawDeletion, got result=%+v err=%v", result, err)
+	}
+
+	persisted, err := repo.LoadAll(ctx)
+	if err != nil {
+		t.Fatalf("LoadAll: %v", err)
+	}
+	if len(persisted) != 1 {
+		t.Fatalf("expected 1 model persisted after rollback, got %d", len(persisted))
+	}
+	if persisted["model-a"].Prompt != 10.0 || persisted["model-a"].Completion != 20.0 || persisted["model-a"].Source != "manual" {
+		t.Fatalf("manual price altered: %+v", persisted["model-a"])
+	}
+	if _, ok := persisted["model-b"]; ok {
+		t.Fatalf("model-b should not exist after rollback")
+	}
+}

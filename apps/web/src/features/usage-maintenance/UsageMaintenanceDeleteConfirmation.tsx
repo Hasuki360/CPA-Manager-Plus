@@ -101,6 +101,12 @@ export function UsageMaintenanceDeleteConfirmation({ run, deletionEnabled }: Pro
             'Core aggregates and long-term statistics remain available. Raw-dependent event details, failure diagnostics, latency distributions, and search may have coverage gaps; missing detail must not be interpreted as zero usage.',
         })}
       </p>
+      <p className={styles.infoNote}>
+        {t('usage_maintenance.delete_storage_note', {
+          defaultValue:
+            'Storage note: deleting raw data frees SQLite pages for reuse, but the database file does not shrink immediately. Releasing that space back to the filesystem requires offline compaction with all Manager Server processes stopped.',
+        })}
+      </p>
     </div>
   );
 }

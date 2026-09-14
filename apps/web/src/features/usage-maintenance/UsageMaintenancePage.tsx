@@ -124,6 +124,12 @@ type ConfirmationToken = {
   managementKey?: string;
 };
 
+type PostDeleteNotice = {
+  deletedEventCount: number;
+  reclaimableBytes: number;
+  totalBytes: number;
+};
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
 
@@ -379,6 +385,7 @@ export function UsageMaintenancePage() {
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [unsupported, setUnsupported] = useState(false);
+  const [postDeleteNotice, setPostDeleteNotice] = useState<PostDeleteNotice | null>(null);
   const mountedRef = useRef(false);
   const loadControllerRef = useRef<AbortController | null>(null);
   const loadGenerationRef = useRef(0);
@@ -524,6 +531,7 @@ export function UsageMaintenancePage() {
     setPreviewError(null);
     setGuidedArchiveStage('idle');
     setGuidedArchiveRunId(null);
+    setPostDeleteNotice(null);
     setError(null);
     setUnsupported(false);
     setLoading(Boolean(serviceBase));
@@ -561,7 +569,7 @@ export function UsageMaintenancePage() {
         return;
       }
       setHistoryList(result);
-      setError(null);
+      setError((current) => (current ? current : null));
     } catch (cause) {
       if (controller.signal.aborted || generation !== historyGenerationRef.current) return;
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -632,11 +640,13 @@ export function UsageMaintenancePage() {
   }, [managementKey, selectedArchiveRefreshToken, selectedRunId, serviceBase, t, view]);
 
   const load = useCallback(
-    async ({ background = false }: { background?: boolean } = {}) => {
-      if (!mountedRef.current) return;
+    async ({
+      background = false,
+    }: { background?: boolean } = {}): Promise<UsageMaintenanceStatus | null> => {
+      if (!mountedRef.current) return null;
       if (!serviceBase) {
         if (!background) setLoading(false);
-        return;
+        return null;
       }
 
       const generation = ++loadGenerationRef.current;
@@ -658,27 +668,28 @@ export function UsageMaintenancePage() {
             managementKey,
             controller.signal
           );
-          if (controller.signal.aborted || generation !== loadGenerationRef.current) return;
+          if (controller.signal.aborted || generation !== loadGenerationRef.current) return null;
           capabilityContextRef.current = { serviceBase, managementKey };
         }
         const [maintenanceResult, archiveResult] = await Promise.all([
           usageServiceApi.getUsageMaintenance(serviceBase, managementKey, controller.signal),
           usageServiceApi.listUsageArchives(serviceBase, managementKey, 20, controller.signal),
         ]);
-        if (controller.signal.aborted || generation !== loadGenerationRef.current) return;
+        if (controller.signal.aborted || generation !== loadGenerationRef.current) return null;
         if (!isUsageMaintenanceStatus(maintenanceResult) || !isUsageArchiveList(archiveResult)) {
           setUnsupported(true);
           setMaintenance(null);
           setArchives([]);
           setError(null);
-          return;
+          return null;
         }
         setMaintenance(maintenanceResult);
         setArchives(archiveResult.runs ?? []);
         setUnsupported(false);
         setError(null);
+        return maintenanceResult;
       } catch (cause) {
-        if (generation !== loadGenerationRef.current || controller.signal.aborted) return;
+        if (generation !== loadGenerationRef.current || controller.signal.aborted) return null;
         controller.abort();
         if (isUnsupportedError(cause)) {
           setUnsupported(true);
@@ -688,6 +699,7 @@ export function UsageMaintenancePage() {
           setUnsupported(false);
           setError(cause instanceof Error ? cause.message : String(cause));
         }
+        return null;
       } finally {
         if (generation === loadGenerationRef.current) {
           loadControllerRef.current = null;
@@ -1074,7 +1086,15 @@ export function UsageMaintenancePage() {
           'success'
         );
       }
-      await load({ background: true });
+      const refreshedMaintenance = await load({ background: true });
+      if (destructive && updated.run.status === 'completed' && refreshedMaintenance !== null) {
+        setPostDeleteNotice({
+          deletedEventCount: updated.run.deleted_event_count,
+          reclaimableBytes: refreshedMaintenance.storage.reclaimable_bytes,
+          totalBytes: refreshedMaintenance.storage.total_bytes,
+        });
+        navigateTo('overview');
+      }
       if (view === 'history') await loadHistory();
       if (operationIsCurrent(operation)) {
         setPreviewRefreshToken((value) => value + 1);
@@ -1395,6 +1415,72 @@ export function UsageMaintenancePage() {
     return (
       <div className={styles.page}>
         {error ? <div className={styles.error}>{error}</div> : null}
+        {postDeleteNotice ? (
+          <section
+            className={styles.postDeleteNotice}
+            aria-live="polite"
+            data-testid="usage-post-delete-notice"
+          >
+            <div className={styles.postDeleteNoticeHeader}>
+              <h2 className={styles.postDeleteNoticeTitle}>
+                {t('usage_maintenance.cleanup_complete_title', {
+                  defaultValue: 'Raw data cleanup complete',
+                })}
+              </h2>
+            </div>
+            <div className={styles.postDeleteNoticeBody}>
+              <p className={styles.postDeleteNoticeLead}>
+                {postDeleteNotice.reclaimableBytes > 0
+                  ? t('usage_maintenance.cleanup_complete_reclaimable', {
+                      size: formatFileSize(postDeleteNotice.reclaimableBytes),
+                      defaultValue: `The SQLite database file does not shrink immediately. Approximately ${formatFileSize(postDeleteNotice.reclaimableBytes)} of space can be reclaimed via offline compaction.`,
+                    })
+                  : t('usage_maintenance.cleanup_complete_no_reclaimable', {
+                      defaultValue:
+                        'No significant reclaimable SQLite free pages were detected; physical compaction is not immediately necessary.',
+                    })}
+              </p>
+              {postDeleteNotice.reclaimableBytes > 0 ? (
+                <p className={styles.postDeleteNoticeNote}>
+                  {t('usage_maintenance.cleanup_complete_reuse_note', {
+                    defaultValue:
+                      'Compaction is optional if you do not need to release disk space immediately; SQLite will continue reusing these free pages.',
+                  })}
+                </p>
+              ) : null}
+            </div>
+            <div className={styles.postDeleteNoticeActions}>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={() => void copyCompactCommand()}
+              >
+                {t('usage_maintenance.cleanup_complete_copy_command', {
+                  defaultValue: 'Copy compact command',
+                })}
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={() => navigateTo('advanced')}
+              >
+                {t('usage_maintenance.cleanup_complete_open_advanced', {
+                  defaultValue: 'View advanced maintenance',
+                })}
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => setPostDeleteNotice(null)}
+              >
+                {t('common.close', { defaultValue: 'Close' })}
+              </Button>
+            </div>
+          </section>
+        ) : null}
         <UsageMaintenanceOverviewView
           maintenance={maintenance}
           archives={archives}
