@@ -813,6 +813,11 @@ func (m *archiveManager) archiveLocked(ctx context.Context, runID string) (Archi
 	if err != nil {
 		return ArchiveStatus{}, err
 	}
+	if current.Status == usagearchive.StatusPreviewed {
+		if _, err := m.store.UsageArchives.Preview(ctx, current.CutoffTimestampMS); err != nil {
+			return ArchiveStatus{}, err
+		}
+	}
 	if current.Mode == usagearchive.RunModeManual {
 		if err := m.ensureManualArchiveReadiness(ctx); err != nil {
 			return ArchiveStatus{}, err

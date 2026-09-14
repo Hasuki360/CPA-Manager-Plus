@@ -388,13 +388,14 @@ func TestUsageArchiveServiceBackfillsMetadataBeforeManualArchive(t *testing.T) {
 	service, st, rawDB, archiveDirectory := newRawArchiveTestService(t, 1, 1)
 	ctx := context.Background()
 	rawJSON := `{"response_headers":{"X-OAI-Request-ID":["req-readiness"],"X-Codex-Plan-Type":["plus"]}}`
+	eventHash := canonicalArchiveTestHash("archive-readiness-event")
 	if _, err := rawDB.ExecContext(ctx, `insert into usage_events (
 		event_hash, timestamp_ms, timestamp, model,
 		cache_input_mode, normalized_uncached_input_tokens, normalized_total_input_tokens,
 		normalized_cache_read_tokens, normalized_cache_creation_tokens,
 		raw_json, created_at_ms
 	) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		"archive-readiness-event",
+		eventHash,
 		1_000,
 		"1970-01-01T00:00:01Z",
 		"gpt-test",
@@ -415,7 +416,7 @@ func TestUsageArchiveServiceBackfillsMetadataBeforeManualArchive(t *testing.T) {
 	}
 	var beforeMetadata string
 	if err := rawDB.QueryRowContext(ctx, `select coalesce(response_metadata_json, '')
-		from usage_events where event_hash = ?`, "archive-readiness-event").Scan(&beforeMetadata); err != nil {
+		from usage_events where event_hash = ?`, eventHash).Scan(&beforeMetadata); err != nil {
 		t.Fatalf("read pre-archive metadata: %v", err)
 	}
 	if beforeMetadata != "" {
@@ -447,7 +448,7 @@ func TestUsageArchiveServiceBackfillsMetadataBeforeManualArchive(t *testing.T) {
 	}
 	var afterMetadata string
 	if err := rawDB.QueryRowContext(ctx, `select coalesce(response_metadata_json, '')
-		from usage_events where event_hash = ?`, "archive-readiness-event").Scan(&afterMetadata); err != nil {
+		from usage_events where event_hash = ?`, eventHash).Scan(&afterMetadata); err != nil {
 		t.Fatalf("read post-archive metadata: %v", err)
 	}
 	if afterMetadata == "" || !strings.Contains(afterMetadata, "req-readiness") {
@@ -1906,7 +1907,7 @@ func TestManualArchiveReadinessRequiresResponseMetadataBackfill(t *testing.T) {
 		normalized_cache_read_tokens, normalized_cache_creation_tokens,
 		raw_json, created_at_ms
 	) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		"event-readiness-unbackfilled",
+		canonicalArchiveTestHash("event-readiness-unbackfilled"),
 		int64(1_000),
 		"2026-01-01T00:00:01Z",
 		"gpt-test",
@@ -2052,8 +2053,8 @@ func TestUsageArchiveInspectionRequireRestorableEventHash(t *testing.T) {
 	}
 }
 
-func TestUsageArchiveVerificationRejectsLegacyNoncanonicalEventHashBeforeRawDelete(t *testing.T) {
-	service, st, rawDB, _ := newRawArchiveTestService(t, 1, 1)
+func TestUsageArchivePreflightRejectsLegacyNoncanonicalEventHash(t *testing.T) {
+	service, st, rawDB, archiveDirectory := newRawArchiveTestService(t, 1, 1)
 	ctx := context.Background()
 
 	legacyHash := "legacy-noncanonical-archive-hash"
@@ -2100,52 +2101,96 @@ func TestUsageArchiveVerificationRejectsLegacyNoncanonicalEventHashBeforeRawDele
 	// Catch up aggregates so aggregate reads requirement is satisfied
 	catchUpUsageAggregate(t, st)
 
-	// Step 1: Create archive and resume until archived (buildManifest passes with requireRestorableEventHash=false)
-	created, err := service.CreateArchive(ctx, 2_000)
-	if err != nil {
-		t.Fatalf("create archive: %v", err)
-	}
-	archived, err := service.ResumeArchive(ctx, created.Run.ID)
-	if err != nil {
-		t.Fatalf("resume archive: %v", err)
-	}
-	if archived.Run.Status != usagearchive.StatusArchived {
-		t.Fatalf("archived status = %s, want %s", archived.Run.Status, usagearchive.StatusArchived)
-	}
-
-	// Step 2: Verify archive - must fail because legacyHash cannot be restored under current persistence policy
-	_, err = service.VerifyArchive(ctx, created.Run.ID)
+	// Step 1: PreviewArchive must fail closed on preflight check
+	_, err := service.PreviewArchive(ctx, 2_000)
 	if err == nil {
-		t.Fatal("verify archive succeeded for noncanonical event hash, want failure")
+		t.Fatal("preview archive succeeded for noncanonical event hash, want failure")
+	}
+	if !errors.Is(err, ErrArchiveCoverageIncomplete) {
+		t.Fatalf("preview archive error = %v, want ErrArchiveCoverageIncomplete", err)
 	}
 	if !strings.Contains(err.Error(), "cannot be restored") && !strings.Contains(err.Error(), "current persistence policy") {
-		t.Fatalf("verify archive error = %v, want cannot be restored / current persistence policy", err)
+		t.Fatalf("preview archive error = %v, want persistence policy error", err)
 	}
 
-	// Step 3: Check ArchiveStatus - status must be failed, resume status verifying, not verified
-	status, err := service.ArchiveStatus(ctx, created.Run.ID)
+	// Step 2: CreateArchive (manual) must fail closed before creating any run
+	_, err = service.CreateArchive(ctx, 2_000)
+	if err == nil {
+		t.Fatal("create archive succeeded for noncanonical event hash, want failure")
+	}
+	if !errors.Is(err, ErrArchiveCoverageIncomplete) {
+		t.Fatalf("create archive error = %v, want ErrArchiveCoverageIncomplete", err)
+	}
+	if !strings.Contains(err.Error(), "cannot be restored") && !strings.Contains(err.Error(), "current persistence policy") {
+		t.Fatalf("create archive error = %v, want persistence policy error", err)
+	}
+
+	// Step 3: CreateRetentionArchive (automatic retention) must fail closed before creating any run
+	_, err = service.CreateRetentionArchive(ctx, 2_000)
+	if err == nil {
+		t.Fatal("create retention archive succeeded for noncanonical event hash, want failure")
+	}
+	if !errors.Is(err, ErrArchiveCoverageIncomplete) {
+		t.Fatalf("create retention archive error = %v, want ErrArchiveCoverageIncomplete", err)
+	}
+
+	// Step 4: Verify no active run exists and no run record was written
+	active, found, err := service.ActiveArchiveRun(ctx)
 	if err != nil {
-		t.Fatalf("archive status: %v", err)
+		t.Fatalf("check active run: %v", err)
 	}
-	if status.Run.Status != usagearchive.StatusFailed {
-		t.Fatalf("run status = %s, want %s", status.Run.Status, usagearchive.StatusFailed)
-	}
-	if status.Run.ResumeStatus != usagearchive.StatusVerifying {
-		t.Fatalf("resume status = %s, want %s", status.Run.ResumeStatus, usagearchive.StatusVerifying)
+	if found {
+		t.Fatalf("active archive run exists = %#v, want none", active)
 	}
 
-	// Step 4: Attempt DeleteArchive - must fail with ErrArchiveInvalidState
-	_, err = service.DeleteArchive(ctx, created.Run.ID)
-	if !errors.Is(err, ErrArchiveInvalidState) {
-		t.Fatalf("delete archive error = %v, want %v", err, ErrArchiveInvalidState)
+	var runCount int
+	if err := rawDB.QueryRowContext(ctx, `select count(*) from usage_archive_runs`).Scan(&runCount); err != nil {
+		t.Fatalf("query runs count: %v", err)
+	}
+	if runCount != 0 {
+		t.Fatalf("usage_archive_runs count = %d, want 0", runCount)
 	}
 
-	// Step 5: Assert raw event in database still exists
+	// Step 5: Verify no segments or files were generated
+	var refCount int
+	if err := rawDB.QueryRowContext(ctx, `select count(*) from usage_archive_event_refs`).Scan(&refCount); err != nil {
+		t.Fatalf("query event refs count: %v", err)
+	}
+	if refCount != 0 {
+		t.Fatalf("usage_archive_event_refs count = %d, want 0", refCount)
+	}
+
+	files, err := filepath.Glob(filepath.Join(archiveDirectory, "*"))
+	if err != nil {
+		t.Fatalf("glob archive directory: %v", err)
+	}
+	if len(files) != 0 {
+		t.Fatalf("archive directory files = %#v, want empty", files)
+	}
+
+	// Step 6: Verify raw event still safely exists in usage_events
 	var count int
 	if err := rawDB.QueryRowContext(ctx, `select count(*) from usage_events where event_hash = ?`, legacyHash).Scan(&count); err != nil {
 		t.Fatalf("query legacy event count: %v", err)
 	}
 	if count != 1 {
-		t.Fatalf("legacy event count = %d, want 1 (event must be preserved)", count)
+		t.Fatalf("legacy event count = %d, want 1 (raw data must be preserved)", count)
 	}
+
+	// Step 7: Verify maintenance state machine is not deadlocked:
+	// No active run exists, so no ErrArchiveMaintenanceLocked is thrown
+	preview, err := service.PreviewArchive(ctx, 500)
+	if err != nil {
+		t.Fatalf("preview archive before legacy event: %v", err)
+	}
+	if preview.EventCount != 0 {
+		t.Fatalf("preview event count = %d, want 0", preview.EventCount)
+	}
+	if _, err := service.CreateArchive(ctx, 500); !errors.Is(err, ErrArchiveNoEvents) {
+		t.Fatalf("create archive before legacy event error = %v, want ErrArchiveNoEvents", err)
+	}
+}
+
+func TestUsageArchiveVerificationRejectsLegacyNoncanonicalEventHashBeforeRawDelete(t *testing.T) {
+	TestUsageArchivePreflightRejectsLegacyNoncanonicalEventHash(t)
 }

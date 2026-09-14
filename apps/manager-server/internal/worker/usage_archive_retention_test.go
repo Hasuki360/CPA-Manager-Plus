@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	sqliterepo "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/sqlite"
 	usagearchive "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/usagearchive"
 	usageservice "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/usage"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/store"
@@ -696,4 +697,71 @@ func (f *fakeUsageArchiveRetentionService) DeleteArchive(context.Context, string
 
 func formatTestInt(value int64) string {
 	return strconv.FormatInt(value, 10)
+}
+
+func TestUsageArchiveRetentionWorkerDoesNotDeadlockOnNoncanonicalHash(t *testing.T) {
+	cfg := testutil.NewConfig(t)
+	rawDB, err := sqliterepo.Open(cfg.DBPath)
+	if err != nil {
+		t.Fatalf("open test db: %v", err)
+	}
+	st := store.New(rawDB)
+	testutil.EnsureAdminCredential(t, st)
+	t.Cleanup(func() { _ = st.Close() })
+	ctx := context.Background()
+
+	// Insert legacy noncanonical event directly into raw DB
+	legacyHash := "legacy-noncanonical-retention-hash"
+	if _, err := rawDB.ExecContext(ctx, `insert into usage_events (
+		event_hash, timestamp_ms, timestamp, model, total_tokens, created_at_ms
+	) values (?, ?, ?, ?, ?, ?)`,
+		legacyHash, 1_000, "1970-01-01T00:00:01Z", "gpt-test", 100, 1_000,
+	); err != nil {
+		t.Fatalf("insert legacy event: %v", err)
+	}
+
+	catchUpRetentionWorkerReadiness(t, st)
+
+	service := usageservice.New(st, usageservice.WithArchive(usageservice.ArchiveConfig{
+		Directory:             cfg.UsageArchiveDir,
+		SegmentEventLimit:     2,
+		DeleteBatchSize:       1,
+		AggregateReadsEnabled: true,
+	}))
+
+	worker := NewUsageArchiveRetentionWorker(service, 30)
+	worker.now = func() time.Time {
+		return time.UnixMilli(30*24*time.Hour.Milliseconds() + 5_000)
+	}
+
+	// Worker runs: CreateRetentionArchive fails closed due to noncanonical hash preflight
+	// runOnce returns true (requesting short retry), but MUST NOT create any active run!
+	worker.runOnce(ctx)
+
+	// Verify no active run exists
+	active, found, err := service.ActiveArchiveRun(ctx)
+	if err != nil {
+		t.Fatalf("active run check: %v", err)
+	}
+	if found {
+		t.Fatalf("active retention run was created = %#v, want none", active)
+	}
+
+	// Verify no runs in database
+	var runCount int
+	if err := rawDB.QueryRowContext(ctx, `select count(*) from usage_archive_runs`).Scan(&runCount); err != nil {
+		t.Fatalf("query runs count: %v", err)
+	}
+	if runCount != 0 {
+		t.Fatalf("usage_archive_runs count = %d, want 0", runCount)
+	}
+
+	// Verify raw event is untouched
+	var eventCount int
+	if err := rawDB.QueryRowContext(ctx, `select count(*) from usage_events where event_hash = ?`, legacyHash).Scan(&eventCount); err != nil {
+		t.Fatalf("query legacy event: %v", err)
+	}
+	if eventCount != 1 {
+		t.Fatalf("legacy event count = %d, want 1", eventCount)
+	}
 }

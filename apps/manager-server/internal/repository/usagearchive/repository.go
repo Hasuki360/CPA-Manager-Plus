@@ -1306,6 +1306,7 @@ func previewQuery(ctx context.Context, queryer interface {
 }, cutoffTimestampMS int64) (Preview, error) {
 	var preview Preview
 	preview.CutoffTimestampMS = cutoffTimestampMS
+	var noncanonicalCount int64
 	if err := queryer.QueryRowContext(ctx, `select
 		coalesce(max(e.id), 0),
 		count(*),
@@ -1317,7 +1318,8 @@ func previewQuery(ctx context.Context, queryer interface {
 			length(coalesce(e.fail_body, '')) + length(coalesce(e.raw_json, ''))
 		), 0),
 		coalesce(min(e.timestamp_ms), 0),
-		coalesce(max(e.timestamp_ms), 0)
+		coalesce(max(e.timestamp_ms), 0),
+		coalesce(sum(case when length(e.event_hash) != 64 or e.event_hash glob '*[^0-9a-f]*' then 1 else 0 end), 0)
 	from usage_events e
 	where e.timestamp_ms < ?
 		and not exists (
@@ -1329,8 +1331,16 @@ func previewQuery(ctx context.Context, queryer interface {
 		&preview.EstimatedBytes,
 		&preview.MinTimestampMS,
 		&preview.MaxTimestampMS,
+		&noncanonicalCount,
 	); err != nil {
 		return Preview{}, err
+	}
+	if preview.EventCount > 0 && noncanonicalCount > 0 {
+		return Preview{}, fmt.Errorf(
+			"%w: archive scope contains %d event hash(es) that cannot be restored under the current persistence policy",
+			ErrCoverageIncomplete,
+			noncanonicalCount,
+		)
 	}
 	return preview, nil
 }

@@ -1647,3 +1647,47 @@ func TestRepositoryDeleteAcceptsHourlyAggregateRebuildRevision(t *testing.T) {
 		t.Fatalf("begin delete with malformed rebuild revision error = %v, want coverage incomplete", err)
 	}
 }
+
+func TestRepositoryPreflightRejectsNoncanonicalEventHash(t *testing.T) {
+	db := openArchiveTestDB(t)
+	ctx := context.Background()
+	legacyHash := "legacy-noncanonical-repo-hash"
+
+	archiveTestExec(t, db, `insert into usage_events (
+		event_hash, timestamp_ms, timestamp, model, total_tokens, created_at_ms
+	) values (?, ?, ?, ?, ?, ?)`,
+		legacyHash, 1_000, "1970-01-01T00:00:01Z", "gpt-test", 100, 1_000,
+	)
+
+	repository := New(db)
+
+	// Preview must fail with ErrCoverageIncomplete
+	_, err := repository.Preview(ctx, 2_000)
+	if err == nil {
+		t.Fatal("preview succeeded for noncanonical event hash, want error")
+	}
+	if !errors.Is(err, ErrCoverageIncomplete) {
+		t.Fatalf("preview error = %v, want ErrCoverageIncomplete", err)
+	}
+	if !strings.Contains(err.Error(), "cannot be restored under the current persistence policy") {
+		t.Fatalf("preview error = %v, want policy error message", err)
+	}
+
+	// CreateRun must fail with ErrCoverageIncomplete
+	_, err = repository.CreateRun(ctx, "run-legacy-preflight", 2_000, 10_000)
+	if err == nil {
+		t.Fatal("create run succeeded for noncanonical event hash, want error")
+	}
+	if !errors.Is(err, ErrCoverageIncomplete) {
+		t.Fatalf("create run error = %v, want ErrCoverageIncomplete", err)
+	}
+
+	// Verify no run was inserted
+	active, found, err := repository.ActiveRun(ctx)
+	if err != nil {
+		t.Fatalf("active run check: %v", err)
+	}
+	if found {
+		t.Fatalf("active run exists = %#v, want none", active)
+	}
+}
