@@ -342,3 +342,78 @@ func waitForArchiveRunStatus(t *testing.T, service *Service, runID, want string)
 	t.Fatalf("archive status = %#v error = %v, want %s", status, err, want)
 	return ArchiveStatus{}
 }
+
+func TestArchiveJobDoesNotRetryUnrestorableEventHash(t *testing.T) {
+	service, st, _ := newArchiveTestService(t, 1, 1, archiveTestServiceEvents(1))
+	ctx := context.Background()
+	created, err := service.CreateArchive(ctx, 2_000)
+	if err != nil {
+		t.Fatalf("create archive: %v", err)
+	}
+	archived, err := service.ResumeArchiveAtStage(ctx, created.Run.ID, usagearchive.StatusArchiving)
+	if err != nil || archived.Run.Status != usagearchive.StatusArchived {
+		t.Fatalf("archive run: status=%#v err=%v", archived, err)
+	}
+
+	if _, err := st.UsageArchives.BeginVerification(ctx, created.Run.ID, time.Now().UnixMilli()); err != nil {
+		t.Fatalf("begin verification: %v", err)
+	}
+	failed, err := st.UsageArchives.RecordFailure(
+		ctx,
+		created.Run.ID,
+		usagearchive.StatusVerifying,
+		ErrArchiveUnrestorableEventHash,
+		time.Now().UnixMilli(),
+	)
+	if err != nil {
+		t.Fatalf("record failure: %v", err)
+	}
+	if failed.Status != usagearchive.StatusFailed || failed.ResumeStatus != usagearchive.StatusVerifying {
+		t.Fatalf("failed run state = %#v", failed)
+	}
+	if _, _, err := st.UsageArchives.RequestStage(
+		ctx,
+		created.Run.ID,
+		usagearchive.StatusVerifying,
+		time.Now().UnixMilli(),
+	); err != nil {
+		t.Fatalf("request verifying stage: %v", err)
+	}
+
+	key := archiveJobKey{
+		runID: created.Run.ID,
+		stage: usagearchive.StatusVerifying,
+	}
+	service.archiveJobs.mu.Lock()
+	service.archiveJobs.retryOnError[key] = true
+	service.archiveJobs.mu.Unlock()
+
+	// 1. Permanent error ErrArchiveUnrestorableEventHash must NOT be retried
+	if service.archiveJobs.shouldRetry(key, ErrArchiveUnrestorableEventHash) {
+		t.Fatal("shouldRetry = true for ErrArchiveUnrestorableEventHash, want false")
+	}
+
+	// 2. Ordinary transient ErrArchiveCoverageIncomplete must still be retried
+	if !service.archiveJobs.shouldRetry(key, ErrArchiveCoverageIncomplete) {
+		t.Fatal("shouldRetry = false for ErrArchiveCoverageIncomplete, want true")
+	}
+
+	// 3. Verify requested stage can be cleared and the runner will not claim it again
+	if err := st.UsageArchives.ClearRequestedStage(ctx, created.Run.ID, usagearchive.StatusVerifying); err != nil {
+		t.Fatalf("clear requested stage: %v", err)
+	}
+	persisted, err := st.UsageArchives.Run(ctx, created.Run.ID)
+	if err != nil {
+		t.Fatalf("load run: %v", err)
+	}
+	if persisted.Status != usagearchive.StatusFailed || persisted.ResumeStatus != usagearchive.StatusVerifying || persisted.RequestedStage != "" {
+		t.Fatalf("run state after permanent error request clear = %#v", persisted)
+	}
+	nextRun, _, found, err := service.archiveJobs.claimNext(ctx)
+	if err != nil {
+		t.Fatalf("claim next run: %v", err)
+	}
+	if found {
+		t.Fatalf("expected no run to be claimed after request cleared, claimed %#v", nextRun)
+	}
+}

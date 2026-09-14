@@ -72,7 +72,7 @@ const formatArchiveActionError = (
   if (code === 'usage_archive_cancel_published') {
     return t('usage_maintenance.cancel_published', {
       defaultValue:
-        'This task has already published archive segments and cannot be abandoned safely. Continue the archive stage first.',
+        'This published archive cannot be abandoned in its current state. Continue the existing archive workflow or leave the archive in place.',
     });
   }
   return error instanceof Error ? error.message : String(error);

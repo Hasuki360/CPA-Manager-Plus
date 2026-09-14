@@ -714,9 +714,8 @@ func (s *Service) CancelArchive(ctx context.Context, runID string) (ArchiveStatu
 		return ArchiveStatus{}, err
 	}
 	if s.archiveJobs != nil {
-		// CancelRun clears the durable request before cleanup. Wake any callers
-		// waiting on a queued stage immediately, even if temporary-file cleanup
-		// later needs a retry.
+		// CancelRun clears the durable requested stage. Wake any callers
+		// still waiting on the queued stage after the cancellation commits.
 		s.archiveJobs.discardRun(run.ID)
 	}
 	segments, err := manager.store.UsageArchives.Segments(ctx, run.ID)
