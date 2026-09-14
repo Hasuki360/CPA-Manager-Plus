@@ -633,6 +633,63 @@ func TestRepositoryCancelFailsWhenRawEventIsMissing(t *testing.T) {
 	}
 }
 
+func TestRepositoryCancelRunRejectsArchivedCountMismatchWithRefs(t *testing.T) {
+	db := openArchiveTestDB(t)
+	ctx := context.Background()
+	events := archiveTestEvents()[:1]
+	if _, err := usageevent.New(db).InsertBatch(ctx, events); err != nil {
+		t.Fatalf("insert usage events: %v", err)
+	}
+	repository := New(db)
+	run, err := repository.CreateRun(ctx, "cancel-count-mismatch", 2_000, 30_650)
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	run, err = repository.BeginArchive(ctx, run.ID, 30_651)
+	if err != nil {
+		t.Fatalf("begin archive: %v", err)
+	}
+	records, err := repository.Records(ctx, run.ID, 0, 10, 1<<20)
+	if err != nil {
+		t.Fatalf("read archive records: %v", err)
+	}
+	if _, err := repository.RecordSegment(ctx, run.ID, archiveTestSegment(run.ID, records), archiveRecordRefs(records), 30_652); err != nil {
+		t.Fatalf("record published segment: %v", err)
+	}
+	if _, err := repository.MarkArchived(ctx, run.ID, "test-digest", "manifest.json", "test-manifest-sha", 30_653); err != nil {
+		t.Fatalf("mark archived: %v", err)
+	}
+	if _, err := repository.BeginVerification(ctx, run.ID, 30_654); err != nil {
+		t.Fatalf("begin verification: %v", err)
+	}
+	if _, err := repository.RecordFailure(ctx, run.ID, StatusVerifying, errors.New("simulated verify failure"), 30_655); err != nil {
+		t.Fatalf("record failure: %v", err)
+	}
+
+	// Corrupt run metadata: archived_event_count is set to 0 while 1 ref exists in usage_archive_event_refs
+	archiveTestExec(t, db, `update usage_archive_runs set archived_event_count = 0 where id = ?`, run.ID)
+
+	// CancelRun must fail closed with ErrCoverageIncomplete
+	if _, err := repository.CancelRun(ctx, run.ID, 30_656); !errors.Is(err, ErrCoverageIncomplete) {
+		t.Fatalf("cancel run with count mismatch error = %v, want ErrCoverageIncomplete", err)
+	}
+
+	// Status must remain failed/verifying
+	runAfter, err := repository.Run(ctx, run.ID)
+	if err != nil || runAfter.Status != StatusFailed || runAfter.ResumeStatus != StatusVerifying {
+		t.Fatalf("run after failed cancel = %#v, err = %v", runAfter, err)
+	}
+
+	// Ref must not be deleted
+	var refCount int
+	if err := db.QueryRowContext(ctx, `select count(*) from usage_archive_event_refs where run_id = ?`, run.ID).Scan(&refCount); err != nil {
+		t.Fatalf("count refs after rejected cancel: %v", err)
+	}
+	if refCount != 1 {
+		t.Fatalf("ref count after rejected cancel = %d, want 1", refCount)
+	}
+}
+
 func TestRepositoryCancelRejectsFailedDeletingRun(t *testing.T) {
 	db := openArchiveTestDB(t)
 	ctx := context.Background()

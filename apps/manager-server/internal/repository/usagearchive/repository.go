@@ -656,10 +656,7 @@ func (r *Repository) CancelRun(ctx context.Context, runID string, nowMS int64) (
 	}
 	failedPreDelete := run.Status == StatusFailed &&
 		(run.ResumeStatus == StatusArchiving || run.ResumeStatus == StatusVerifying)
-	if run.ArchivedEventCount > 0 {
-		if !failedPreDelete {
-			return Run{}, ErrCancelPublished
-		}
+	if failedPreDelete {
 		var refCount, deletedRefCount, missingRawCount int64
 		if err := tx.QueryRowContext(ctx, `select
 			count(*),
@@ -681,17 +678,21 @@ func (r *Repository) CancelRun(ctx context.Context, runID string, nowMS int64) (
 		if refCount != run.ArchivedEventCount {
 			return Run{}, fmt.Errorf("%w: cannot abandon archive run because ref count (%d) does not match archived event count (%d)", ErrCoverageIncomplete, refCount, run.ArchivedEventCount)
 		}
-		res, err := tx.ExecContext(ctx, `delete from usage_archive_event_refs where run_id = ?`, runID)
-		if err != nil {
-			return Run{}, err
+		if refCount > 0 {
+			res, err := tx.ExecContext(ctx, `delete from usage_archive_event_refs where run_id = ?`, runID)
+			if err != nil {
+				return Run{}, err
+			}
+			rowsAffected, err := res.RowsAffected()
+			if err != nil {
+				return Run{}, err
+			}
+			if rowsAffected != refCount {
+				return Run{}, fmt.Errorf("%w: expected to delete %d archive refs, got %d", ErrCoverageIncomplete, refCount, rowsAffected)
+			}
 		}
-		rowsAffected, err := res.RowsAffected()
-		if err != nil {
-			return Run{}, err
-		}
-		if rowsAffected != refCount {
-			return Run{}, fmt.Errorf("%w: expected to delete %d archive refs, got %d", ErrCoverageIncomplete, refCount, rowsAffected)
-		}
+	} else if run.ArchivedEventCount > 0 {
+		return Run{}, ErrCancelPublished
 	}
 	if run.Status == StatusCompleted {
 		return Run{}, fmt.Errorf("%w: cannot cancel completed run", ErrInvalidState)

@@ -1349,7 +1349,8 @@ func (m *archiveManager) inspectSegment(segment store.UsageArchiveSegment, overa
 		}
 		if requireRestorableEventHash && !usageparser.IsCanonicalSHA256Hex(restored.EventHash) {
 			return archiveFileInspection{}, fmt.Errorf(
-				"usage archive segment %d record %d contains an event hash that cannot be restored under the current persistence policy",
+				"%w: usage archive segment %d record %d contains an event hash that cannot be restored under the current persistence policy",
+				usagearchive.ErrUnrestorableEventHash,
 				segment.Sequence,
 				inspection.EventCount+1,
 			)

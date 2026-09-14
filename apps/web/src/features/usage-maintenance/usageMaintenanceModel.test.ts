@@ -112,7 +112,7 @@ describe('usage maintenance model', () => {
       })
     ).toBe(true);
     expect(isArchiveRunCancellable({ ...base, status: 'failed' })).toBe(true);
-    expect(isArchiveRunCancellable({ ...base, status: 'failed', archived_event_count: 1 })).toBe(true);
+    expect(isArchiveRunCancellable({ ...base, status: 'failed', archived_event_count: 1 })).toBe(false);
 
     expect(isArchiveRunCancellable({ ...base, status: 'previewed', archived_event_count: 1 })).toBe(false);
     expect(isArchiveRunCancellable({ ...base, status: 'archived', archived_event_count: 5 })).toBe(false);

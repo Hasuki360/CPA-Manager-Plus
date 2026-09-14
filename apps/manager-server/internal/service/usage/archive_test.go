@@ -2264,6 +2264,12 @@ func TestUsageArchiveInspectionRequireRestorableEventHash(t *testing.T) {
 	if err == nil {
 		t.Fatal("inspectSegment with requireRestorableEventHash=true succeeded, want error")
 	}
+	if !errors.Is(err, usagearchive.ErrUnrestorableEventHash) {
+		t.Fatalf("inspectSegment error = %v, want ErrUnrestorableEventHash", err)
+	}
+	if !errors.Is(err, usagearchive.ErrCoverageIncomplete) {
+		t.Fatalf("inspectSegment error = %v, want ErrCoverageIncomplete", err)
+	}
 	if !strings.Contains(err.Error(), "cannot be restored under the current persistence policy") {
 		t.Fatalf("inspectSegment error = %v, want policy error", err)
 	}
