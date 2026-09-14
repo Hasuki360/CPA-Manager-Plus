@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"sort"
 	"time"
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/model"
@@ -340,7 +341,8 @@ func (r *repository) UpsertSynced(ctx context.Context, prices map[string]model.M
 		source_model_id = excluded.source_model_id,
 		raw_json = excluded.raw_json,
 		updated_at_ms = excluded.updated_at_ms,
-		synced_at_ms = excluded.synced_at_ms`)
+		synced_at_ms = excluded.synced_at_ms
+	where lower(trim(coalesce(model_prices.source, ''))) <> 'manual'`)
 	if err != nil {
 		return model.ModelPriceSyncResult{}, err
 	}
@@ -391,7 +393,7 @@ func (r *repository) UpsertSynced(ctx context.Context, prices map[string]model.M
 		}
 		price.UpdatedAtMS = now
 		price.SyncedAtMS = &now
-		if _, err := stmt.ExecContext(
+		execResult, err := stmt.ExecContext(
 			ctx,
 			modelID,
 			price.Prompt,
@@ -408,8 +410,17 @@ func (r *repository) UpsertSynced(ctx context.Context, prices map[string]model.M
 			nullString(price.RawJSON),
 			now,
 			now,
-		); err != nil {
+		)
+		if err != nil {
 			return model.ModelPriceSyncResult{}, err
+		}
+		rowsAffected, err := execResult.RowsAffected()
+		if err != nil {
+			return model.ModelPriceSyncResult{}, err
+		}
+		if rowsAffected == 0 {
+			result.Preserved = append(result.Preserved, modelID)
+			continue
 		}
 		if _, err := deleteTierStmt.ExecContext(ctx, modelID); err != nil {
 			return model.ModelPriceSyncResult{}, err
@@ -440,6 +451,7 @@ func (r *repository) UpsertSynced(ctx context.Context, prices map[string]model.M
 			return model.ModelPriceSyncResult{}, ErrStructureChangeAfterRawDeletion
 		}
 	}
+	sort.Strings(result.Preserved)
 	if err := tx.Commit(); err != nil {
 		return model.ModelPriceSyncResult{}, err
 	}

@@ -19,6 +19,7 @@ import {
   getDemoQuotaStoreState,
   getDemoRawConfig,
   resetDemoCredentialRefresh,
+  resetDemoEvidenceEpoch,
   resetDemoUsageArchiveState,
 } from '@/features/demo/demoFixtures';
 import {
@@ -169,6 +170,7 @@ export function DemoPage() {
     const restoreDemoPersistIsolation = enableDemoPersistIsolation();
     const restoreDemoInspectionState = installDemoInspectionState();
 
+    resetDemoEvidenceEpoch();
     resetDemoCredentialRefresh();
     resetDemoUsageArchiveState();
     resetDemoAuthFileConfiguration();
@@ -219,6 +221,7 @@ export function DemoPage() {
     }));
 
     return () => {
+      resetDemoEvidenceEpoch();
       resetDemoCredentialRefresh();
       resetDemoUsageArchiveState();
       resetDemoAuthFileConfiguration();

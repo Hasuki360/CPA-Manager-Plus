@@ -529,6 +529,46 @@ const quotaFromUsedWindows = (
 const codexMainQuotaWindows = (quota: CodexQuotaState) =>
   quota.windows.filter(isCodexMainQuotaWindow);
 
+const normalizeXaiPlanType = (planType?: string | null): string =>
+  planType ? planType.trim().toLowerCase().replace(/[\s\-_]+/g, '') : '';
+
+export const isExplicitFreeXaiPlan = (planType?: string | null): boolean => {
+  const normalized = normalizeXaiPlanType(planType);
+  if (!normalized) return false;
+  return (
+    normalized === 'free' ||
+    normalized === 'freetier' ||
+    normalized === 'xaifree' ||
+    normalized === 'xaifreetier'
+  );
+};
+
+export const isConfirmedPaidXaiPlan = (planType?: string | null): boolean => {
+  const normalized = normalizeXaiPlanType(planType);
+  if (!normalized) return false;
+  if (isExplicitFreeXaiPlan(planType)) return false;
+
+  return (
+    normalized.startsWith('supergrok') ||
+    normalized.startsWith('xpremium') ||
+    normalized === 'premium' ||
+    normalized.startsWith('premium+') ||
+    normalized.startsWith('premiumplus')
+  );
+};
+
+// Billing and account entitlement requires a confirmed paid plan.
+// AccountQuotaSummary fails closed for unconfirmed/unknown plans to avoid
+// driving account-level operational health or disable recommendations from partial data.
+export const hasConfirmedXaiBillingEntitlement = (
+  billing: XaiBillingSummary | null | undefined,
+  planType?: string | null
+): boolean => {
+  if (!billing) return false;
+  if (isExplicitFreeXaiPlan(planType)) return false;
+  return isConfirmedPaidXaiPlan(planType);
+};
+
 const quotaFromXaiBilling = (
   billing: XaiBillingSummary | null | undefined,
   planType: string | null,
@@ -537,7 +577,7 @@ const quotaFromXaiBilling = (
   if (!billing) {
     return quotaFromRemainingWindows([{ remainingPercent: null }], planType, options);
   }
-  if (billing.officialApiHealth) {
+  if (billing.officialApiHealth || !hasConfirmedXaiBillingEntitlement(billing, planType)) {
     return quotaFromRemainingWindows([{ remainingPercent: null }], planType, options);
   }
 
