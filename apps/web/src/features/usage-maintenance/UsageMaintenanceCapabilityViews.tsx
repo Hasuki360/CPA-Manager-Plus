@@ -62,7 +62,7 @@ function PageHeader({
   return (
     <header className={styles.pageHeader}>
       <div>
-        <h1>{title}</h1>
+        <h2>{title}</h2>
         <p>{subtitle}</p>
       </div>
       <div className={styles.headerActions}>
@@ -71,7 +71,7 @@ function PageHeader({
           ↻ {t('common.refresh', { defaultValue: 'Refresh' })}
         </Button>
         <Button variant="secondary" size="sm" onClick={onBack}>
-          ← {t('common.back', { defaultValue: 'Back' })}
+          {t('common.close', { defaultValue: 'Close' })}
         </Button>
       </div>
     </header>
@@ -119,11 +119,6 @@ export function UsageMaintenanceAdvancedView({
   const { t } = useTranslation();
   const storage = maintenance.storage;
   const capabilityRows = [
-    {
-      label: t('usage_maintenance.advanced_route', { defaultValue: 'Maintenance route' }),
-      value: '204',
-      tone: 'success',
-    },
     {
       label: t('usage_maintenance.advanced_service', { defaultValue: 'Manager service' }),
       value: t('usage_maintenance.advanced_available', { defaultValue: 'Available' }),
@@ -253,21 +248,9 @@ export function UsageMaintenanceAdvancedView({
             <p className={styles.bodyText}>
               {t('usage_maintenance.advanced_retention_note', {
                 defaultValue:
-                  'Automatic retention is controlled by the Manager Server environment or config. The public maintenance API does not expose its complete configuration, next-run time, or a write control, so this page does not invent an editable switch.',
+                  'Automatic retention is managed in the Manager Server configuration. Restart the server after changing it. The range in Organize data applies to a single manual operation.',
               })}
             </p>
-            <div className={styles.unavailableBox}>
-              <StatusPill tone="neutral">
-                {t('usage_maintenance.advanced_not_exposed', {
-                  defaultValue: 'Not exposed by API',
-                })}
-              </StatusPill>
-              <span>
-                {t('usage_maintenance.advanced_retention_boundary', {
-                  defaultValue: 'Read-only capability boundary',
-                })}
-              </span>
-            </div>
           </section>
         </div>
 
@@ -587,8 +570,7 @@ export function UsageMaintenanceDiagnosticsView({
               </div>
               <div className={styles.line}>
                 <span>
-                  404 /{' '}
-                  {t('usage_maintenance.diagnostics_legacy', { defaultValue: 'legacy' })}
+                  404 / {t('usage_maintenance.diagnostics_legacy', { defaultValue: 'legacy' })}
                 </span>
                 <span>
                   {t('usage_maintenance.diagnostics_404', {

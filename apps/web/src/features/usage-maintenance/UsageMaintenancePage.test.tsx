@@ -1,4 +1,4 @@
-import { act, type ReactNode } from 'react';
+import { act, StrictMode, type ReactNode } from 'react';
 import { create, type ReactTestInstance, type ReactTestRenderer } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
@@ -7,6 +7,7 @@ import type {
   UsageArchiveRunSummary,
   UsageMaintenanceStatus,
 } from '@/services/api/usageService';
+import en from '@/i18n/locales/en.json';
 import { UsageMaintenancePage } from './UsageMaintenancePage';
 import { COMPACT_USAGE_COMMAND } from './UsageMaintenanceCapabilityViews';
 
@@ -21,6 +22,7 @@ const { mocks } = vi.hoisted(() => {
         managerServiceBase: 'http://manager-a.local:18317',
       },
       managementKey: 'management-key-a',
+      navigate: vi.fn(),
       showNotification: vi.fn(),
       showConfirmation: vi.fn(),
       probeUsageMaintenance: vi.fn(),
@@ -62,6 +64,28 @@ vi.mock('react-i18next', () => ({
     i18n: { language: 'en' },
     t: mocks.t,
   }),
+}));
+
+vi.mock('react-router-dom', () => ({ useNavigate: () => mocks.navigate }));
+vi.mock('@/components/ui/Drawer', () => ({
+  Drawer: ({
+    open,
+    title,
+    children,
+    onClose,
+  }: {
+    open: boolean;
+    title: ReactNode;
+    children: ReactNode;
+    onClose: () => void;
+  }) =>
+    open ? (
+      <div data-testid="maintenance-drawer">
+        <strong>{title}</strong>
+        {children}
+        <button onClick={onClose}>Close drawer</button>
+      </div>
+    ) : null,
 }));
 
 vi.mock('@/hooks/usePanelFeatureAvailability', () => ({
@@ -196,6 +220,7 @@ const renderOverviewPage = async (status = maintenance(), runs: UsageArchiveRunS
   let renderer!: ReactTestRenderer;
   await act(async () => {
     renderer = create(<UsageMaintenancePage />);
+    renderers.add(renderer);
   });
   await act(async () => {
     await Promise.resolve();
@@ -222,7 +247,7 @@ const renderResolvedPage = async (status = maintenance(), runs: UsageArchiveRunS
 const renderHistoryPage = async (status = maintenance(), runs: UsageArchiveRunSummary[] = []) => {
   const renderer = await renderOverviewPage(status, runs);
   await act(async () => {
-    findButtons(renderer, 'View all')[0].props.onClick();
+    findButtons(renderer, 'Processing records')[0].props.onClick();
     await Promise.resolve();
     await Promise.resolve();
     await Promise.resolve();
@@ -230,9 +255,25 @@ const renderHistoryPage = async (status = maintenance(), runs: UsageArchiveRunSu
   return renderer;
 };
 
+const translate = mocks.t.getMockImplementation()!;
+const renderers = new Set<ReactTestRenderer>();
+
 beforeEach(() => {
   vi.useRealTimers();
-  vi.clearAllMocks();
+  vi.resetAllMocks();
+  mocks.t.mockImplementation((key, options) => {
+    const localized = key
+      .split('.')
+      .reduce<unknown>(
+        (value, part) =>
+          value && typeof value === 'object' ? (value as Record<string, unknown>)[part] : undefined,
+        en
+      );
+    return translate(key, {
+      ...(typeof localized === 'string' ? { defaultValue: localized } : {}),
+      ...options,
+    });
+  });
   mocks.availability.checking = false;
   mocks.availability.managerServiceBase = 'http://manager-a.local:18317';
   mocks.managementKey = 'management-key-a';
@@ -266,6 +307,10 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  act(() => {
+    for (const renderer of renderers) renderer.unmount();
+  });
+  renderers.clear();
   vi.useRealTimers();
   vi.unstubAllGlobals();
 });
@@ -282,14 +327,14 @@ describe('UsageMaintenancePage', () => {
     );
 
     const text = getText(renderer.root);
-    expect(text).toContain('Usage maintenance overview');
+    expect(text).toContain('Organize data');
     expect(text).toContain('1,284,562');
     expect(text).toContain('342,118');
     expect(text).toContain('2,845,700');
-    expect(text).toContain('recent-run');
+    expect(text).toContain('Including 342,118 already archived');
     expect(text).not.toContain('78%');
-    expect(findButtons(renderer, 'Create archive task')).toHaveLength(1);
-    expect(mocks.previewUsageArchive).not.toHaveBeenCalled();
+    expect(findButtons(renderer, 'Archive and verify')).toHaveLength(1);
+    expect(mocks.previewUsageArchive).toHaveBeenCalledTimes(1);
     act(() => renderer.unmount());
   });
 
@@ -305,7 +350,7 @@ describe('UsageMaintenancePage', () => {
     expect(text).toContain('Advanced maintenance / offline compact');
     expect(text).toContain('usage.sqlite-wal');
     expect(text).toContain('the browser never executes it.');
-    expect(text).toContain('Not exposed by API');
+    expect(text).not.toContain('Maintenance route204');
 
     vi.stubGlobal('navigator', {
       clipboard: { writeText: vi.fn().mockRejectedValue(new Error('clipboard denied')) },
@@ -395,13 +440,13 @@ describe('UsageMaintenancePage', () => {
     const renderer = await renderResolvedPage();
     const text = getText(renderer.root);
 
-    expect(text).toContain('Create archive task');
-    expect(text).toContain('Retention policy');
+    expect(text).toContain('What would you like to do?');
+    expect(text).toContain('Choose the data range');
     expect(text).toContain('Current online range');
     expect(text).toContain('Impact preview');
     expect(text).toContain('Estimated source size');
-    expect(text).toContain('Source-row estimate, not compressed archive size');
-    expect(text).toContain('Execution readiness');
+    expect(text).toContain('Source-row estimate, not archive size or disk space');
+    expect(text).toContain('This range applies to this operation only');
     expect(text).not.toContain('Archive history');
     expect(text).not.toContain('Advanced: reclaim physical SQLite space');
     expect(findButtons(renderer, 'Archive and verify')).toHaveLength(1);
@@ -425,11 +470,11 @@ describe('UsageMaintenancePage', () => {
     mocks.listUsageArchives.mockResolvedValueOnce(firstPage).mockResolvedValueOnce(secondPage);
 
     await act(async () => {
-      findButtons(renderer, 'View all')[0].props.onClick();
+      findButtons(renderer, 'Processing records')[0].props.onClick();
       await Promise.resolve();
       await Promise.resolve();
     });
-    expect(getText(renderer.root)).toContain('history-run-1');
+    expect(renderer.root.findAllByProps({ 'data-run-id': 'history-run-1' })).toHaveLength(1);
     expect(mocks.listUsageArchives).toHaveBeenLastCalledWith(
       'http://manager-a.local:18317',
       'management-key-a',
@@ -448,7 +493,7 @@ describe('UsageMaintenancePage', () => {
       { status: undefined, limit: 20, cursor: 'cursor-2' },
       expect.any(AbortSignal)
     );
-    expect(getText(renderer.root)).toContain('history-run-2');
+    expect(renderer.root.findAllByProps({ 'data-run-id': 'history-run-2' })).toHaveLength(1);
     act(() => renderer.unmount());
   });
 
@@ -554,7 +599,7 @@ describe('UsageMaintenancePage', () => {
         },
       ],
     });
-    const renderer = await renderOverviewPage(maintenance(), [run]);
+    const renderer = await renderHistoryPage(maintenance(), [run]);
 
     await act(async () => {
       findButtons(renderer, 'Details')[0].props.onClick();
@@ -568,10 +613,33 @@ describe('UsageMaintenancePage', () => {
       'management-key-a',
       expect.any(AbortSignal)
     );
-    expect(getText(renderer.root)).toContain('Archive task details');
+    expect(getText(renderer.root)).toContain('Operation details');
     expect(getText(renderer.root)).toContain('Segment summary');
     expect(getText(renderer.root)).toContain('verified');
     act(() => renderer.unmount());
+  });
+
+  it('keeps the same record visible when reopening its drawer and refreshes its details', async () => {
+    const run = archive('completed', 'reopened-record');
+    mocks.getUsageArchive.mockResolvedValueOnce(archiveStatus(run));
+    const renderer = await renderHistoryPage(maintenance(), [run]);
+
+    await act(async () => findButtons(renderer, 'Details')[0].props.onClick());
+    act(() => findButtons(renderer, 'Close drawer')[0].props.onClick());
+
+    const refreshed = deferred<ReturnType<typeof archiveStatus>>();
+    mocks.getUsageArchive.mockReturnValueOnce(refreshed.promise);
+    await act(async () => findButtons(renderer, 'Details')[0].props.onClick());
+
+    const drawer = renderer.root.findByProps({ 'data-testid': 'maintenance-drawer' });
+    expect(getText(drawer)).toContain(run.id);
+    expect(getText(drawer)).not.toContain('invalid archive task response');
+    expect(mocks.getUsageArchive).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      refreshed.resolve(archiveStatus({ ...run, archived_compressed_bytes: 512 }));
+    });
+    expect(getText(drawer)).toContain('512.00 B');
   });
 
   it('refreshes active task details with maintenance polling', async () => {
@@ -581,7 +649,7 @@ describe('UsageMaintenancePage', () => {
     const renderer = await renderOverviewPage(maintenance({ active_run: activeRun }), [activeRun]);
 
     await act(async () => {
-      findButtons(renderer, 'Details')[0].props.onClick();
+      findButtons(renderer, 'Continue this record')[0].props.onClick();
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -606,7 +674,7 @@ describe('UsageMaintenancePage', () => {
     const renderer = await renderOverviewPage(maintenance({ active_run: activeRun }), [activeRun]);
 
     await act(async () => {
-      findButtons(renderer, 'Details')[0].props.onClick();
+      findButtons(renderer, 'Continue this record')[0].props.onClick();
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -635,7 +703,7 @@ describe('UsageMaintenancePage', () => {
     const defaultCutoff = mocks.previewUsageArchive.mock.calls[0][1] as number;
 
     await act(async () => {
-      findButtons(renderer, 'Keep 7 days')[0].props.onClick();
+      findButtons(renderer, 'Older than 7 days')[0].props.onClick();
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -677,7 +745,9 @@ describe('UsageMaintenancePage', () => {
       mocks.verifyUsageArchive.mock.invocationCallOrder[0]
     );
     expect(mocks.deleteUsageArchive).not.toHaveBeenCalled();
-    expect(getText(renderer.root)).toContain('Archive verified');
+    expect(getText(renderer.root)).toContain(
+      'Archive complete. Online details are still available.'
+    );
     act(() => renderer.unmount());
   });
 
@@ -705,8 +775,7 @@ describe('UsageMaintenancePage', () => {
     expect(mocks.deleteUsageArchive).not.toHaveBeenCalled();
     expect(mocks.showNotification).toHaveBeenCalledWith('archive write failed', 'error');
     expect(getText(renderer.root)).toContain('Needs attention');
-    act(() => findButtons(renderer, 'common.back')[0].props.onClick());
-    expect(getText(renderer.root)).toContain('resume-failed-run');
+    expect(renderer.root.findAllByProps({ 'data-run-id': 'resume-failed-run' })).toHaveLength(1);
     act(() => renderer.unmount());
   });
 
@@ -753,8 +822,7 @@ describe('UsageMaintenancePage', () => {
     expect(mocks.deleteUsageArchive).not.toHaveBeenCalled();
     expect(mocks.showNotification).toHaveBeenCalledWith('archive verification failed', 'error');
     expect(getText(renderer.root)).toContain('Needs attention');
-    act(() => findButtons(renderer, 'common.back')[0].props.onClick());
-    expect(getText(renderer.root)).toContain('verify-failed-run');
+    expect(renderer.root.findAllByProps({ 'data-run-id': 'verify-failed-run' })).toHaveLength(1);
     act(() => renderer.unmount());
   });
 
@@ -897,8 +965,8 @@ describe('UsageMaintenancePage', () => {
       })
     );
 
-    expect(getText(renderer.root)).toContain('No events match this retention policy');
-    const sevenDayButtons = findButtons(renderer, 'Keep 7 days');
+    expect(getText(renderer.root)).toContain('No new events to archive in this range');
+    const sevenDayButtons = findButtons(renderer, 'Older than 7 days');
     expect(sevenDayButtons).toHaveLength(2);
     await act(async () => {
       sevenDayButtons[1].props.onClick();
@@ -928,8 +996,8 @@ describe('UsageMaintenancePage', () => {
       })
     );
 
-    expect(getText(renderer.root)).toContain('already protected by an archive');
-    expect(findButtons(renderer, 'Keep 7 days')).toHaveLength(1);
+    expect(getText(renderer.root)).toContain('already archived');
+    expect(findButtons(renderer, 'Older than 7 days')).toHaveLength(1);
     act(() => renderer.unmount());
   });
 
@@ -996,8 +1064,9 @@ describe('UsageMaintenancePage', () => {
 
     expect(mocks.showNotification).toHaveBeenCalledWith('create response lost', 'error');
     expect(mocks.getUsageMaintenance).toHaveBeenCalledTimes(2);
-    act(() => findButtons(renderer, 'common.back')[0].props.onClick());
-    expect(getText(renderer.root)).toContain('persisted-after-timeout');
+    expect(renderer.root.findAllByProps({ 'data-run-id': 'persisted-after-timeout' })).toHaveLength(
+      1
+    );
 
     await act(async () => {
       vi.advanceTimersByTime(5_000);
@@ -1013,6 +1082,7 @@ describe('UsageMaintenancePage', () => {
     let renderer!: ReactTestRenderer;
     await act(async () => {
       renderer = create(<UsageMaintenancePage />);
+      renderers.add(renderer);
     });
     expect(getText(renderer.root)).toContain('older than the usage maintenance API');
     expect(getText(renderer.root)).not.toContain('full-screen-loading');
@@ -1038,6 +1108,7 @@ describe('UsageMaintenancePage', () => {
     let renderer!: ReactTestRenderer;
     await act(async () => {
       renderer = create(<UsageMaintenancePage />);
+      renderers.add(renderer);
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -1060,6 +1131,7 @@ describe('UsageMaintenancePage', () => {
     let renderer!: ReactTestRenderer;
     await act(async () => {
       renderer = create(<UsageMaintenancePage />);
+      renderers.add(renderer);
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -1075,6 +1147,7 @@ describe('UsageMaintenancePage', () => {
     let renderer!: ReactTestRenderer;
     await act(async () => {
       renderer = create(<UsageMaintenancePage />);
+      renderers.add(renderer);
     });
     expect(getText(renderer.root)).toContain('older than the usage maintenance API');
     expect(getText(renderer.root)).not.toContain('full-screen-loading');
@@ -1090,6 +1163,7 @@ describe('UsageMaintenancePage', () => {
     let renderer!: ReactTestRenderer;
     await act(async () => {
       renderer = create(<UsageMaintenancePage />);
+      renderers.add(renderer);
     });
     expect(getText(renderer.root)).toContain('older than the usage maintenance API');
     expect(getText(renderer.root)).not.toContain('full-screen-loading');
@@ -1108,6 +1182,7 @@ describe('UsageMaintenancePage', () => {
     let renderer!: ReactTestRenderer;
     await act(async () => {
       renderer = create(<UsageMaintenancePage />);
+      renderers.add(renderer);
     });
     expect(getText(renderer.root)).toContain('older than the usage maintenance API');
     expect(getText(renderer.root)).not.toContain('full-screen-loading');
@@ -1140,24 +1215,28 @@ describe('UsageMaintenancePage', () => {
     act(() => renderer.unmount());
   });
 
-  it('translates known statuses and modes while preserving unknown server values', async () => {
-    const renderer = await renderHistoryPage(maintenance(), [
-      archive('verified', 'known-run'),
-      { ...archive('verified', 'retention-run'), mode: 'retention' },
-      { ...archive('future-state', 'unknown-run'), mode: 'future-mode' },
-    ]);
-    const text = getText(renderer.root);
-    expect(text).toContain('translated:usage_maintenance.run_status_verified');
-    expect(text).toContain('translated:usage_maintenance.run_mode_manual');
-    expect(text).toContain('future-state');
-    expect(text).toContain('future-mode');
-    expect(mocks.t).not.toHaveBeenCalledWith(
-      'usage_maintenance.run_status_future-state',
-      expect.anything()
-    );
-    act(() => renderer.unmount());
+  it('translates known statuses and exposes unknown server values in record details', async () => {
+    const known = archive('verified', 'known-mode-run');
+    const unknown = {
+      ...archive('completed', 'unknown-mode-run'),
+      status: 'custom-state',
+      mode: 'custom-mode',
+    };
+    const renderer = await renderHistoryPage(maintenance(), [known, unknown]);
+    expect(getText(renderer.root)).toContain('translated:usage_maintenance.run_status_verified');
+    expect(getText(renderer.root)).toContain('custom-state');
+    mocks.getUsageArchive.mockResolvedValueOnce(archiveStatus(known));
+    await act(async () => {
+      findButtons(renderer, 'Details')[0].props.onClick();
+    });
+    expect(getText(renderer.root)).toContain('translated:usage_maintenance.run_mode_manual');
+    act(() => findButtons(renderer, 'Close drawer')[0].props.onClick());
+    mocks.getUsageArchive.mockResolvedValueOnce(archiveStatus(unknown));
+    await act(async () => {
+      findButtons(renderer, 'Details')[1].props.onClick();
+    });
+    expect(getText(renderer.root)).toContain('custom-mode');
   });
-
   it('identifies the run, event count, and cutoff in destructive confirmation', async () => {
     const run = {
       ...archive('verified', 'delete-target-run'),
@@ -1291,11 +1370,7 @@ describe('UsageMaintenancePage', () => {
 
     mocks.listUsageArchives.mockResolvedValue({ runs: [failedRun] });
     await act(async () => {
-      findButtons(renderer, 'common.back')[0].props.onClick();
-      await Promise.resolve();
-    });
-    await act(async () => {
-      findButtons(renderer, 'View all')[0].props.onClick();
+      findButtons(renderer, 'Processing records')[0].props.onClick();
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -1310,7 +1385,7 @@ describe('UsageMaintenancePage', () => {
 
     expect(getText(renderer.root)).not.toContain('Needs attention');
     await act(async () => {
-      findButtons(renderer, 'Create archive')[0].props.onClick();
+      findButtons(renderer, 'New operation')[0].props.onClick();
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -1333,8 +1408,7 @@ describe('UsageMaintenancePage', () => {
       await Promise.resolve();
     });
 
-    expect(initialPreviewCalls).toBe(0);
-    expect(mocks.previewUsageArchive).not.toHaveBeenCalled();
+    expect(mocks.previewUsageArchive).toHaveBeenCalledTimes(initialPreviewCalls);
     act(() => renderer.unmount());
   });
 
@@ -1351,9 +1425,7 @@ describe('UsageMaintenancePage', () => {
     );
     const resumeButtons = findButtons(renderer, 'Continue deletion');
     expect(resumeButtons).toHaveLength(2);
-    expect(resumeButtons.every((button) => button.props.className.includes('dangerLink'))).toBe(
-      true
-    );
+    expect(resumeButtons.every((button) => button.props.className.includes('danger'))).toBe(true);
 
     act(() => resumeButtons[0].props.onClick());
     act(() => resumeButtons[1].props.onClick());
@@ -1418,6 +1490,7 @@ describe('UsageMaintenancePage', () => {
 
     act(() => renderer.unmount());
     const pendingRenderer = await renderResolvedPage(pending);
+    act(() => findButtons(pendingRenderer, 'Diagnostics')[0].props.onClick());
     expect(getText(pendingRenderer.root)).toContain(
       'translated:usage_maintenance.migration_status_applying'
     );
@@ -1433,6 +1506,7 @@ describe('UsageMaintenancePage', () => {
         hourly_aggregate: { ...maintenance().hourly_aggregate, status: 'clearing' },
       })
     );
+    act(() => findButtons(clearingRenderer, 'Diagnostics')[0].props.onClick());
     expect(getText(clearingRenderer.root)).toContain(
       'translated:usage_maintenance.migration_status_clearing'
     );
@@ -1484,6 +1558,7 @@ describe('UsageMaintenancePage', () => {
     let renderer!: ReactTestRenderer;
     await act(async () => {
       renderer = create(<UsageMaintenancePage />);
+      renderers.add(renderer);
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -1507,7 +1582,10 @@ describe('UsageMaintenancePage', () => {
       expect.any(AbortSignal)
     );
     expect(getText(renderer.root)).toContain('22');
-    expect(getText(renderer.root)).toContain('new-context-run');
+    await act(async () => {
+      findButtons(renderer, 'Processing records')[0].props.onClick();
+    });
+    expect(renderer.root.findAllByProps({ 'data-run-id': 'new-context-run' })).toHaveLength(1);
 
     await act(async () => {
       oldMaintenance.resolve(maintenance({ raw_event_count: 999 }));
@@ -1579,7 +1657,7 @@ describe('UsageMaintenancePage', () => {
       });
       await Promise.resolve();
     });
-    expect(findButtons(renderer, 'Archive and verify')).toHaveLength(0);
+    expect(findButtons(renderer, 'Archive and verify')[0].props.disabled).toBe(true);
     expect(mocks.showNotification).not.toHaveBeenCalled();
     act(() => renderer.unmount());
   });
@@ -1604,13 +1682,15 @@ describe('UsageMaintenancePage', () => {
       await Promise.resolve();
     });
     expect(oldSignal.aborted).toBe(true);
-    expect(getText(renderer.root)).toContain('new-context-run');
-    act(() => findButtons(renderer, 'Create archive task')[0].props.onClick());
+    expect(renderer.root.findAllByProps({ 'data-run-id': 'new-context-run' })).toHaveLength(1);
 
+    await act(async () => {
+      findButtons(renderer, 'New operation')[0].props.onClick();
+    });
     const newPreview = deferred<UsageArchivePreview>();
     mocks.previewUsageArchive.mockImplementationOnce(() => newPreview.promise);
     await act(async () => {
-      findButtons(renderer, 'Keep 7 days')[0].props.onClick();
+      findButtons(renderer, 'Older than 7 days')[0].props.onClick();
       await Promise.resolve();
     });
     const newSignal = mocks.previewUsageArchive.mock.calls[
@@ -1773,7 +1853,7 @@ describe('UsageMaintenancePage', () => {
     mocks.resumeUsageArchive.mockImplementationOnce(() => resumeFailure.promise);
     const failedRenderer = await renderOverviewPage(maintenance({ active_run: active }), [active]);
     await act(async () => {
-      findButtons(failedRenderer, 'Details')[0].props.onClick();
+      findButtons(failedRenderer, 'Continue this record')[0].props.onClick();
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -1882,14 +1962,12 @@ describe('UsageMaintenancePage', () => {
 
     // Overview should be active
     const text = getText(renderer.root);
-    expect(text).toContain('Usage maintenance overview');
-    expect(text).toContain('Raw data cleanup complete');
+    expect(text).toContain('Processing records');
+    expect(text).toContain('Online detail cleanup complete');
     // Notice uses the newly refreshed value (2.50 GB), not the old 4 KB
     expect(text).toContain('2.50 GB');
     expect(text).not.toContain('4 KB of space can be reclaimed');
-    expect(text).toContain('database file does not shrink immediately');
-    expect(text).toContain('continue reusing these free pages');
-    expect(findButtons(renderer, 'Copy compact command')).toHaveLength(1);
+    expect(text).toContain('SQLite file does not shrink immediately');
     expect(findButtons(renderer, 'View advanced maintenance')).toHaveLength(1);
     expect(findButtons(renderer, 'Close')).toHaveLength(1);
 
@@ -1936,9 +2014,9 @@ describe('UsageMaintenancePage', () => {
     });
 
     const text = getText(renderer.root);
-    expect(text).toContain('Raw data cleanup complete');
-    expect(text).toContain('No significant reclaimable SQLite free pages were detected');
-    expect(text).toContain('physical compaction is not immediately necessary');
+    expect(text).toContain('Online detail cleanup complete');
+    expect(text).toContain('No significant reclaimable free pages were detected');
+    expect(text).toContain('Physical compaction is not immediately necessary');
     expect(text).not.toContain('0 B of space can be reclaimed');
     expect(text).not.toContain('0.00 B of space can be reclaimed');
 
@@ -1985,15 +2063,16 @@ describe('UsageMaintenancePage', () => {
 
     // Delete success notification is still shown
     expect(mocks.showNotification).toHaveBeenCalledWith('Logical deletion completed.', 'success');
-    // Notice card must NOT be displayed because fresh metrics are unavailable
+    // Cleanup remains successful while fresh metrics are unavailable
     const text = getText(renderer.root);
-    expect(text).not.toContain('Raw data cleanup complete');
+    expect(text).toContain('Online detail cleanup complete');
+    expect(text).toContain('Current storage statistics are unavailable');
     expect(text).toContain('refresh failed');
     expect(text).not.toContain('can be reclaimed');
 
     // Delete raw button is removed because history was updated to completed run
     expect(findButtons(renderer, 'Delete raw')).toHaveLength(0);
-    expect(text).toContain('post-delete-run-d');
+    expect(renderer.root.findAllByProps({ 'data-run-id': 'post-delete-run-d' })).toHaveLength(1);
 
     // Asserts focused history refresh was triggered once to update list without clearing error
     const historyListCallsAfterDelete = mocks.listUsageArchives.mock.calls.filter(
@@ -2008,7 +2087,7 @@ describe('UsageMaintenancePage', () => {
     const targetRun = archive('verified', 'detail-delete-refresh-failure');
     mocks.getUsageArchive.mockResolvedValue(archiveStatus(targetRun));
 
-    const renderer = await renderOverviewPage(maintenance(), [targetRun]);
+    const renderer = await renderHistoryPage(maintenance(), [targetRun]);
 
     // Open detail view
     await act(async () => {
@@ -2017,7 +2096,7 @@ describe('UsageMaintenancePage', () => {
       await Promise.resolve();
     });
 
-    expect(getText(renderer.root)).toContain('Archive task details');
+    expect(getText(renderer.root)).toContain('Operation details');
     expect(getText(renderer.root)).toContain('Delete raw');
 
     const archiveCallsBeforeDelete = mocks.getUsageArchive.mock.calls.length;
@@ -2051,7 +2130,7 @@ describe('UsageMaintenancePage', () => {
 
     // 3. Detail view updated to completed directly from response, without Delete raw button
     expect(findButtons(renderer, 'Delete raw')).toHaveLength(0);
-    expect(text).toContain('Archive task details');
+    expect(text).toContain('Operation details');
     expect(text).toContain('completed');
 
     // 4. No extra getUsageArchive call was made
@@ -2068,7 +2147,7 @@ describe('UsageMaintenancePage', () => {
     mocks.listUsageArchives.mockRejectedValueOnce(new Error('temporary history network error'));
 
     await act(async () => {
-      findButtons(renderer, 'View all')[0].props.onClick();
+      findButtons(renderer, 'Processing records')[0].props.onClick();
       await Promise.resolve();
       await Promise.resolve();
       await Promise.resolve();
@@ -2080,8 +2159,7 @@ describe('UsageMaintenancePage', () => {
     mocks.listUsageArchives.mockResolvedValueOnce({ runs: [targetRun] });
 
     // Click refresh to reload history
-    const refreshButton =
-      findButtons(renderer, 'common.refresh')[0] ?? findButtons(renderer, 'failed')[0];
+    const refreshButton = findButtons(renderer, 'Refresh').slice(-1)[0];
     await act(async () => {
       refreshButton.props.onClick();
       await Promise.resolve();
@@ -2091,7 +2169,9 @@ describe('UsageMaintenancePage', () => {
 
     const text = getText(renderer.root);
     expect(text).not.toContain('temporary history network error');
-    expect(text).toContain('history-recovered-run');
+    expect(renderer.root.findAllByProps({ 'data-run-id': 'history-recovered-run' })).toHaveLength(
+      1
+    );
 
     act(() => renderer.unmount());
   });
@@ -2140,7 +2220,7 @@ describe('UsageMaintenancePage', () => {
 
     // 1. Initial notice after delete reflects 2.50 GB
     let text = getText(renderer.root);
-    expect(text).toContain('Raw data cleanup complete');
+    expect(text).toContain('Online detail cleanup complete');
     expect(text).toContain('2.50 GB');
 
     // 2. User clicks Refresh, API returns 512 MB reclaimable
@@ -2154,7 +2234,7 @@ describe('UsageMaintenancePage', () => {
 
     await act(async () => {
       const refreshButton =
-        findButtons(renderer, 'common.refresh')[0] ?? findButtons(renderer, 'Refresh')[0];
+        findButtons(renderer, 'Refresh')[0] ?? findButtons(renderer, 'Refresh')[0];
       refreshButton.props.onClick();
       await Promise.resolve();
       await Promise.resolve();
@@ -2177,7 +2257,7 @@ describe('UsageMaintenancePage', () => {
 
     await act(async () => {
       const refreshButton =
-        findButtons(renderer, 'common.refresh')[0] ?? findButtons(renderer, 'Refresh')[0];
+        findButtons(renderer, 'Refresh')[0] ?? findButtons(renderer, 'Refresh')[0];
       refreshButton.props.onClick();
       await Promise.resolve();
       await Promise.resolve();
@@ -2185,7 +2265,7 @@ describe('UsageMaintenancePage', () => {
     });
 
     text = getText(renderer.root);
-    expect(text).toContain('No significant reclaimable SQLite free pages were detected');
+    expect(text).toContain('No significant reclaimable free pages were detected');
     expect(text).not.toContain('0 B of space can be reclaimed');
     expect(text).not.toContain('512.00 MB');
 
@@ -2223,7 +2303,7 @@ describe('UsageMaintenancePage', () => {
       await confirmation.onConfirm();
     });
 
-    expect(getText(renderer.root)).toContain('Raw data cleanup complete');
+    expect(getText(renderer.root)).toContain('Online detail cleanup complete');
 
     // Context changes (e.g. managerServiceBase changes)
     await act(async () => {
@@ -2235,7 +2315,7 @@ describe('UsageMaintenancePage', () => {
       await Promise.resolve();
     });
 
-    expect(getText(renderer.root)).not.toContain('Raw data cleanup complete');
+    expect(getText(renderer.root)).not.toContain('Online detail cleanup complete');
 
     act(() => renderer.unmount());
   });
@@ -2271,19 +2351,25 @@ describe('UsageMaintenancePage', () => {
       await confirmation.onConfirm();
     });
 
-    expect(getText(renderer.root)).toContain('Raw data cleanup complete');
+    expect(getText(renderer.root)).toContain('Online detail cleanup complete');
 
-    // 1. Copy compact command button
+    // Copy is available with the offline instructions in Advanced maintenance
     const writeTextMock = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal('navigator', {
       clipboard: { writeText: writeTextMock },
     });
     await act(async () => {
-      findButtons(renderer, 'Copy compact command')[0].props.onClick();
+      findButtons(renderer, 'View advanced maintenance')[0].props.onClick();
+    });
+    await act(async () => {
+      findButtons(renderer, 'Copy command')[0].props.onClick();
       await Promise.resolve();
     });
     expect(writeTextMock).toHaveBeenCalledWith(COMPACT_USAGE_COMMAND);
-    expect(mocks.showNotification).toHaveBeenCalledWith('Offline compact command copied.', 'success');
+    expect(mocks.showNotification).toHaveBeenCalledWith(
+      'Offline compact command copied.',
+      'success'
+    );
 
     // 2. Open advanced maintenance button
     await act(async () => {
@@ -2294,15 +2380,184 @@ describe('UsageMaintenancePage', () => {
 
     // Return to overview
     await act(async () => {
-      findButtons(renderer, 'Back')[0].props.onClick();
+      findButtons(renderer, 'Close drawer')[0].props.onClick();
       await Promise.resolve();
     });
-    expect(getText(renderer.root)).toContain('Raw data cleanup complete');
+    expect(getText(renderer.root)).toContain('Online detail cleanup complete');
 
     // 3. Dismiss button
     act(() => findButtons(renderer, 'Close')[0].props.onClick());
-    expect(getText(renderer.root)).not.toContain('Raw data cleanup complete');
+    expect(getText(renderer.root)).not.toContain('Online detail cleanup complete');
 
     act(() => renderer.unmount());
+  });
+});
+
+describe('maintenance workspace navigation and continuous operations', () => {
+  const installHash = (hash: string) => {
+    const events = new EventTarget();
+    const browser = {
+      location: { hash },
+      addEventListener: events.addEventListener.bind(events),
+      removeEventListener: events.removeEventListener.bind(events),
+    };
+    vi.stubGlobal('window', browser);
+    return (next: string) => {
+      browser.location.hash = next;
+      events.dispatchEvent(new Event('hashchange'));
+    };
+  };
+
+  it('restores a record drawer from the URL using reads only, including forged action parameters', async () => {
+    installHash('#/usage-maintenance?tab=history&run=route-record&panel=run&action=delete');
+    const renderer = await renderOverviewPage(maintenance(), [archive('verified', 'route-record')]);
+    expect(renderer.root.findByProps({ 'data-testid': 'maintenance-drawer' })).toBeTruthy();
+    expect(mocks.getUsageArchive).toHaveBeenCalledWith(
+      'http://manager-a.local:18317',
+      'route-record',
+      'management-key-a',
+      expect.any(AbortSignal)
+    );
+    expect(mocks.createUsageArchive).not.toHaveBeenCalled();
+    expect(mocks.resumeUsageArchive).not.toHaveBeenCalled();
+    expect(mocks.deleteUsageArchive).not.toHaveBeenCalled();
+  });
+
+  it('restores tab and cutoff controls on same-path hash navigation', async () => {
+    const changeHash = installHash('#/usage-maintenance?tab=history');
+    const renderer = await renderOverviewPage();
+    await act(async () => {
+      changeHash('#/usage-maintenance?days=7');
+    });
+    expect(findButtons(renderer, 'Organize data')[0].props['aria-selected']).toBe(true);
+    expect(findButtons(renderer, 'Older than 7 days')[0].props['aria-pressed']).toBe(true);
+    await act(async () => {
+      changeHash('#/usage-maintenance?tab=history');
+    });
+    expect(findButtons(renderer, 'Processing records')[0].props['aria-selected']).toBe(true);
+    expect(mocks.createUsageArchive).not.toHaveBeenCalled();
+  });
+
+  it('preserves the URL while the initial service and authentication context becomes available', async () => {
+    installHash(
+      '#/usage-maintenance?tab=history&run=restored-record&panel=run&intent=cleanup&days=7'
+    );
+    mocks.availability.checking = true;
+    mocks.availability.managerServiceBase = '';
+    mocks.managementKey = '';
+    const renderer = await renderOverviewPage(maintenance(), [
+      archive('verified', 'restored-record'),
+    ]);
+
+    mocks.availability.checking = false;
+    mocks.availability.managerServiceBase = 'http://manager-a.local:18317';
+    mocks.managementKey = 'management-key-a';
+    await act(async () => renderer.update(<UsageMaintenancePage />));
+
+    expect(renderer.root.findByProps({ 'data-testid': 'maintenance-drawer' })).toBeTruthy();
+    expect(getText(renderer.root)).toContain('restored-record');
+    expect(mocks.navigate).not.toHaveBeenCalled();
+    act(() => findButtons(renderer, 'Close drawer')[0].props.onClick());
+    act(() => findButtons(renderer, 'New operation')[0].props.onClick());
+    expect(findButtons(renderer, 'Older than 7 days')[0].props['aria-pressed']).toBe(true);
+    expect(findButtons(renderer, 'Archive, then clean up')[0].props['aria-pressed']).toBe(true);
+    expect(mocks.createUsageArchive).not.toHaveBeenCalled();
+    expect(mocks.deleteUsageArchive).not.toHaveBeenCalled();
+  });
+
+  it('preserves an active archive when the router replaces its navigation callback', async () => {
+    const pending = deferred<unknown>();
+    mocks.createUsageArchive.mockImplementationOnce(() => pending.promise);
+    const renderer = await renderResolvedPage();
+    act(() => findButtons(renderer, 'Older than 7 days')[0].props.onClick());
+    await act(async () => {
+      await Promise.resolve();
+    });
+    act(() => findButtons(renderer, 'Archive and verify')[0].props.onClick());
+    act(() => mocks.showConfirmation.mock.calls[0][0].onConfirm());
+    const signal = mocks.createUsageArchive.mock.calls[0][3] as AbortSignal;
+
+    mocks.navigate = vi.fn();
+    await act(async () => renderer.update(<UsageMaintenancePage />));
+
+    expect(signal.aborted).toBe(false);
+    expect(findButtons(renderer, 'Older than 7 days')[0].props['aria-pressed']).toBe(true);
+    expect(findButtons(renderer, 'Stop waiting')[0].props.disabled).not.toBe(true);
+    await act(async () => {
+      pending.resolve(archiveStatus());
+    });
+    expect(getText(renderer.root)).toContain(
+      'Archive complete. Online details are still available.'
+    );
+    expect(mocks.deleteUsageArchive).not.toHaveBeenCalled();
+  });
+
+  it('keeps URL restoration read-only across Strict Mode effect replay', async () => {
+    installHash('#/usage-maintenance?tab=history&run=strict-record&panel=run');
+    mocks.getUsageMaintenance.mockResolvedValue(maintenance());
+    mocks.listUsageArchives.mockResolvedValue({ runs: [archive('verified', 'strict-record')] });
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(
+        <StrictMode>
+          <UsageMaintenancePage />
+        </StrictMode>
+      );
+      renderers.add(renderer);
+    });
+    expect(renderer.root.findByProps({ 'data-testid': 'maintenance-drawer' })).toBeTruthy();
+    expect(getText(renderer.root)).toContain('strict-record');
+    expect(mocks.navigate).not.toHaveBeenCalled();
+    expect(mocks.createUsageArchive).not.toHaveBeenCalled();
+    expect(mocks.deleteUsageArchive).not.toHaveBeenCalled();
+  });
+
+  it('shows the preview in confirmation and closes confirmation before the archive finishes', async () => {
+    const pending = deferred<unknown>();
+    mocks.createUsageArchive.mockImplementationOnce(() => pending.promise);
+    const renderer = await renderResolvedPage();
+    act(() => findButtons(renderer, 'Archive and verify')[0].props.onClick());
+    const confirmation = mocks.showConfirmation.mock.calls[0][0] as {
+      message: ReactNode;
+      onConfirm: () => unknown;
+    };
+    let summary!: ReactTestRenderer;
+    act(() => {
+      summary = create(<>{confirmation.message}</>);
+      renderers.add(summary);
+    });
+    expect(summary.root.findAllByType('dd')[0].children).toEqual(['7']);
+    expect(getText(summary.root)).toContain('KB');
+    act(() => {
+      expect(confirmation.onConfirm()).toBeUndefined();
+    });
+    expect(findButtons(renderer, 'Stop waiting')[0].props.disabled).not.toBe(true);
+    act(() => renderer.unmount());
+    await act(async () => {
+      pending.resolve(archiveStatus());
+    });
+    expect(mocks.resumeUsageArchive).not.toHaveBeenCalled();
+  });
+
+  it('continues from a verified archive to separately confirmed cleanup in place', async () => {
+    const renderer = await renderResolvedPage();
+    act(() => findButtons(renderer, 'Archive, then clean up')[0].props.onClick());
+    act(() => findButtons(renderer, 'Archive and verify')[0].props.onClick());
+    await act(async () => {
+      mocks.showConfirmation.mock.calls[0][0].onConfirm();
+    });
+    expect(getText(renderer.root)).toContain('Archive verified. Review cleanup next.');
+    expect(mocks.deleteUsageArchive).not.toHaveBeenCalled();
+    expect(mocks.navigate.mock.calls.some(([to]) => to.search.includes('run=created-run'))).toBe(
+      true
+    );
+    act(() => findButtons(renderer, 'Delete raw data')[0].props.onClick());
+    expect(mocks.deleteUsageArchive).not.toHaveBeenCalled();
+    await act(async () => {
+      mocks.showConfirmation.mock.calls[1][0].onConfirm();
+    });
+    expect(mocks.deleteUsageArchive).toHaveBeenCalledTimes(1);
+    expect(getText(renderer.root)).toContain('Online detail cleanup complete');
+    expect(findButtons(renderer, 'Delete raw data')).toHaveLength(0);
   });
 });

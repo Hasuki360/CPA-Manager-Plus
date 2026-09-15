@@ -266,6 +266,16 @@ Monitoring analytics responses include a `coverage` object when either the curre
 
 The Usage Maintenance page is available only when the panel is hosted by Manager Server and the Manager Service is available. A regular CPA-hosted panel does not show this entry. The page can run preview/create/resume/verify/delete/cancel and report reclaimable space, but physical compaction remains an offline CLI operation.
 
+The workspace has three tabs: **Organize data**, **Import / export**, and **Processing records**.
+
+- **Organize data**: choose archive only or archive followed by cleanup, select a cutoff, review the preview, and confirm archiving. The preview counts only online events that are not already archived. The cutoff applies to this operation; it does not configure automatic retention. Estimated source size is neither the archive file size nor the amount of disk space that will be released.
+- **Continue in place**: the current record shows the archive and verification result with the next available action. Archive-only work is complete at this point and online details remain available. Cleanup requires a separate confirmation for the entire identified archive record. A cutoff selected for a new archive does not narrow the cleanup range of an existing record.
+- **Processing records**: review time, range, archived and deleted counts, and status. A detail drawer provides technical information and stage-specific recovery actions. Stopping the browser wait does not cancel the current server job or authorize later cleanup. Reopening the record reads its actual server state; cancellation eligibility still follows the existing lifecycle rules.
+- **Import / export**: import progress, pause, resume, and cancellation use the same interaction as Monitoring. Resume with the original file. Exports contain current online details, not already-deleted archive contents, and do not replace a complete disaster-recovery backup. Existing import and export entry points remain available in other deployment modes.
+- **Advanced maintenance and diagnostics**: open these from the workspace toolbar for complete backup requirements, offline compaction instructions, coverage, storage, and lock information.
+
+The URL preserves the tab, purpose, cutoff, filter, and selected record. Refresh and browser history restore views and read state; they never create an archive or start cleanup automatically. If cleanup succeeds but a subsequent storage refresh fails, the page retains the successful result and offers a read-only refresh instead of repeating cleanup.
+
 ### Reclaim SQLite Space While Stopped
 
 Logical deletion normally does not shrink the SQLite file immediately. Before compacting, back up the complete data set as described in [Backup And Restore](./backup.md), stop every Manager Server connected to the database, and reserve temporary free space conservatively equal to at least the current database-file size. Static `previewed`, `archived`, `verified`, and `failed` runs do not block compaction; recorded maintenance locks and active `archiving`, `verifying`, or `deleting` stages do. Pending derived-data migrations are allowed and their checkpoint state is preserved exactly. Never delete WAL, SHM, or a maintenance lock manually.

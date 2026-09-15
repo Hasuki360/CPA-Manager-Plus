@@ -1,4 +1,3 @@
-import type { CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -7,10 +6,10 @@ import { formatDateTime, formatFileSize } from '@/utils/format';
 import {
   retentionPresetDays,
   toLocalDateTimeValue,
-  type RawEventRangeState,
   type RetentionPresetDays,
   type RetentionSelection,
 } from './usageMaintenanceModel';
+import type { MaintenanceIntent } from './usageMaintenanceNavigation';
 import styles from './UsageMaintenanceCreateView.module.scss';
 
 export type GuidedArchiveStage =
@@ -30,40 +29,21 @@ type Props = {
   customCutoff: string;
   referenceNowMS: number;
   resolvedCutoffTimestamp?: number;
-  rawEventRange: RawEventRangeState;
   recommendedRetentionDays: RetentionPresetDays | null;
   guidedArchiveStage: GuidedArchiveStage;
-  guidedArchiveRunId: string | null;
+  intent: MaintenanceIntent;
   working: boolean;
   createBlockedByMaintenance: boolean;
   archiveReadinessPending: boolean;
   archiveReadinessHint: string;
-  onBack: () => void;
-  onRefresh: () => void;
+  onIntent: (intent: MaintenanceIntent) => void;
+  onHistory: () => void;
   onSelectRetention: (selection: RetentionSelection) => void;
   onUpdateCustomCutoff: (value: string) => void;
   onRetryPreview: () => void;
   onCreate: () => void;
   onStopWaiting: () => void;
 };
-
-const migrationStatuses = new Set([
-  'discovering',
-  'pending',
-  'running',
-  'applying',
-  'clearing',
-  'completed',
-  'failed',
-]);
-const aggregateStatuses = new Set([
-  'pending',
-  'backfilling',
-  'catching_up',
-  'clearing',
-  'ready',
-  'failed',
-]);
 
 export function UsageMaintenanceCreateView({
   maintenance,
@@ -74,16 +54,15 @@ export function UsageMaintenanceCreateView({
   customCutoff,
   referenceNowMS,
   resolvedCutoffTimestamp,
-  rawEventRange,
   recommendedRetentionDays,
   guidedArchiveStage,
-  guidedArchiveRunId,
+  intent,
   working,
   createBlockedByMaintenance,
   archiveReadinessPending,
   archiveReadinessHint,
-  onBack,
-  onRefresh,
+  onIntent,
+  onHistory,
   onSelectRetention,
   onUpdateCustomCutoff,
   onRetryPreview,
@@ -92,532 +71,248 @@ export function UsageMaintenanceCreateView({
 }: Props) {
   const { t, i18n } = useTranslation();
   const formatTime = (value?: number) =>
-    value ? formatDateTime(new Date(value), i18n.language) : '-';
-  const hasArchivedRawEvents = (maintenance.raw_archived_event_count ?? 0) > 0;
-  const recommendedPresetAvailable =
-    !hasArchivedRawEvents &&
+    value ? formatDateTime(new Date(value), i18n.language) : '—';
+  const hasArchived = (maintenance.raw_archived_event_count ?? 0) > 0;
+  const canRecommend =
+    !hasArchived &&
     recommendedRetentionDays !== null &&
     recommendedRetentionDays !== retentionSelection;
-  const canCreate =
-    Boolean(preview && preview.event_count > 0) &&
-    !previewLoading &&
-    !previewError &&
-    !working &&
-    !createBlockedByMaintenance &&
-    !archiveReadinessPending;
-  const createDisabledReason = createBlockedByMaintenance
+  const disabledReason = createBlockedByMaintenance
     ? t('usage_maintenance.create_blocked_active', {
         defaultValue:
           'Finish or recover the active maintenance task before starting another archive.',
       })
     : archiveReadinessPending
       ? archiveReadinessHint
-      : previewLoading
-        ? t('usage_maintenance.preview_loading', { defaultValue: 'Calculating…' })
-        : previewError || undefined;
-
-  const cutoffPosition = (() => {
-    if (rawEventRange.kind !== 'available' || !resolvedCutoffTimestamp) return null;
-    const span = rawEventRange.maxTimestampMS - rawEventRange.minTimestampMS;
-    if (span <= 0) return null;
-    return Math.min(
-      100,
-      Math.max(0, ((resolvedCutoffTimestamp - rawEventRange.minTimestampMS) / span) * 100)
-    );
-  })();
-  const timelineStyle =
-    cutoffPosition === null
-      ? undefined
-      : ({ '--cutoff-position': `${cutoffPosition}%` } as CSSProperties);
-
-  const knownStatus = (prefix: string, value: string, known: ReadonlySet<string>) =>
-    known.has(value) ? t(`usage_maintenance.${prefix}_${value}`, { defaultValue: value }) : value;
-  const guidedStageLabel = () =>
-    t(`usage_maintenance.archive_prepare_${guidedArchiveStage}`, {
-      defaultValue:
-        guidedArchiveStage === 'creating'
-          ? 'Creating archive task'
-          : guidedArchiveStage === 'archiving'
-            ? 'Writing archive'
-            : guidedArchiveStage === 'verifying'
-              ? 'Verifying archive'
-              : guidedArchiveStage === 'complete'
-                ? 'Archive verified'
-                : guidedArchiveStage === 'attention'
-                  ? 'Needs attention'
-                  : '',
-    });
+      : previewError || undefined;
+  const canCreate =
+    Boolean(preview && preview.event_count > 0) && !previewLoading && !working && !disabledReason;
 
   return (
     <div className={styles.view}>
-      <header className={styles.pageHeader}>
-        <div>
-          <h1>
-            {t('usage_maintenance.create_page_title', { defaultValue: 'Create archive task' })}
-          </h1>
-          <p>
-            {t('usage_maintenance.create_page_subtitle', {
+      <div className={styles.layout}>
+        <section className={styles.card}>
+          <h2>
+            {t('usage_maintenance.workspace_purpose', {
+              defaultValue: 'What would you like to do?',
+            })}
+          </h2>
+          <div
+            className={styles.intentOptions}
+            role="group"
+            aria-label={t('usage_maintenance.workspace_purpose')}
+          >
+            {(['archive', 'cleanup'] as const).map((value) => (
+              <button
+                key={value}
+                type="button"
+                aria-pressed={intent === value}
+                className={intent === value ? styles.selected : ''}
+                disabled={working}
+                onClick={() => onIntent(value)}
+              >
+                <strong>{t(`usage_maintenance.intent_${value}`)}</strong>
+                <span>{t(`usage_maintenance.intent_${value}_hint`)}</span>
+              </button>
+            ))}
+          </div>
+          <h2>
+            {t('usage_maintenance.workspace_range', { defaultValue: 'Choose the data range' })}
+          </h2>
+          <div
+            className={styles.retentionOptions}
+            role="group"
+            aria-label={t('usage_maintenance.retention_group_label', {
+              defaultValue: 'Data range for this operation',
+            })}
+          >
+            {retentionPresetDays.map((days) => (
+              <button
+                key={days}
+                type="button"
+                aria-pressed={retentionSelection === days}
+                className={retentionSelection === days ? styles.selected : ''}
+                disabled={working}
+                onClick={() => onSelectRetention(days)}
+              >
+                {t(`usage_maintenance.retention_${days}_label`, {
+                  defaultValue: `Older than ${days} days`,
+                })}
+              </button>
+            ))}
+            <button
+              type="button"
+              aria-pressed={retentionSelection === 'custom'}
+              className={retentionSelection === 'custom' ? styles.selected : ''}
+              disabled={working}
+              onClick={() => onSelectRetention('custom')}
+            >
+              {t('usage_maintenance.retention_custom_label', { defaultValue: 'Custom date' })}
+            </button>
+          </div>
+          {retentionSelection === 'custom' ? (
+            <Input
+              type="datetime-local"
+              label={t('usage_maintenance.cutoff', { defaultValue: 'Archive events before' })}
+              max={toLocalDateTimeValue(referenceNowMS)}
+              value={customCutoff}
+              disabled={working}
+              error={!resolvedCutoffTimestamp ? (previewError ?? undefined) : undefined}
+              onChange={(event) => onUpdateCustomCutoff(event.target.value)}
+            />
+          ) : null}
+          <p className={styles.cutoff}>
+            {t('usage_maintenance.cutoff', { defaultValue: 'Archive events before' })}
+            <strong>{formatTime(resolvedCutoffTimestamp)}</strong>
+          </p>
+          <p className={styles.hint}>
+            {t('usage_maintenance.workspace_once', {
               defaultValue:
-                'Choose a retention policy, preview the exact impact, then archive and verify without deleting raw data.',
+                'This range applies to this operation only. It does not create an automatic retention rule.',
             })}
           </p>
-        </div>
-        <Button variant="secondary" size="sm" onClick={onBack} disabled={working}>
-          ← {t('common.back')}
-        </Button>
-      </header>
+        </section>
 
-      <div className={styles.layout}>
-        <div className={styles.sideColumn}>
-          <section className={styles.card}>
-            <h2>{t('usage_maintenance.retention_policy', { defaultValue: 'Retention policy' })}</h2>
-            <p className={styles.sectionHint}>
-              {t('usage_maintenance.retention_description', {
-                defaultValue:
-                  'Events older than the selected period are included in the archive preview. Recent events remain in SQLite.',
-              })}
+        <section className={styles.card} aria-live="polite" aria-busy={previewLoading}>
+          <h2>{t('usage_maintenance.preview', { defaultValue: 'Impact preview' })}</h2>
+          {previewLoading ? (
+            <p className={styles.hint}>
+              {t('usage_maintenance.preview_loading', { defaultValue: 'Calculating…' })}
             </p>
-            <div
-              className={styles.retentionOptions}
-              role="group"
-              aria-label={t('usage_maintenance.retention_group_label', {
-                defaultValue: 'Raw data retention period',
-              })}
-            >
-              {retentionPresetDays.map((days) => (
-                <button
-                  key={days}
-                  type="button"
-                  className={retentionSelection === days ? styles.retentionActive : ''}
-                  aria-pressed={retentionSelection === days}
-                  disabled={working}
-                  onClick={() => onSelectRetention(days)}
-                >
-                  {t(`usage_maintenance.retention_${days}_label`, {
-                    defaultValue: `Keep ${days} days`,
-                  })}
-                </button>
-              ))}
-              <button
-                type="button"
-                className={retentionSelection === 'custom' ? styles.retentionActive : ''}
-                aria-pressed={retentionSelection === 'custom'}
-                disabled={working}
-                onClick={() => onSelectRetention('custom')}
-              >
-                {t('usage_maintenance.retention_custom_label', { defaultValue: 'Custom date' })}
-              </button>
-            </div>
-            {retentionSelection === 'custom' ? (
-              <div className={styles.dateField}>
-                <Input
-                  type="datetime-local"
-                  label={t('usage_maintenance.cutoff', { defaultValue: 'Archive events before' })}
-                  hint={t('usage_maintenance.custom_cutoff_hint', {
-                    defaultValue: 'The cutoff must be in the past.',
-                  })}
-                  max={toLocalDateTimeValue(referenceNowMS)}
-                  value={customCutoff}
-                  disabled={working}
-                  error={!resolvedCutoffTimestamp ? (previewError ?? undefined) : undefined}
-                  onChange={(event) => onUpdateCustomCutoff(event.target.value)}
-                />
-              </div>
-            ) : null}
-            <div className={styles.cutoffFact}>
-              <span>
-                {t('usage_maintenance.resolved_cutoff_label', {
-                  defaultValue: 'Resolved archive cutoff',
-                })}
-              </span>
-              <strong>{formatTime(resolvedCutoffTimestamp)}</strong>
-              <small>
-                {t('usage_maintenance.resolved_cutoff_hint', {
-                  defaultValue: 'Older events are archived; newer events stay online.',
-                })}
-              </small>
-            </div>
-          </section>
-
-          <section className={styles.card}>
-            <h2>
-              {t('usage_maintenance.online_range_title', { defaultValue: 'Current online range' })}
-            </h2>
-            <dl className={styles.keyValues}>
-              <div>
-                <dt>{t('usage_maintenance.oldest_event', { defaultValue: 'Oldest event' })}</dt>
-                <dd>
-                  {rawEventRange.kind === 'available'
-                    ? formatTime(rawEventRange.minTimestampMS)
-                    : '-'}
-                </dd>
-              </div>
-              <div>
-                <dt>{t('usage_maintenance.latest_event', { defaultValue: 'Latest event' })}</dt>
-                <dd>
-                  {rawEventRange.kind === 'available'
-                    ? formatTime(rawEventRange.maxTimestampMS)
-                    : '-'}
-                </dd>
-              </div>
-              <div>
-                <dt>
-                  {t('usage_maintenance.online_event_count', { defaultValue: 'Online events' })}
-                </dt>
-                <dd>{maintenance.raw_event_count.toLocaleString(i18n.language)}</dd>
-              </div>
-            </dl>
-            <p className={styles.infoNote}>
-              {rawEventRange.kind === 'unavailable'
-                ? t('usage_maintenance.raw_range_unavailable', {
-                    defaultValue: 'Time range unavailable on this server version',
-                  })
-                : t('usage_maintenance.online_range_note', {
-                    defaultValue:
-                      'This range comes from the current local SQLite summary. The server recalculates the target when the archive task is created.',
-                  })}
-            </p>
-          </section>
-        </div>
-
-        <div className={styles.mainColumn}>
-          <section className={styles.card} aria-live="polite" aria-busy={previewLoading}>
-            <div className={styles.sectionHeader}>
-              <div>
-                <h2>{t('usage_maintenance.preview', { defaultValue: 'Impact preview' })}</h2>
-                <p className={styles.sectionHint}>
-                  {t('usage_maintenance.preview_excludes_existing', {
-                    defaultValue: 'Existing archive references are excluded from this estimate.',
-                  })}
-                </p>
-              </div>
-              {previewLoading ? (
-                <span className={styles.loadingLabel}>
-                  <span className="loading-spinner" aria-hidden="true" />
-                  {t('usage_maintenance.preview_loading', { defaultValue: 'Calculating…' })}
-                </span>
-              ) : null}
-            </div>
-
-            {rawEventRange.kind === 'available' ? (
-              <div className={styles.timelineBlock} style={timelineStyle}>
-                <div className={styles.timeline}>
-                  {cutoffPosition === null ? null : <i aria-hidden="true" />}
-                </div>
-                <div className={styles.timelineLabels}>
-                  <span>
-                    {t('usage_maintenance.oldest_event', { defaultValue: 'Oldest event' })}
-                    <strong>{formatTime(rawEventRange.minTimestampMS)}</strong>
-                  </span>
-                  <span>
-                    {t('usage_maintenance.cutoff_short', { defaultValue: 'Cutoff' })}
-                    <strong>{formatTime(resolvedCutoffTimestamp)}</strong>
-                  </span>
-                  <span>
-                    {t('usage_maintenance.latest_event', { defaultValue: 'Latest event' })}
-                    <strong>{formatTime(rawEventRange.maxTimestampMS)}</strong>
-                  </span>
-                </div>
-              </div>
-            ) : null}
-
-            {guidedArchiveStage !== 'idle' ? (
-              <div className={styles.guidedProgress}>
-                <div className={styles.guidedHeader}>
-                  <strong>{guidedStageLabel()}</strong>
-                  {guidedArchiveRunId ? (
-                    <span>
-                      {t('usage_maintenance.archive_task_label', {
-                        defaultValue: 'Task {{runId}}',
-                        runId: guidedArchiveRunId,
-                      })}
-                    </span>
-                  ) : null}
-                </div>
-                <div className={styles.guidedSteps}>
-                  {(['archive', 'verify', 'delete'] as const).map((step) => {
-                    const state =
-                      guidedArchiveStage === 'complete'
-                        ? step === 'delete'
-                          ? 'current'
-                          : 'complete'
-                        : guidedArchiveStage === 'attention'
-                          ? 'pending'
-                          : step === 'archive'
-                            ? guidedArchiveStage === 'creating' ||
-                              guidedArchiveStage === 'archiving'
-                              ? 'current'
-                              : 'complete'
-                            : step === 'verify' && guidedArchiveStage === 'verifying'
-                              ? 'current'
-                              : 'pending';
-                    return (
-                      <span key={step} className={styles[`guided_${state}`]}>
-                        <i>{state === 'complete' ? '✓' : ''}</i>
-                        {t(`usage_maintenance.guided_step_${step}`, {
-                          defaultValue:
-                            step === 'archive'
-                              ? 'Archive'
-                              : step === 'verify'
-                                ? 'Verify'
-                                : 'Optional delete',
-                        })}
-                      </span>
-                    );
-                  })}
-                </div>
-                {guidedArchiveStage !== 'complete' ? (
-                  <Button
-                    size="xs"
-                    variant="ghost"
-                    onClick={onStopWaiting}
-                    disabled={guidedArchiveStage === 'attention'}
-                  >
-                    {t('usage_maintenance.archive_prepare_stop', { defaultValue: 'Stop waiting' })}
-                  </Button>
-                ) : (
-                  <p>
-                    {t('usage_maintenance.archive_prepare_no_delete', {
-                      defaultValue:
-                        'Raw events are unchanged. Delete them only from the separate action.',
-                    })}
-                  </p>
-                )}
-              </div>
-            ) : null}
-
-            {previewError && resolvedCutoffTimestamp ? (
-              <div className={styles.errorNote}>
-                <p>{previewError}</p>
+          ) : null}
+          {previewError ? (
+            <div className={styles.warning} role="alert">
+              <p>{previewError}</p>
+              {resolvedCutoffTimestamp ? (
                 <Button size="sm" variant="secondary" onClick={onRetryPreview} disabled={working}>
                   {t('usage_maintenance.preview_retry', { defaultValue: 'Retry calculation' })}
                 </Button>
-              </div>
-            ) : null}
-
-            {!previewLoading && !previewError && preview?.event_count === 0 ? (
-              <div className={styles.emptyNote}>
-                <strong>
-                  {t('usage_maintenance.preview_empty_title', {
-                    defaultValue: 'No events match this retention policy',
-                  })}
-                </strong>
-                <p>
-                  {rawEventRange.kind === 'empty'
-                    ? t('usage_maintenance.preview_empty_no_data', {
-                        defaultValue:
-                          'There is no raw usage data to archive yet. Import or collect events first.',
-                      })
-                    : hasArchivedRawEvents
-                      ? t('usage_maintenance.preview_empty_archived', {
-                          defaultValue:
-                            'Some older raw events are already protected by an archive. Review archive history before changing the retention period.',
-                        })
-                      : recommendedPresetAvailable
-                        ? t('usage_maintenance.preview_empty_recommendation', {
-                            defaultValue:
-                              'The oldest raw event is {{oldest}}. Keep {{days}} days to include older events while preserving recent data.',
-                            oldest:
-                              rawEventRange.kind === 'available'
-                                ? formatTime(rawEventRange.minTimestampMS)
-                                : '-',
-                            days: recommendedRetentionDays,
-                          })
-                        : rawEventRange.kind === 'available'
-                          ? t('usage_maintenance.preview_empty_recent', {
-                              defaultValue:
-                                'All raw events are newer than the standard retention presets. Use a custom date only if you intentionally want to archive recent data.',
-                            })
-                          : t('usage_maintenance.preview_empty_generic', {
-                              defaultValue:
-                                'Try a shorter retention period or choose a custom cutoff after the oldest event.',
-                            })}
-                </p>
-                {recommendedPresetAvailable ? (
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    onClick={() => onSelectRetention(recommendedRetentionDays)}
-                    disabled={working}
-                  >
-                    {t('usage_maintenance.use_recommended_retention', {
-                      defaultValue: 'Keep {{days}} days',
-                      days: recommendedRetentionDays,
-                    })}
-                  </Button>
-                ) : null}
-              </div>
-            ) : null}
-
-            {!previewError && preview && preview.event_count > 0 ? (
-              <div className={styles.previewGrid}>
-                <div>
-                  <span>
-                    {t('usage_maintenance.preview_events', { defaultValue: 'Eligible events' })}
-                  </span>
-                  <strong>{preview.event_count.toLocaleString(i18n.language)}</strong>
-                  <small>
-                    {t('usage_maintenance.preview_events_hint', {
-                      defaultValue: 'Not present in existing archive references',
-                    })}
-                  </small>
-                </div>
-                <div>
-                  <span>
-                    {t('usage_maintenance.preview_source_bytes', {
-                      defaultValue: 'Estimated source size',
-                    })}
-                  </span>
-                  <strong>{formatFileSize(preview.estimated_bytes)}</strong>
-                  <small>
-                    {t('usage_maintenance.preview_source_bytes_hint', {
-                      defaultValue: 'Source-row estimate, not compressed archive size',
-                    })}
-                  </small>
-                </div>
-                <div>
-                  <span>
-                    {t('usage_maintenance.preview_target_event', {
-                      defaultValue: 'Target event ID',
-                    })}
-                  </span>
-                  <strong>{preview.target_event_id.toLocaleString(i18n.language)}</strong>
-                  <small>
-                    {t('usage_maintenance.preview_target_event_hint', {
-                      defaultValue: 'Recalculated when the task is created',
-                    })}
-                  </small>
-                </div>
-                <div>
-                  <span>
-                    {t('usage_maintenance.preview_range', { defaultValue: 'Timestamp range' })}
-                  </span>
-                  <strong className={styles.rangeValue}>
-                    {formatTime(preview.min_timestamp_ms)} → {formatTime(preview.max_timestamp_ms)}
-                  </strong>
-                  <small>
-                    {t('usage_maintenance.preview_range_hint', {
-                      defaultValue: 'Based on the current cutoff preview',
-                    })}
-                  </small>
-                </div>
-              </div>
-            ) : null}
-
-            <div className={styles.previewNotes}>
-              <p>
-                <strong>
-                  {t('usage_maintenance.online_retention_note_title', {
-                    defaultValue: 'Online retention',
-                  })}
-                </strong>
-                {t('usage_maintenance.online_retention_note', {
-                  defaultValue:
-                    'Events from the cutoff onward remain in SQLite for detailed queries and analysis.',
-                })}
-              </p>
-              <p>
-                <strong>
-                  {t('usage_maintenance.new_writes_note_title', {
-                    defaultValue: 'New writes',
-                  })}
-                </strong>
-                {t('usage_maintenance.new_writes_note', {
-                  defaultValue:
-                    'Collection continues during archiving. Events newer than the fixed task target are unaffected.',
-                })}
-              </p>
+              ) : null}
             </div>
-          </section>
-
-          <section className={styles.card}>
-            <div className={styles.sectionHeader}>
-              <h2>
-                {t('usage_maintenance.execution_readiness', {
-                  defaultValue: 'Execution readiness',
-                })}
-              </h2>
-              <Button size="xs" variant="ghost" onClick={onRefresh} disabled={working}>
-                ↻ {t('common.refresh')}
-              </Button>
-            </div>
-            <dl className={styles.readinessList}>
+          ) : null}
+          {!previewError && preview && preview.event_count > 0 ? (
+            <dl className={styles.previewGrid}>
               <div>
                 <dt>
-                  <strong>
-                    {t('usage_maintenance.migration', { defaultValue: 'Accounting migration' })}
-                  </strong>
-                  <small>
-                    {t('usage_maintenance.migration_readiness_hint', {
-                      defaultValue: 'Archive metadata and accounting coverage',
-                    })}
-                  </small>
+                  {t('usage_maintenance.preview_events', { defaultValue: 'New events to archive' })}
                 </dt>
-                <dd
-                  className={maintenance.readiness.migration_ready ? styles.ready : styles.pending}
-                >
-                  ●{' '}
-                  {knownStatus('migration_status', maintenance.migration.status, migrationStatuses)}
-                </dd>
+                <dd>{preview.event_count.toLocaleString(i18n.language)}</dd>
               </div>
               <div>
                 <dt>
-                  <strong>
-                    {t('usage_maintenance.hourly_aggregate', { defaultValue: 'Hourly aggregate' })}
-                  </strong>
-                  <small>
-                    {t('usage_maintenance.aggregate_readiness_hint', {
-                      defaultValue: 'Long-term hourly usage summaries',
-                    })}
-                  </small>
+                  {t('usage_maintenance.preview_source_bytes', {
+                    defaultValue: 'Estimated source size',
+                  })}
                 </dt>
-                <dd
-                  className={
-                    maintenance.readiness.hourly_aggregate_ready ? styles.ready : styles.pending
-                  }
-                >
-                  ●{' '}
-                  {knownStatus(
-                    'aggregate_status',
-                    maintenance.hourly_aggregate.status,
-                    aggregateStatuses
-                  )}
-                </dd>
+                <dd>{formatFileSize(preview.estimated_bytes)}</dd>
               </div>
-              <div>
-                <dt>
-                  <strong>
-                    {t('usage_maintenance.maintenance_lock', { defaultValue: 'Maintenance lock' })}
-                  </strong>
-                  <small>
-                    {t('usage_maintenance.lock_readiness_hint', {
-                      defaultValue: 'Only one archive or deletion operation can run at a time',
-                    })}
-                  </small>
-                </dt>
-                <dd className={maintenance.active_lock ? styles.pending : styles.ready}>
-                  ●{' '}
-                  {maintenance.active_lock
-                    ? t('usage_maintenance.lock_busy', { defaultValue: 'Lock held' })
-                    : t('usage_maintenance.lock_idle', { defaultValue: 'Idle' })}
+              <div className={styles.range}>
+                <dt>{t('usage_maintenance.preview_range', { defaultValue: 'Timestamp range' })}</dt>
+                <dd>
+                  {formatTime(preview.min_timestamp_ms)} – {formatTime(preview.max_timestamp_ms)}
                 </dd>
               </div>
             </dl>
-            {createBlockedByMaintenance || archiveReadinessPending ? (
-              <p className={styles.warningNote}>{createDisabledReason}</p>
+          ) : null}
+          {!previewLoading && !previewError && preview?.event_count === 0 ? (
+            <div className={styles.empty}>
+              <strong>
+                {t('usage_maintenance.preview_empty_title', {
+                  defaultValue: 'No new events to archive in this range',
+                })}
+              </strong>
+              <p>
+                {maintenance.raw_event_count === 0
+                  ? t('usage_maintenance.preview_empty_no_data')
+                  : hasArchived
+                    ? t('usage_maintenance.preview_empty_archived')
+                    : canRecommend
+                      ? t('usage_maintenance.preview_empty_recommendation', {
+                          days: recommendedRetentionDays,
+                          oldest: formatTime(maintenance.raw_min_timestamp_ms),
+                        })
+                      : t('usage_maintenance.preview_empty_recent')}
+              </p>
+              <Button size="sm" variant="secondary" onClick={onHistory}>
+                {t('usage_maintenance.workspace_existing', {
+                  defaultValue: 'View existing archives',
+                })}
+              </Button>
+              {canRecommend ? (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => onSelectRetention(recommendedRetentionDays)}
+                  disabled={working}
+                >
+                  {t('usage_maintenance.use_recommended_retention', {
+                    defaultValue: 'Older than {{days}} days',
+                    days: recommendedRetentionDays,
+                  })}
+                </Button>
+              ) : null}
+            </div>
+          ) : null}
+          <div className={styles.actions}>
+            <Button onClick={onCreate} disabled={!canCreate} title={disabledReason}>
+              {working
+                ? t(`usage_maintenance.archive_prepare_${guidedArchiveStage}`)
+                : t('usage_maintenance.create', { defaultValue: 'Archive and verify' })}
+            </Button>
+            {working ? (
+              <Button variant="secondary" onClick={onStopWaiting}>
+                {t('usage_maintenance.archive_prepare_stop', { defaultValue: 'Stop waiting' })}
+              </Button>
             ) : null}
-          </section>
-        </div>
+          </div>
+          {disabledReason && !previewError ? (
+            <p className={styles.warning}>{disabledReason}</p>
+          ) : null}
+          <p className={styles.hint}>
+            {t('usage_maintenance.preview_excludes_existing', {
+              defaultValue:
+                'This preview counts only data not already archived. Existing archives are handled separately, one record at a time.',
+            })}
+          </p>
+          {hasArchived ? (
+            <Button variant="ghost" size="sm" onClick={onHistory}>
+              {t('usage_maintenance.workspace_existing', {
+                defaultValue: 'View existing archives',
+              })}
+            </Button>
+          ) : null}
+          <p className={styles.hint}>
+            {t('usage_maintenance.preview_source_bytes_hint', {
+              defaultValue:
+                'Source-row estimate, not archive size or disk space that will be released.',
+            })}
+          </p>
+          <p className={styles.hint}>
+            {intent === 'cleanup'
+              ? t('usage_maintenance.workspace_cleanup_hint', {
+                  defaultValue:
+                    'After verification, review this archive and confirm cleanup separately. Archived data remains online until you confirm.',
+                })
+              : t('usage_maintenance.archive_prepare_no_delete', {
+                  defaultValue:
+                    'Archiving keeps online details available. You can clean them up later from this record.',
+                })}
+          </p>
+          <details className={styles.details}>
+            <summary>
+              {t('usage_maintenance.workspace_impact', {
+                defaultValue: 'What changes after cleanup?',
+              })}
+            </summary>
+            <p>
+              {t('usage_maintenance.workspace_impact_hint', {
+                defaultValue:
+                  'Cleanup removes online details for this archive. The server checks statistics coverage first; detailed queries and future recalculation are limited afterward. Back up the database, key and archives before cleanup. The SQLite file shrinks only after offline compaction.',
+              })}
+            </p>
+          </details>
+        </section>
       </div>
-
-      <footer className={styles.footerBar}>
-        <Button variant="ghost" onClick={onBack} disabled={working}>
-          {t('common.cancel')}
-        </Button>
-        <Button onClick={onCreate} disabled={!canCreate} title={createDisabledReason}>
-          {t('usage_maintenance.create', { defaultValue: 'Archive and verify' })}
-        </Button>
-      </footer>
     </div>
   );
 }

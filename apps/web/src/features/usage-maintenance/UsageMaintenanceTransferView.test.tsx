@@ -2,7 +2,10 @@ import { act } from 'react';
 import { create, type ReactTestInstance, type ReactTestRenderer } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { UsageImportSession, UsageImportSessionList } from '@/services/api/usageService';
-import { UsageImportFailedError } from '@/features/monitoring/services/usageImportSession';
+import {
+  UsageImportFailedError,
+  type UsageImportProgress,
+} from '@/features/monitoring/services/usageImportSession';
 import { UsageMaintenanceTransferView } from './UsageMaintenanceTransferView';
 
 const { mocks } = vi.hoisted(() => {
@@ -117,7 +120,6 @@ const renderView = async () => {
       <UsageMaintenanceTransferView
         serviceBase="http://manager.local"
         managementKey="manager-key"
-        onBack={vi.fn()}
       />
     );
   });
@@ -170,14 +172,16 @@ describe('UsageMaintenanceTransferView', () => {
     act(() => renderer.unmount());
   });
 
-  it('renders the server-provided chunk size instead of a fixed 4 MiB label', async () => {
+  it('keeps server-provided upload limits available in technical details', async () => {
     mocks.listUsageImportSessions.mockResolvedValueOnce(
       sessionList({ chunk_size_bytes: 7 * 1024 * 1024 })
     );
     const renderer = await renderView();
 
-    expect(getText(renderer.root)).toContain('Uploads use 7.00 MB chunks');
-    expect(getText(renderer.root)).not.toContain('Uploads use 4 MiB chunks');
+    const details = renderer.root.findByType('details');
+    expect(details.props.open).not.toBe(true);
+    expect(getText(details)).toContain('7.00 MB');
+    expect(getText(renderer.root)).toContain('Server import quota: 16.00 GB');
     act(() => renderer.unmount());
   });
 
@@ -286,7 +290,6 @@ describe('UsageMaintenanceTransferView', () => {
         <UsageMaintenanceTransferView
           serviceBase="http://manager.local"
           managementKey="manager-key"
-          onBack={vi.fn()}
         />
       );
       await Promise.resolve();
@@ -297,5 +300,124 @@ describe('UsageMaintenanceTransferView', () => {
     expect(signal?.aborted).toBe(true);
     pending.resolve(sessionList());
     await pending.promise;
+  });
+
+  it('keeps a confirmed cancellation when the aborted upload reports a late pause', async () => {
+    const pending = deferred<{
+      format: string;
+      added: number;
+      total: number;
+      skipped: number;
+      failed: number;
+    }>();
+    const file = new File(['{}\n'], 'history.jsonl');
+    const progress: UsageImportProgress = {
+      filename: file.name,
+      sessionId: 'cancelled-session',
+      phase: 'uploading',
+      status: 'uploading',
+      uploadedBytes: 0,
+      totalBytes: file.size,
+      percent: 0,
+    };
+    let reportProgress!: (value: UsageImportProgress) => void;
+    mocks.uploadUsageImportFile.mockImplementationOnce(
+      (options: { onProgress: typeof reportProgress }) => {
+        reportProgress = options.onProgress;
+        reportProgress(progress);
+        return pending.promise;
+      }
+    );
+    mocks.cancelUsageImportFile.mockResolvedValueOnce({
+      id: progress.sessionId,
+      filename: file.name,
+      status: 'cancelled',
+      size_bytes: file.size,
+      received_bytes: 0,
+      chunk_size_bytes: file.size,
+      created_at_ms: 1,
+      updated_at_ms: 2,
+      expires_at_ms: 3,
+    });
+    const renderer = await renderView();
+    act(() =>
+      renderer.root
+        .findByProps({ type: 'file' })
+        .props.onChange({ target: { files: [file], value: file.name } })
+    );
+    act(() => mocks.showConfirmation.mock.calls[0][0].onConfirm());
+    await act(async () => findButton(renderer, 'usage_stats.import_cancel')!.props.onClick());
+    expect(getText(renderer.root)).toContain('usage_stats.import_phase_cancelled');
+
+    act(() => reportProgress({ ...progress, phase: 'paused' }));
+    expect(getText(renderer.root)).toContain('usage_stats.import_phase_cancelled');
+    expect(findButton(renderer, 'usage_stats.import_resume')).toBeUndefined();
+
+    act(() => renderer.unmount());
+    pending.resolve({ format: 'jsonl', added: 0, total: 0, skipped: 0, failed: 0 });
+    await flush();
+  });
+});
+
+describe('maintenance import context lifetime', () => {
+  it('does not execute a saved import confirmation after unmount', async () => {
+    const renderer = await renderView();
+    const file = new File(['{}'], 'history.jsonl');
+    act(() =>
+      renderer.root
+        .findByProps({ type: 'file' })
+        .props.onChange({ target: { files: [file], value: file.name } })
+    );
+    const confirmation = mocks.showConfirmation.mock.calls[0][0];
+    act(() => renderer.unmount());
+    await confirmation.onConfirm();
+    expect(mocks.uploadUsageImportFile).not.toHaveBeenCalled();
+  });
+
+  it('rejects an old import confirmation after the service changes and changes back', async () => {
+    const renderer = await renderView();
+    const file = new File(['{}'], 'history.jsonl');
+    act(() =>
+      renderer.root
+        .findByProps({ type: 'file' })
+        .props.onChange({ target: { files: [file], value: file.name } })
+    );
+    const confirmation = mocks.showConfirmation.mock.calls[0][0];
+    await act(async () => {
+      renderer.update(
+        <UsageMaintenanceTransferView serviceBase="http://other.local" managementKey="other-key" />
+      );
+    });
+    await act(async () => {
+      renderer.update(
+        <UsageMaintenanceTransferView
+          serviceBase="http://manager.local"
+          managementKey="manager-key"
+        />
+      );
+    });
+    await confirmation.onConfirm();
+    expect(mocks.uploadUsageImportFile).not.toHaveBeenCalled();
+    act(() => renderer.unmount());
+  });
+
+  it('does not download a late export after the service changes', async () => {
+    const pending = deferred<{ filename: string; blob: Blob }>();
+    mocks.exportUsage.mockReturnValueOnce(pending.promise);
+    const renderer = await renderView();
+    act(() => {
+      void findButton(renderer, 'Export sanitized JSONL')!.props.onClick();
+    });
+    await act(async () => {
+      renderer.update(
+        <UsageMaintenanceTransferView serviceBase="http://other.local" managementKey="other-key" />
+      );
+    });
+    await act(async () => {
+      pending.resolve({ filename: 'old.jsonl', blob: new Blob(['{}']) });
+    });
+    expect(mocks.downloadBlob).not.toHaveBeenCalled();
+    expect(mocks.showNotification).not.toHaveBeenCalled();
+    act(() => renderer.unmount());
   });
 });
