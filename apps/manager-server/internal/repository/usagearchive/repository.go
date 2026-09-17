@@ -42,11 +42,11 @@ const (
 )
 
 var (
-	ErrNotFound           = errors.New("usage archive run not found")
-	ErrNoEvents           = errors.New("no usage events are eligible for archive")
-	ErrInvalidState       = errors.New("usage archive run is in an invalid state")
-	ErrCancelUnsafe       = errors.New("usage archive cancel is unsafe after raw deletion started")
-	ErrCancelPublished    = errors.New("usage archive cancel is unsafe after archive publication")
+	ErrNotFound              = errors.New("usage archive run not found")
+	ErrNoEvents              = errors.New("no usage events are eligible for archive")
+	ErrInvalidState          = errors.New("usage archive run is in an invalid state")
+	ErrCancelUnsafe          = errors.New("usage archive cancel is unsafe after raw deletion started")
+	ErrCancelPublished       = errors.New("usage archive cancel is unsafe after archive publication")
 	ErrMaintenanceLocked     = errors.New("usage maintenance is already active")
 	ErrCoverageIncomplete    = errors.New("usage archive coverage is incomplete")
 	ErrUnrestorableEventHash = fmt.Errorf(
@@ -1747,9 +1747,10 @@ func validateCurrentDeleteReadiness(
 		return hourlyAggregateCoverageState{}, fmt.Errorf("%w: monitoring search index is not ready", ErrCoverageIncomplete)
 	}
 
+	// Dashboard reads the permanent hourly aggregate validated above. Runtime
+	// workers no longer advance the legacy dashboard_hourly checkpoint.
 	for _, checkpoint := range []string{
 		usagerollup.AccountHistoryCheckpointName,
-		usagerollup.DashboardHourlyCheckpointName,
 	} {
 		var coverage int64
 		if err := tx.QueryRowContext(ctx, `select last_event_id

@@ -301,7 +301,7 @@ Windows PowerShell 在停止服务后运行：
 
 命令会取得 Manager Server 使用的同一进程级数据库锁，通过单一 SQLite 连接获取独占访问，依次执行 `quick_check`、外键检查、`wal_checkpoint(TRUNCATE)`、`VACUUM`、`integrity_check` 和第二次外键检查，再比较压缩前后的逻辑用量摘要。输出包含压缩前后的数据库、WAL、SHM、page 和 freelist 统计。它不会创建归档、删除 raw rows、重写归档文件、推进派生数据迁移或触碰 `data.key`。残留维护锁仍会阻断压缩：若锁属于可恢复的活动或 `failed` run，应启动 Manager Server 并继续该 run；若锁仍关联非活动或终态 run，应保留备份和日志并停止压缩以进一步诊断。不得手工删除维护锁。失败后保留数据库现场和完整备份。
 
-升级到使用无损 model 编码的版本时，Manager Server 会清空旧的 `usage_dashboard_hourly_rollups` 并重置 `dashboard_hourly` checkpoint。小时汇总启用时，后台 worker 会随后分批重建；禁用时则保持为空，直到重新启用。该格式迁移本身不会修改或删除 `usage_events`，也不会重置 account-history rollup；重建完成前相关长窗口查询会临时回退 raw events。新的编码会区分空 model、字面量 `-` 和包含前后空格的 model，避免合法的 `-` model 使整个查询回退。
+升级到使用无损 model 编码的版本时，Manager Server 会对旧的 `usage_dashboard_hourly_rollups` 执行格式重置，并重置旧 `dashboard_hourly` checkpoint。该兼容迁移不会修改或删除 `usage_events`，也不会重置 account-history rollup。当前 Dashboard 和用量分析使用永久小时 aggregate，运行时不再启动旧 Dashboard hourly worker，因此不会等待旧检查点追平。小时汇总启用时，后台 worker 分批维护的是当前永久小时 aggregate；其覆盖未就绪时，相关查询依照读路径规则回退 raw events。
 
 升级旧数据库时，Manager Server 在启动阶段执行 schema/metadata 变更和必要的派生 rollup 重置，但不扫描历史 `usage_events`。需要扫描历史事件的 cache accounting 修正会在 HTTP 服务开始监听后，以每批 1000 条的方式在后台执行。候选扫描、事件修正和过期派生行清理都使用有界事务并提交各阶段进度，进程重启后会从当前阶段继续，不会重新处理已经提交的批次；修正历史数据或清理旧 rollup 期间，读路径会回退到 raw events。
 

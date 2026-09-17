@@ -533,7 +533,6 @@ func catchUpRetentionWorkerReadiness(t *testing.T, st *store.Store) {
 		run  func(context.Context, int, int64) (store.UsageRollupCatchUpResult, error)
 	}{
 		{name: "account history", run: st.CatchUpAccountHistoryRollups},
-		{name: "dashboard hourly", run: st.CatchUpDashboardHourlyRollups},
 	} {
 		completed := false
 		for attempt := 0; attempt < 100; attempt++ {

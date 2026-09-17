@@ -1270,6 +1270,59 @@ func TestRepositoryDeleteRejectsRawRowsRemovedOutsideMaintenance(t *testing.T) {
 	}
 }
 
+func TestRepositoryDeleteDoesNotRequireLegacyDashboardCheckpoint(t *testing.T) {
+	for _, checkpointState := range []string{"missing", "behind"} {
+		t.Run(checkpointState, func(t *testing.T) {
+			db, repository, run := prepareVerifiedArchiveRun(t, "legacy-dashboard-"+checkpointState)
+			ctx := context.Background()
+			if checkpointState == "missing" {
+				archiveTestExec(t, db, `delete from usage_rollup_checkpoints where name = ?`,
+					usagerollup.DashboardHourlyCheckpointName)
+			} else {
+				result, err := usagerollup.New(db).CatchUpDashboardHourly(ctx, 100, 50_008)
+				if err != nil || result.Pending {
+					t.Fatalf("prepare legacy dashboard checkpoint: result=%#v err=%v", result, err)
+				}
+				archiveTestExec(t, db, `update usage_rollup_checkpoints set last_event_id = ? where name = ?`,
+					run.TargetEventID-1, usagerollup.DashboardHourlyCheckpointName)
+			}
+
+			if _, err := repository.BeginDelete(ctx, run.ID, 50_009); err != nil {
+				t.Fatalf("begin delete with %s legacy dashboard checkpoint: %v", checkpointState, err)
+			}
+			first, err := repository.DeleteBatch(ctx, run.ID, 1, 50_010)
+			if err != nil {
+				t.Fatalf("first bounded delete: %v", err)
+			}
+			if first.Completed || first.Run.Status != StatusDeleting || first.Run.DeletedEventCount != 1 {
+				t.Fatalf("first bounded delete = %#v", first)
+			}
+			// Legacy state also remains irrelevant when a later batch rechecks readiness.
+			archiveTestExec(t, db, `delete from usage_rollup_checkpoints where name = ?`,
+				usagerollup.DashboardHourlyCheckpointName)
+			last, err := repository.DeleteBatch(ctx, run.ID, 1, 50_011)
+			if err != nil {
+				t.Fatalf("last bounded delete: %v", err)
+			}
+			if !last.Completed || last.Run.Status != StatusCompleted || last.Run.DeletedEventCount != run.EventCount {
+				t.Fatalf("completed bounded delete = %#v", last)
+			}
+			var rawCount, retainedIdentities, deletedReferences int64
+			if err := db.QueryRowContext(ctx, `select
+				(select count(*) from usage_events),
+				(select count(*) from usage_event_identity_ledger where raw_event_id is null),
+				(select count(*) from usage_archive_event_refs where run_id = ? and raw_deleted_at_ms is not null)`,
+				run.ID,
+			).Scan(&rawCount, &retainedIdentities, &deletedReferences); err != nil {
+				t.Fatalf("inspect completed archive: %v", err)
+			}
+			if rawCount != 0 || retainedIdentities != run.EventCount || deletedReferences != run.EventCount {
+				t.Fatalf("completed archive counts: raw=%d identities=%d deleted_refs=%d", rawCount, retainedIdentities, deletedReferences)
+			}
+		})
+	}
+}
+
 func TestRepositoryDeleteRequiresEveryCurrentDerivedCoverageGate(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -1535,17 +1588,6 @@ func TestRepositoryDeleteRequiresEveryCurrentDerivedCoverageGate(t *testing.T) {
 				}
 			},
 		},
-		{
-			name: "dashboard hourly checkpoint",
-			mutate: func(t *testing.T, db *sql.DB, run Run) func() {
-				archiveTestExec(t, db, `update usage_rollup_checkpoints set last_event_id = ?
-					where name = ?`, run.TargetEventID-1, usagerollup.DashboardHourlyCheckpointName)
-				return func() {
-					archiveTestExec(t, db, `update usage_rollup_checkpoints set last_event_id = ?
-						where name = ?`, run.TargetEventID, usagerollup.DashboardHourlyCheckpointName)
-				}
-			},
-		},
 	}
 
 	for _, test := range tests {
@@ -1558,6 +1600,22 @@ func TestRepositoryDeleteRequiresEveryCurrentDerivedCoverageGate(t *testing.T) {
 			restore()
 			if _, err := repository.BeginDelete(context.Background(), run.ID, 40_001); err != nil {
 				t.Fatalf("begin delete after restoring %s: %v", test.name, err)
+			}
+			restore = test.mutate(t, db, run)
+			if _, err := repository.DeleteBatch(context.Background(), run.ID, 100, 40_002); !errors.Is(err, ErrCoverageIncomplete) {
+				t.Fatalf("delete batch with broken %s error = %v, want coverage incomplete", test.name, err)
+			}
+			var rawCount int64
+			if err := db.QueryRow(`select count(*) from usage_events`).Scan(&rawCount); err != nil {
+				t.Fatalf("inspect raw events after rejected delete: %v", err)
+			}
+			if rawCount != run.EventCount {
+				t.Fatalf("rejected delete changed raw count: got %d, want %d", rawCount, run.EventCount)
+			}
+			restore()
+			result, err := repository.DeleteBatch(context.Background(), run.ID, 100, 40_003)
+			if err != nil || !result.Completed || result.Run.DeletedEventCount != run.EventCount {
+				t.Fatalf("delete batch after restoring %s: result=%#v err=%v", test.name, result, err)
 			}
 		})
 	}
@@ -1676,7 +1734,6 @@ func catchUpDeleteReadiness(t *testing.T, ctx context.Context, db *sql.DB, nowMS
 		run  func(context.Context, int, int64) (usagerollup.CatchUpResult, error)
 	}{
 		{name: "account history", run: rollups.CatchUpAccountHistory},
-		{name: "dashboard hourly", run: rollups.CatchUpDashboardHourly},
 	} {
 		completed := false
 		for attempt := 0; attempt < 10; attempt++ {
