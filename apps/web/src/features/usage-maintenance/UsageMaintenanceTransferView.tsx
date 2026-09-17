@@ -7,9 +7,12 @@ import {
   useState,
   type ChangeEvent,
   type DragEvent,
+  type Ref,
 } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/Button';
+import { Drawer } from '@/components/ui/Drawer';
+import { IconArrowUpFromLine, IconDownload, IconRefreshCw } from '@/components/ui/icons';
 import {
   UsageImportProgressActions,
   UsageImportProgressView,
@@ -40,6 +43,14 @@ import styles from './UsageMaintenanceTransferView.module.scss';
 type Props = {
   serviceBase: string;
   managementKey?: string;
+  panel: 'import' | 'import-session' | 'export' | null;
+  sessionId: string | null;
+  refreshToken: number;
+  onOpenPanel: (panel: 'import' | 'import-session' | 'export', sessionId?: string) => void;
+  onClosePanel: () => void;
+  onUsageChanged?: () => void;
+  drawerClassName?: string;
+  drawerBodyRef?: Ref<HTMLDivElement>;
 };
 
 type ActiveTask = {
@@ -150,14 +161,28 @@ const resultSummary = (
   });
 };
 
-const statusTone = (status: UsageImportSessionStatus) => {
-  if (status === 'completed') return styles.success;
+const hasImportIssues = (result?: UsageImportResponse) =>
+  Boolean((result?.failed ?? 0) > 0 || (result?.unsupported ?? 0) > 0 || result?.warnings?.length);
+
+const statusTone = (status: UsageImportSessionStatus, result?: UsageImportResponse) => {
+  if (status === 'completed') return hasImportIssues(result) ? styles.warning : styles.success;
   if (status === 'failed') return styles.danger;
   if (status === 'cancelled') return styles.neutral;
   return styles.info;
 };
 
-export function UsageMaintenanceTransferView({ serviceBase, managementKey }: Props) {
+export function UsageMaintenanceTransferView({
+  serviceBase,
+  managementKey,
+  panel,
+  sessionId: selectedSessionId,
+  refreshToken,
+  onOpenPanel,
+  onClosePanel,
+  onUsageChanged,
+  drawerClassName,
+  drawerBodyRef,
+}: Props) {
   const { t, i18n } = useTranslation();
   const { showConfirmation, showNotification } = useNotificationStore();
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -171,7 +196,18 @@ export function UsageMaintenanceTransferView({ serviceBase, managementKey }: Pro
   const [cancelPending, setCancelPending] = useState(false);
   const [sessionList, setSessionList] = useState<UsageImportSessionList | null>(null);
   const [activeTask, setActiveTask] = useState<ActiveTask | null>(null);
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [pendingImport, setPendingImport] = useState<{
+    file: File;
+    sessionId?: string;
+    generation: number;
+  } | null>(null);
+  const pendingImportRef = useRef(pendingImport);
+  const panelRef = useRef(panel);
+  const [detailSession, setDetailSession] = useState<UsageImportSession | null>(null);
+  const [detailError, setDetailError] = useState<string | null>(null);
+  useLayoutEffect(() => {
+    panelRef.current = panel;
+  }, [panel]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -182,7 +218,11 @@ export function UsageMaintenanceTransferView({ serviceBase, managementKey }: Pro
     mountedRef.current = true;
     contextGenerationRef.current += 1;
     setActiveTask(null);
-    setSelectedSessionId(null);
+    setPendingImport(null);
+    pendingImportRef.current = null;
+    pendingSessionIdRef.current = undefined;
+    setDetailSession(null);
+    setDetailError(null);
     setSessionList(null);
     setLoading(true);
     setCancelPending(false);
@@ -244,6 +284,34 @@ export function UsageMaintenanceTransferView({ serviceBase, managementKey }: Pro
       sessionRequestRef.current = null;
     };
   }, [loadSessions]);
+
+  useEffect(() => {
+    if (refreshToken > 0) void loadSessions(true);
+  }, [loadSessions, refreshToken]);
+
+  useEffect(() => {
+    setDetailSession(null);
+    setDetailError(null);
+    if (
+      !selectedSessionId ||
+      !sessionList ||
+      sessionList.sessions.some((item) => item.id === selectedSessionId)
+    )
+      return;
+    const controller = new AbortController();
+    void usageServiceApi
+      .getUsageImportSession(serviceBase, selectedSessionId, managementKey, controller.signal)
+      .then((session) => {
+        if (controller.signal.aborted) return;
+        if (!isImportSession(session) || session.id !== selectedSessionId)
+          throw new Error('invalid import session response');
+        setDetailSession(session);
+      })
+      .catch((cause: unknown) => {
+        if (!controller.signal.aborted) setDetailError(formatImportError(cause, t));
+      });
+    return () => controller.abort();
+  }, [selectedSessionId, sessionList, serviceBase, managementKey, t]);
 
   const shouldPoll = Boolean(
     activeTask?.progress.phase === 'processing' ||
@@ -310,7 +378,7 @@ export function UsageMaintenanceTransferView({ serviceBase, managementKey }: Pro
             skipped: result.skipped ?? 0,
             failed: result.failed ?? 0,
           }),
-          (result.failed ?? 0) > 0 || (result.unsupported ?? 0) > 0 ? 'warning' : 'success'
+          hasImportIssues(result) ? 'warning' : 'success'
         );
         await loadSessions(true);
       } catch (cause) {
@@ -336,45 +404,47 @@ export function UsageMaintenanceTransferView({ serviceBase, managementKey }: Pro
       } finally {
         if (operationID === operationIDRef.current) {
           operationRef.current = null;
+          onUsageChanged?.();
         }
       }
     },
-    [loadSessions, managementKey, serviceBase, showNotification, t, updateProgress]
+    [loadSessions, managementKey, onUsageChanged, serviceBase, showNotification, t, updateProgress]
   );
 
-  const selectFile = useCallback(
-    (file: File, sessionId?: string) => {
-      const generation = contextGenerationRef.current;
-      pendingSessionIdRef.current = sessionId;
-      showConfirmation({
-        title: sessionId
-          ? t('usage_maintenance.transfer_resume_confirm_title', {
-              defaultValue: 'Resume this import session?',
-            })
-          : t('usage_maintenance.transfer_import_confirm_title', {
-              defaultValue: 'Import usage data?',
-            }),
-        message: t('usage_maintenance.transfer_import_confirm_message', {
-          defaultValue:
-            'Import {{name}}? Recognized duplicates will be skipped. Resume interrupted uploads with the original file.',
-          name: file.name,
-        }),
-        confirmText: t('usage_maintenance.transfer_import_confirm_button', {
-          defaultValue: sessionId ? 'Resume upload' : 'Start import',
-        }),
-        variant: 'primary',
-        onConfirm: () => {
-          if (!mountedRef.current || generation !== contextGenerationRef.current) return;
-          pendingSessionIdRef.current = undefined;
-          void runImport(file, sessionId);
-        },
-        onCancel: () => {
-          pendingSessionIdRef.current = undefined;
-        },
-      });
-    },
-    [runImport, showConfirmation, t]
-  );
+  const selectFile = (file: File, sessionId?: string) => {
+    if (operationRef.current || cancelPending) return;
+    if (!isUsageImportFile(file)) {
+      showNotification(t('usage_maintenance.transfer_invalid_file'), 'error');
+      return;
+    }
+    const pending = { file, sessionId, generation: contextGenerationRef.current };
+    pendingSessionIdRef.current = undefined;
+    pendingImportRef.current = pending;
+    setPendingImport(pending);
+    onOpenPanel('import');
+  };
+
+  const confirmImport = () => {
+    const pending = pendingImport;
+    if (
+      !pending ||
+      pendingImportRef.current !== pending ||
+      panelRef.current !== 'import' ||
+      !mountedRef.current ||
+      pending.generation !== contextGenerationRef.current
+    )
+      return;
+    pendingImportRef.current = null;
+    setPendingImport(null);
+    void runImport(pending.file, pending.sessionId);
+  };
+
+  const closePanel = () => {
+    pendingImportRef.current = null;
+    setPendingImport(null);
+    pendingSessionIdRef.current = undefined;
+    onClosePanel();
+  };
 
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -448,7 +518,7 @@ export function UsageMaintenanceTransferView({ serviceBase, managementKey }: Pro
                   ...current.progress,
                   sessionId: result.id,
                   filename: result.filename,
-                  phase: 'cancelled',
+                  phase: result.status === 'completed' ? 'completed' : 'cancelled',
                   status: result.status,
                   uploadedBytes: result.received_bytes,
                   totalBytes: result.size_bytes,
@@ -468,8 +538,10 @@ export function UsageMaintenanceTransferView({ serviceBase, managementKey }: Pro
       if (!mountedRef.current || generation !== contextGenerationRef.current) return;
       showNotification(formatImportError(cause, t), 'error');
     } finally {
-      if (mountedRef.current && generation === contextGenerationRef.current)
+      if (mountedRef.current && generation === contextGenerationRef.current) {
         setCancelPending(false);
+        onUsageChanged?.();
+      }
     }
   };
 
@@ -485,6 +557,7 @@ export function UsageMaintenanceTransferView({ serviceBase, managementKey }: Pro
     const task = activeTask;
     const current = activeTask?.progress;
     if (current?.sessionId === session.id) {
+      onOpenPanel('import-session', session.id);
       if (
         current.phase === 'paused' ||
         (current.phase === 'failed' && current.retryable !== false)
@@ -496,6 +569,7 @@ export function UsageMaintenanceTransferView({ serviceBase, managementKey }: Pro
       return;
     }
     if (session.status === 'processing') {
+      onOpenPanel('import-session', session.id);
       void loadSessions(true);
       return;
     }
@@ -503,6 +577,8 @@ export function UsageMaintenanceTransferView({ serviceBase, managementKey }: Pro
       resumableStatuses.has(session.status) ||
       (session.status === 'failed' && session.retryable)
     ) {
+      if (operationRef.current || cancelPending) return;
+      onOpenPanel('import-session', session.id);
       pendingSessionIdRef.current = session.id;
       inputRef.current?.click();
     }
@@ -543,100 +619,416 @@ export function UsageMaintenanceTransferView({ serviceBase, managementKey }: Pro
     resumableStatuses.has(session.status) ||
     (session.status === 'failed' && session.retryable === true);
 
-  if (loading && !sessionList) {
-    return (
-      <div className={styles.loading}>{t('common.loading', { defaultValue: 'Loading…' })}</div>
-    );
-  }
-
   const sessions = sessionList?.sessions ?? [];
-  const activeProgress = activeTask?.progress;
-  const activeProgressSession = activeProgress?.sessionId
-    ? sessions.find((session) => session.id === activeProgress.sessionId)
-    : activeSession;
+  const selectedSession =
+    sessions.find((session) => session.id === selectedSessionId) ?? detailSession;
+  const showingActiveTask = Boolean(
+    activeTask &&
+    !pendingImport &&
+    (panel === 'import' ||
+      (panel === 'import-session' && activeTask.progress.sessionId === selectedSessionId))
+  );
+  const activeProgress = showingActiveTask ? activeTask?.progress : undefined;
+  const displayedResult =
+    activeProgress?.result ?? (showingActiveTask ? activeSession?.result : selectedSession?.result);
+  const operationBusy = Boolean(
+    activeTask && ['preparing', 'uploading', 'processing'].includes(activeTask.progress.phase)
+  );
+  const displayStatus = (session: UsageImportSession) =>
+    session.status === 'completed' && hasImportIssues(session.result)
+      ? t('usage_maintenance.import_partial')
+      : statusLabel(session.status);
+  const confirmCancelImport = () => {
+    const generation = contextGenerationRef.current;
+    const cancellationOperationID = operationIDRef.current;
+    showConfirmation({
+      title: t('usage_stats.import_cancel'),
+      message: t('usage_maintenance.import_cancel_note'),
+      confirmText: t('usage_stats.import_cancel'),
+      cancelText: t('common.back'),
+      variant: 'danger',
+      onConfirm: () => {
+        if (
+          mountedRef.current &&
+          generation === contextGenerationRef.current &&
+          cancellationOperationID === operationIDRef.current
+        ) {
+          void cancelImport();
+        }
+      },
+    });
+  };
 
   return (
     <div className={styles.view}>
-      <header className={styles.pageHeader}>
-        <div>
-          <h2>
-            {t('usage_maintenance.transfer_page_title', { defaultValue: 'Import / export usage' })}
-          </h2>
-          <p>
-            {t('usage_maintenance.transfer_page_subtitle', {
-              defaultValue: 'Move online usage data with resumable imports and JSONL exports.',
-            })}
-          </p>
-        </div>
-        <div className={styles.headerActions}>
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => void loadSessions(true)}
-            disabled={refreshing}
-          >
-            {t('common.refresh', { defaultValue: 'Refresh' })}
-          </Button>
-        </div>
-      </header>
-
+      <input
+        ref={inputRef}
+        type="file"
+        accept=".json,.jsonl,.ndjson,.txt,application/json,application/x-ndjson,text/plain"
+        className={styles.hiddenInput}
+        onChange={handleFileChange}
+      />
       {error ? (
         <div className={styles.error} role="alert">
           {error}
         </div>
       ) : null}
-
-      {activeProgress ? (
-        <div className={styles.activeCard} aria-live="polite">
-          <UsageImportProgressView progress={activeProgress} />
-          <UsageImportProgressActions
-            progress={activeProgress}
-            busy={cancelPending}
-            onPause={pauseImport}
-            onCancel={() => void cancelImport()}
-            onResume={() => {
-              if (activeTask)
-                void runImport(activeTask.file, activeProgress.sessionId || undefined);
-            }}
-          />
+      {activeTask && !['completed', 'cancelled'].includes(activeTask.progress.phase) ? (
+        <div className={styles.activity}>
+          <div>
+            <strong>{activeTask.file.name}</strong>
+            <span>{t(`usage_stats.import_phase_${activeTask.progress.phase}`)}</span>
+          </div>
+          <Button size="sm" variant="secondary" onClick={() => onOpenPanel('import')}>
+            {t('usage_maintenance.details')}
+          </Button>
         </div>
       ) : null}
-
-      {activeProgressSession?.result ? (
-        <div className={styles.resultCard}>
-          <strong>
-            {t('usage_maintenance.transfer_last_result', { defaultValue: 'Latest result' })}
-          </strong>
-          <span>{resultSummary(activeProgressSession.result, t)}</span>
-          {(activeProgressSession.result.unsupported ?? 0) > 0 ? (
-            <span>
-              {t('usage_maintenance.transfer_unsupported_count', {
-                defaultValue: '{{count}} unsupported',
-                count: activeProgressSession.result.unsupported,
-              })}
-            </span>
-          ) : null}
+      <section className={styles.sessions} aria-busy={loading || refreshing}>
+        <div className={styles.sectionHeader}>
+          <h2>{t('usage_maintenance.transfer_sessions_title')}</h2>
+          <span>
+            {t('usage_maintenance.transfer_session_count', {
+              current: sessionList?.active_sessions ?? 0,
+              total: sessionList?.max_sessions ?? 0,
+            })}
+          </span>
         </div>
-      ) : null}
-
-      <div className={styles.layout}>
-        <div className={styles.leftColumn}>
-          <section className={styles.card}>
-            <div className={styles.sectionHeader}>
-              <h2>
-                {t('usage_maintenance.transfer_import_title', { defaultValue: 'Import usage' })}
-              </h2>
-              <span className={`${styles.pill} ${styles.info}`}>
-                {t('usage_maintenance.transfer_resumable', { defaultValue: 'Resumable' })}
-              </span>
+        <table className={styles.sessionTable}>
+          <thead>
+            <tr>
+              <th>{t('usage_maintenance.import_filename')}</th>
+              <th>{t('usage_maintenance.upload_progress')}</th>
+              <th>{t('usage_maintenance.transfer_last_result')}</th>
+              <th>{t('usage_maintenance.technical_status')}</th>
+              <th>
+                <span className={styles.srOnly}>{t('usage_maintenance.record_actions')}</span>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {sessions.map((session) => (
+              <tr key={session.id} data-session-id={session.id}>
+                <td data-label={t('usage_maintenance.import_filename')}>
+                  <button
+                    type="button"
+                    className={styles.filename}
+                    onClick={() => onOpenPanel('import-session', session.id)}
+                  >
+                    {session.filename}
+                  </button>
+                  <small>{formatDateTime(new Date(session.updated_at_ms), i18n.language)}</small>
+                </td>
+                <td data-label={t('usage_maintenance.upload_progress')}>
+                  <span>{progressPercent(session)}%</span>
+                  <div
+                    className={styles.miniProgress}
+                    role="progressbar"
+                    aria-label={t('usage_maintenance.upload_progress')}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={progressPercent(session)}
+                  >
+                    <i style={{ width: `${progressPercent(session)}%` }} />
+                  </div>
+                  <small>
+                    {formatFileSize(session.received_bytes)} / {formatFileSize(session.size_bytes)}
+                  </small>
+                </td>
+                <td data-label={t('usage_maintenance.transfer_last_result')}>
+                  <span>{resultSummary(session.result, t)}</span>
+                </td>
+                <td data-label={t('usage_maintenance.technical_status')}>
+                  <span className={`${styles.pill} ${statusTone(session.status, session.result)}`}>
+                    {displayStatus(session)}
+                  </span>
+                </td>
+                <td className={styles.rowActions}>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => onOpenPanel('import-session', session.id)}
+                  >
+                    {t('usage_maintenance.details')}
+                  </Button>
+                  {sessionHasAction(session) ? (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={
+                        cancelPending ||
+                        (operationBusy &&
+                          activeTask?.progress.sessionId !== session.id &&
+                          session.status !== 'processing')
+                      }
+                      onClick={() => handleSessionAction(session)}
+                    >
+                      {sessionActionLabel(session)}
+                    </Button>
+                  ) : null}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {sessions.length === 0 ? (
+          <div className={styles.empty}>
+            {loading ? t('common.loading') : t('usage_maintenance.transfer_no_sessions')}
+            {!loading && !error ? (
+              <Button size="sm" onClick={() => onOpenPanel('import')}>
+                {t('usage_maintenance.import_file')}
+              </Button>
+            ) : null}
+            {error ? (
+              <Button size="sm" variant="secondary" onClick={() => void loadSessions()}>
+                {t('common.retry')}
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
+        <p className={styles.listNote}>{t('usage_maintenance.recent_imports_note')}</p>
+      </section>
+      <Drawer
+        open={panel !== null}
+        onClose={closePanel}
+        width="min(600px, 100vw)"
+        className={drawerClassName}
+        bodyRef={drawerBodyRef}
+        title={
+          panel === 'export'
+            ? t('usage_maintenance.export_online')
+            : pendingImport
+              ? t(
+                  pendingImport.sessionId
+                    ? 'usage_maintenance.transfer_resume_confirm_title'
+                    : 'usage_maintenance.transfer_import_confirm_title'
+                )
+              : panel === 'import-session'
+                ? t('usage_maintenance.import_details')
+                : t('usage_maintenance.import_file')
+        }
+        footer={
+          <div className={styles.drawerActions}>
+            {panel === 'export' ? (
+              <>
+                <Button variant="secondary" onClick={closePanel}>
+                  {t('common.close')}
+                </Button>
+                <Button loading={exporting} onClick={() => void handleExport()}>
+                  <IconDownload size={16} />
+                  {t('usage_maintenance.transfer_export_button')}
+                </Button>
+              </>
+            ) : pendingImport ? (
+              <>
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    pendingImportRef.current = null;
+                    setPendingImport(null);
+                  }}
+                >
+                  {t('common.back')}
+                </Button>
+                <Button onClick={confirmImport}>
+                  {t('usage_maintenance.transfer_import_confirm_button')}
+                </Button>
+              </>
+            ) : activeProgress ? (
+              <>
+                <UsageImportProgressActions
+                  progress={activeProgress}
+                  busy={cancelPending}
+                  onPause={pauseImport}
+                  onCancel={confirmCancelImport}
+                  onResume={() => {
+                    if (activeTask)
+                      void runImport(activeTask.file, activeProgress.sessionId || undefined);
+                  }}
+                />
+                <Button
+                  variant={
+                    activeProgress.phase === 'completed' || activeProgress.phase === 'cancelled'
+                      ? 'primary'
+                      : 'secondary'
+                  }
+                  onClick={closePanel}
+                >
+                  {activeProgress.phase === 'completed' || activeProgress.phase === 'cancelled'
+                    ? t('usage_maintenance.done')
+                    : t('usage_maintenance.minimize')}
+                </Button>
+              </>
+            ) : (
+              <>
+                {panel === 'import-session' &&
+                selectedSession &&
+                sessionHasAction(selectedSession) ? (
+                  <Button
+                    onClick={() => handleSessionAction(selectedSession)}
+                    disabled={cancelPending || operationBusy}
+                  >
+                    {sessionActionLabel(selectedSession)}
+                  </Button>
+                ) : null}
+                <Button variant="secondary" onClick={closePanel}>
+                  {t('common.close')}
+                </Button>
+              </>
+            )}
+          </div>
+        }
+      >
+        {panel === 'export' ? (
+          <div className={styles.drawerBody}>
+            <IconDownload size={26} />
+            <h3>{t('usage_maintenance.transfer_export_title')}</h3>
+            <p>{t('usage_maintenance.transfer_export_note')}</p>
+          </div>
+        ) : pendingImport ? (
+          <div className={styles.drawerBody}>
+            <div className={styles.fileSummary}>
+              <IconArrowUpFromLine size={22} />
+              <strong>{pendingImport.file.name}</strong>
+              <span>{formatFileSize(pendingImport.file.size)}</span>
             </div>
-            <input
-              ref={inputRef}
-              type="file"
-              accept=".json,.jsonl,.ndjson,.txt,application/json,application/x-ndjson,text/plain"
-              className={styles.hiddenInput}
-              onChange={handleFileChange}
-            />
+            <p>
+              {t('usage_maintenance.transfer_import_confirm_message', {
+                name: pendingImport.file.name,
+              })}
+            </p>
+            <p className={styles.muted}>{t('usage_maintenance.transfer_dedupe_note')}</p>
+          </div>
+        ) : activeProgress ? (
+          <div className={styles.drawerBody}>
+            {activeProgress.phase === 'completed' ? (
+              <div className={hasImportIssues(displayedResult) ? styles.warning : styles.success}>
+                <h3>
+                  {t(
+                    hasImportIssues(displayedResult)
+                      ? 'usage_maintenance.import_partial'
+                      : 'usage_maintenance.import_complete'
+                  )}
+                </h3>
+              </div>
+            ) : null}
+            <UsageImportProgressView progress={activeProgress} />
+            {displayedResult ? <p>{resultSummary(displayedResult, t)}</p> : null}
+            {displayedResult?.warnings?.length ? (
+              <details>
+                <summary>{t('usage_maintenance.import_warnings')}</summary>
+                <ul>
+                  {displayedResult.warnings.map((warning, index) => (
+                    <li key={index}>{warning}</li>
+                  ))}
+                </ul>
+              </details>
+            ) : null}
+            <p className={styles.muted}>{t('usage_maintenance.import_cancel_note')}</p>
+            {!operationBusy && !cancelPending ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setActiveTask(null);
+                  openFilePicker();
+                }}
+              >
+                {t('usage_maintenance.import_another')}
+              </Button>
+            ) : null}
+          </div>
+        ) : panel === 'import-session' ? (
+          selectedSession ? (
+            <div className={styles.drawerBody}>
+              <span
+                className={`${styles.pill} ${statusTone(selectedSession.status, selectedSession.result)}`}
+              >
+                {displayStatus(selectedSession)}
+              </span>
+              <h3 className={styles.fileTitle}>{selectedSession.filename}</h3>
+              <div>
+                <p>
+                  {t('usage_maintenance.upload_progress')} · {progressPercent(selectedSession)}%
+                </p>
+                <div
+                  className={styles.miniProgress}
+                  role="progressbar"
+                  aria-label={t('usage_maintenance.upload_progress')}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={progressPercent(selectedSession)}
+                >
+                  <i style={{ width: `${progressPercent(selectedSession)}%` }} />
+                </div>
+                <p className={styles.muted}>
+                  {formatFileSize(selectedSession.received_bytes)} /{' '}
+                  {formatFileSize(selectedSession.size_bytes)}
+                </p>
+              </div>
+              {selectedSession.status === 'processing' ? (
+                <p className={styles.muted}>{t('usage_stats.import_processing_hint')}</p>
+              ) : null}
+              <p>{resultSummary(selectedSession.result, t)}</p>
+              {selectedSession.result?.warnings?.length ? (
+                <details>
+                  <summary>{t('usage_maintenance.import_warnings')}</summary>
+                  <ul>
+                    {selectedSession.result.warnings.map((warning, index) => (
+                      <li key={index}>{warning}</li>
+                    ))}
+                  </ul>
+                </details>
+              ) : null}
+              {selectedSession.status === 'failed' ? (
+                <p className={styles.warning}>
+                  {t(
+                    selectedSession.retryable
+                      ? 'usage_maintenance.transfer_retryable'
+                      : 'usage_maintenance.transfer_failed'
+                  )}
+                </p>
+              ) : null}
+              {selectedSession.status === 'cancelled' ? (
+                <p className={styles.muted}>{t('usage_maintenance.import_cancel_note')}</p>
+              ) : null}
+              <details className={styles.technical}>
+                <summary>{t('usage_maintenance.workspace_technical')}</summary>
+                <dl>
+                  <div>
+                    <dt>{t('usage_maintenance.technical_run_id')}</dt>
+                    <dd>{selectedSession.id}</dd>
+                  </div>
+                  <div>
+                    <dt>{t('usage_maintenance.transfer_chunk')}</dt>
+                    <dd>{formatFileSize(selectedSession.chunk_size_bytes)}</dd>
+                  </div>
+                  <div>
+                    <dt>{t('usage_maintenance.transfer_expires')}</dt>
+                    <dd>
+                      {formatDateTime(new Date(selectedSession.expires_at_ms), i18n.language)}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>{t('usage_maintenance.transfer_retryable_label')}</dt>
+                    <dd>{t(selectedSession.retryable ? 'common.yes' : 'common.no')}</dd>
+                  </div>
+                </dl>
+              </details>
+            </div>
+          ) : (
+            <div className={styles.drawerBody}>
+              <p>{detailError ?? t('common.loading')}</p>
+              {detailError ? (
+                <Button variant="secondary" onClick={() => void loadSessions(true)}>
+                  <IconRefreshCw size={16} />
+                  {t('common.retry')}
+                </Button>
+              ) : null}
+            </div>
+          )
+        ) : (
+          <div className={styles.drawerBody}>
             <div
               className={`${styles.uploadBox} ${dragging ? styles.uploadBoxDragging : ''}`}
               role="button"
@@ -656,219 +1048,44 @@ export function UsageMaintenanceTransferView({ serviceBase, managementKey }: Pro
               onDragLeave={() => setDragging(false)}
               onDrop={handleDrop}
             >
-              <span className={styles.cloud} aria-hidden="true">
-                ☁
-              </span>
-              <strong>
-                {t('usage_maintenance.transfer_drop_title', {
-                  defaultValue: 'Drop a file here, or choose a file',
-                })}
-              </strong>
-              <span>
-                {t('usage_maintenance.transfer_supported_formats', {
-                  defaultValue: 'JSONL, JSON arrays and earlier usage exports',
-                })}
-              </span>
-              <small>
-                {t('usage_maintenance.transfer_chunk_note', {
-                  defaultValue:
-                    'Server import quota: {{quota}}. Choose the original file to resume an interrupted upload.',
-                  quota: formatFileSize(sessionList?.disk_quota_bytes ?? 0),
-                })}
-              </small>
+              <IconArrowUpFromLine size={28} />
+              <strong>{t('usage_maintenance.transfer_drop_title')}</strong>
+              <span>{t('usage_maintenance.transfer_supported_formats')}</span>
             </div>
-            <details className={styles.uploadDetails}>
-              <summary>
-                {t('usage_maintenance.transfer_upload_details', {
-                  defaultValue: 'Upload limits and technical details',
-                })}
-              </summary>
-              <div className={styles.statGrid}>
-                <div className={styles.statBox}>
-                  <span>
-                    {t('usage_maintenance.transfer_chunk', { defaultValue: 'Upload chunk size' })}
-                  </span>
-                  <strong>{formatFileSize(sessionList?.chunk_size_bytes ?? 0)}</strong>
+            <p className={styles.muted}>
+              {t('usage_maintenance.transfer_chunk_note', {
+                quota: sessionList ? formatFileSize(sessionList.disk_quota_bytes) : '—',
+              })}
+            </p>
+            <p className={styles.muted}>{t('usage_maintenance.transfer_dedupe_note')}</p>
+            <details className={styles.technical}>
+              <summary>{t('usage_maintenance.transfer_upload_details')}</summary>
+              <dl>
+                <div>
+                  <dt>{t('usage_maintenance.transfer_chunk')}</dt>
+                  <dd>{sessionList ? formatFileSize(sessionList.chunk_size_bytes) : '—'}</dd>
                 </div>
-                <div className={styles.statBox}>
-                  <span>
-                    {t('usage_maintenance.transfer_disk_quota', { defaultValue: 'Disk quota' })}
-                  </span>
-                  <strong>{formatFileSize(sessionList?.disk_quota_bytes ?? 0)}</strong>
+                <div>
+                  <dt>{t('usage_maintenance.transfer_disk_quota')}</dt>
+                  <dd>{sessionList ? formatFileSize(sessionList.disk_quota_bytes) : '—'}</dd>
                 </div>
-                <div className={styles.statBox}>
-                  <span>
-                    {t('usage_maintenance.transfer_concurrent', {
-                      defaultValue: 'Active sessions',
-                    })}
-                  </span>
-                  <strong>
+                <div>
+                  <dt>{t('usage_maintenance.transfer_concurrent')}</dt>
+                  <dd>
                     {sessionList
                       ? `${sessionList.active_sessions} / ${sessionList.max_sessions}`
                       : '—'}
-                  </strong>
+                  </dd>
                 </div>
-                <div className={styles.statBox}>
-                  <span>
-                    {t('usage_maintenance.transfer_expires', { defaultValue: 'Session lifetime' })}
-                  </span>
-                  <strong>{formatTTL(sessionList?.ttl_seconds ?? 0, t)}</strong>
+                <div>
+                  <dt>{t('usage_maintenance.transfer_expires')}</dt>
+                  <dd>{sessionList ? formatTTL(sessionList.ttl_seconds, t) : '—'}</dd>
                 </div>
-              </div>
+              </dl>
             </details>
-            <p className={styles.infoNote}>
-              {t('usage_maintenance.transfer_dedupe_note', {
-                defaultValue:
-                  'Imports match records using identifiers in the file and skip recognized duplicates. Choose the original file to resume an upload.',
-              })}
-            </p>
-          </section>
-
-          <section className={styles.card}>
-            <h2>
-              {t('usage_maintenance.transfer_export_title', { defaultValue: 'Export usage' })}
-            </h2>
-            <p>
-              {t('usage_maintenance.transfer_export_note', {
-                defaultValue:
-                  'Export a sanitized JSONL snapshot of all current online details. It excludes archived details already cleaned up and does not replace a complete disaster-recovery backup.',
-              })}
-            </p>
-            <Button onClick={() => void handleExport()} loading={exporting}>
-              ⇩{' '}
-              {t('usage_maintenance.transfer_export_button', {
-                defaultValue: 'Export sanitized JSONL',
-              })}
-            </Button>
-          </section>
-        </div>
-
-        <section className={styles.card}>
-          <div className={styles.sectionHeader}>
-            <h2>
-              {t('usage_maintenance.transfer_sessions_title', { defaultValue: 'Import sessions' })}
-            </h2>
-            <span className={styles.muted}>
-              {t('usage_maintenance.transfer_session_count', {
-                defaultValue: 'Current {{current}} / {{total}}',
-                current: sessionList?.active_sessions ?? 0,
-                total: sessionList?.max_sessions ?? 0,
-              })}
-            </span>
           </div>
-
-          <div className={styles.sessionList}>
-            {sessions.map((session) => (
-              <article
-                key={session.id}
-                data-session-id={session.id}
-                className={`${styles.sessionRecord} ${selectedSessionId === session.id ? styles.selectedRecord : ''}`}
-              >
-                <div className={styles.sessionHeader}>
-                  <div>
-                    <strong className={styles.filename} title={session.filename}>
-                      {session.filename}
-                    </strong>
-                    <span>
-                      {formatFileSize(session.size_bytes)} ·{' '}
-                      {formatDateTime(new Date(session.updated_at_ms), i18n.language)}
-                    </span>
-                  </div>
-                  <span className={`${styles.pill} ${statusTone(session.status)}`}>
-                    {statusLabel(session.status)}
-                  </span>
-                </div>
-                {session.result || session.status === 'failed' ? (
-                  <p className={styles.muted}>
-                    {session.status === 'failed'
-                      ? session.retryable
-                        ? t('usage_maintenance.transfer_retryable', { defaultValue: 'Retryable' })
-                        : t('usage_maintenance.transfer_failed', {
-                            defaultValue: 'Needs attention',
-                          })
-                      : resultSummary(session.result, t)}
-                  </p>
-                ) : null}
-                {activeStatuses.has(session.status) ? (
-                  <div
-                    className={styles.miniProgress}
-                    role="progressbar"
-                    aria-label={t('usage_stats.import_progress_title')}
-                    aria-valuemin={0}
-                    aria-valuemax={100}
-                    aria-valuenow={progressPercent(session)}
-                  >
-                    <i style={{ width: `${progressPercent(session)}%` }} />
-                  </div>
-                ) : null}
-                <div className={styles.rowActions}>
-                  {sessionHasAction(session) ? (
-                    <Button
-                      size="sm"
-                      variant={session.status === 'failed' ? 'primary' : 'secondary'}
-                      onClick={() => handleSessionAction(session)}
-                    >
-                      {sessionActionLabel(session)}
-                    </Button>
-                  ) : null}
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    aria-expanded={selectedSessionId === session.id}
-                    onClick={() =>
-                      setSelectedSessionId(selectedSessionId === session.id ? null : session.id)
-                    }
-                  >
-                    {t('usage_maintenance.details', { defaultValue: 'Details' })}
-                  </Button>
-                </div>
-                {selectedSessionId === session.id ? (
-                  <div className={styles.detailCard}>
-                    <div>
-                      <strong>{session.filename}</strong>
-                      <span className={styles.sessionID}>{session.id}</span>
-                    </div>
-                    <dl>
-                      <div>
-                        <dt>
-                          {t('usage_maintenance.transfer_chunk', { defaultValue: 'Chunk size' })}
-                        </dt>
-                        <dd>{formatFileSize(session.chunk_size_bytes)}</dd>
-                      </div>
-                      <div>
-                        <dt>
-                          {t('usage_maintenance.transfer_expires', { defaultValue: 'Expires' })}
-                        </dt>
-                        <dd>{formatDateTime(new Date(session.expires_at_ms), i18n.language)}</dd>
-                      </div>
-                      <div>
-                        <dt>
-                          {t('usage_maintenance.transfer_retryable_label', {
-                            defaultValue: 'Retryable',
-                          })}
-                        </dt>
-                        <dd>
-                          {session.retryable
-                            ? t('common.yes', { defaultValue: 'Yes' })
-                            : t('common.no', { defaultValue: 'No' })}
-                        </dd>
-                      </div>
-                    </dl>
-                    {session.result ? <p>{resultSummary(session.result, t)}</p> : null}
-                  </div>
-                ) : null}
-              </article>
-            ))}
-          </div>
-          {sessions.length === 0 ? (
-            <p className={styles.empty}>
-              {t('usage_maintenance.transfer_no_sessions', {
-                defaultValue: 'No import sessions yet.',
-              })}
-            </p>
-          ) : null}
-        </section>
-      </div>
+        )}
+      </Drawer>
     </div>
   );
 }

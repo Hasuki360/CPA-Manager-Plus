@@ -1,7 +1,23 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { Drawer } from '@/components/ui/Drawer';
+import { DropdownMenu } from '@/components/ui/DropdownMenu';
+import {
+  IconMoreVertical,
+  IconPlus,
+  IconRefreshCw,
+  IconArrowUpFromLine,
+  IconDownload,
+} from '@/components/ui/icons';
 import { SegmentedTabs } from '@/components/ui/SegmentedTabs';
 import {
   readUsageMaintenanceNavigation,
@@ -30,6 +46,7 @@ import {
   resolveRawEventRange,
   resolveRetentionCutoff,
   type ArchiveHistoryFilter,
+  type ArchiveHistorySource,
   type ArchiveRunAction,
   type RetentionSelection,
   type UsageMaintenanceView,
@@ -37,6 +54,7 @@ import {
 import {
   UsageArchiveHistoryView,
   UsageArchiveRunView,
+  UsageArchiveRunActions,
   UsageMaintenanceOverviewView,
 } from './UsageMaintenanceArchiveViews';
 import { UsageMaintenanceCreateView, type GuidedArchiveStage } from './UsageMaintenanceCreateView';
@@ -314,12 +332,29 @@ const findScrollContainer = (element: HTMLElement | null) => {
   return null;
 };
 
+type DrawerConfirmation = {
+  title: string;
+  message: ReactNode;
+  confirmText: string;
+  cancelText: string;
+  variant: 'primary' | 'danger';
+  width?: number;
+  onConfirm: () => void;
+};
+
 export function UsageMaintenancePage() {
   const { t, i18n } = useTranslation();
   const availability = usePanelFeatureAvailability();
   const navigate = useNavigate();
   const navigateRef = useRef(navigate);
   const [navigation, setNavigation] = useState(readUsageMaintenanceNavigation);
+  const [drawerConfirmation, setDrawerConfirmation] = useState<DrawerConfirmation | null>(null);
+  const drawerConfirmationRef = useRef<DrawerConfirmation | null>(null);
+  const setPendingConfirmation = useCallback((value: DrawerConfirmation | null) => {
+    drawerConfirmationRef.current = value;
+    setDrawerConfirmation(value);
+  }, []);
+  const [transferRefreshToken, setTransferRefreshToken] = useState(0);
   const [transferVisited, setTransferVisited] = useState(navigation.tab === 'transfer');
   const navigationRef = useRef(navigation);
   const pageRef = useRef<HTMLDivElement | null>(null);
@@ -337,8 +372,14 @@ export function UsageMaintenancePage() {
     containerTop: number;
   } | null>(null);
   const scrollPositionsRef = useRef(new Map<string, { window: number; container: number }>());
-  const view = navigation.tab === 'organize' ? 'create' : navigation.tab;
+  const view =
+    navigation.panel === 'create'
+      ? 'create'
+      : navigation.tab === 'organize'
+        ? 'history'
+        : 'transfer';
   const historyFilter = navigation.filter;
+  const historySource = navigation.source;
   const selectedRunId = navigation.runId;
   const retentionSelection = navigation.retention;
   const customCutoff = navigation.customCutoff;
@@ -359,7 +400,10 @@ export function UsageMaintenancePage() {
     },
     []
   );
-  const closeDrawer = useCallback(() => updateNavigation({ panel: null }), [updateNavigation]);
+  const closeDrawer = useCallback(() => {
+    setPendingConfirmation(null);
+    updateNavigation({ panel: null, runId: null, sessionId: null });
+  }, [setPendingConfirmation, updateNavigation]);
 
   useEffect(() => {
     if (navigation.tab === 'transfer') setTransferVisited(true);
@@ -375,22 +419,43 @@ export function UsageMaintenancePage() {
       )
         return;
       const next = readUsageMaintenanceNavigation();
+      if (
+        next.filter !== navigationRef.current.filter ||
+        next.source !== navigationRef.current.source
+      ) {
+        setHistoryCursor(undefined);
+        setHistoryCursorStack([]);
+        setHistoryList({ runs: [] });
+        setHistoryError(null);
+      }
+      if (
+        writeUsageMaintenanceNavigation(next) !==
+        writeUsageMaintenanceNavigation(navigationRef.current)
+      ) {
+        setPendingConfirmation(null);
+      }
       navigationRef.current = next;
       setNavigation(next);
     };
     window.addEventListener('hashchange', syncFromHash);
     return () => window.removeEventListener('hashchange', syncFromHash);
-  }, []);
+  }, [setPendingConfirmation]);
 
   const managementKey = useAuthStore((state) => state.managementKey);
   const { showConfirmation, showNotification } = useNotificationStore();
   const serviceBase = availability.managerServiceBase;
   const [maintenance, setMaintenance] = useState<UsageMaintenanceStatus | null>(null);
-  const [archives, setArchives] = useState<UsageArchiveRunSummary[]>([]);
+  const maintenanceLoaded = maintenance !== null;
+  const [archiveList, setArchiveList] = useState<UsageArchiveList>({ runs: [] });
+  const archives = archiveList.runs;
   const [historyCursor, setHistoryCursor] = useState<string | undefined>();
   const [historyCursorStack, setHistoryCursorStack] = useState<string[]>([]);
   const [historyList, setHistoryList] = useState<UsageArchiveList>({ runs: [] });
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const showingRecentArchives =
+    historyFilter === 'all' && historySource === 'all' && !historyCursor;
+  const displayedHistory = showingRecentArchives ? archiveList : historyList;
   const [selectedArchive, setSelectedArchive] = useState<UsageArchiveStatus | null>(null);
   const [selectedArchiveLoading, setSelectedArchiveLoading] = useState(false);
   const [selectedArchiveRefreshToken, setSelectedArchiveRefreshToken] = useState(0);
@@ -402,6 +467,8 @@ export function UsageMaintenancePage() {
   const [previewRefreshToken, setPreviewRefreshToken] = useState(0);
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false);
+  const [operationArchive, setOperationArchive] = useState<UsageArchiveStatus | null>(null);
+  const activeOperationRunIdRef = useRef<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [unsupported, setUnsupported] = useState(false);
   const [postDeleteNoticeVisible, setPostDeleteNoticeVisible] = useState(false);
@@ -438,6 +505,7 @@ export function UsageMaintenancePage() {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      drawerConfirmationRef.current = null;
       loadGenerationRef.current += 1;
       loadControllerRef.current?.abort();
       loadControllerRef.current = null;
@@ -461,12 +529,13 @@ export function UsageMaintenancePage() {
     operationGenerationRef.current += 1;
     operationControllerRef.current?.abort();
     operationControllerRef.current = null;
+    activeOperationRunIdRef.current = null;
     if (resetWorking && mountedRef.current) setWorking(false);
   }, []);
 
   const beginWorking = useCallback(
     (capturedServiceBase: string, capturedManagementKey?: string): OperationToken | null => {
-      if (!mountedRef.current) return null;
+      if (!mountedRef.current || operationControllerRef.current) return null;
       const currentContext = operationContextRef.current;
       if (
         currentContext.serviceBase !== capturedServiceBase ||
@@ -474,10 +543,11 @@ export function UsageMaintenancePage() {
       ) {
         return null;
       }
-      operationControllerRef.current?.abort();
       const controller = new AbortController();
       const generation = ++operationGenerationRef.current;
       operationControllerRef.current = controller;
+      activeOperationRunIdRef.current = null;
+      setOperationArchive(null);
       loadGenerationRef.current += 1;
       loadControllerRef.current?.abort();
       loadControllerRef.current = null;
@@ -491,6 +561,17 @@ export function UsageMaintenancePage() {
     },
     []
   );
+
+  const publishOperationArchive = useCallback((archive: UsageArchiveStatus) => {
+    activeOperationRunIdRef.current = archive.run.id;
+    setOperationArchive(archive);
+    if (
+      navigationRef.current.runId === archive.run.id ||
+      navigationRef.current.panel === 'create'
+    ) {
+      setSelectedArchive(archive);
+    }
+  }, []);
 
   const confirmationIsCurrent = useCallback((confirmation: ConfirmationToken) => {
     const currentContext = operationContextRef.current;
@@ -518,6 +599,7 @@ export function UsageMaintenancePage() {
     (operation: OperationToken) => {
       if (!operationIsCurrent(operation)) return;
       operationControllerRef.current = null;
+      activeOperationRunIdRef.current = null;
       setWorking(false);
     },
     [operationIsCurrent]
@@ -536,13 +618,16 @@ export function UsageMaintenancePage() {
       const next = { ...readUsageMaintenanceNavigation(''), tab: navigationRef.current.tab };
       updateNavigation(next, true);
     }
+    setPendingConfirmation(null);
     setMaintenance(null);
-    setArchives([]);
+    setArchiveList({ runs: [] });
     setHistoryCursor(undefined);
     setHistoryCursorStack([]);
     setHistoryList({ runs: [] });
+    setHistoryError(null);
     setHistoryLoading(false);
     setSelectedArchive(null);
+    setOperationArchive(null);
     setSelectedArchiveLoading(false);
     setSelectedArchiveRefreshToken(0);
     setPreview(null);
@@ -559,7 +644,14 @@ export function UsageMaintenancePage() {
       invalidateOperation(false);
       invalidatePreview(false);
     };
-  }, [invalidateOperation, invalidatePreview, managementKey, serviceBase, updateNavigation]);
+  }, [
+    invalidateOperation,
+    invalidatePreview,
+    managementKey,
+    serviceBase,
+    setPendingConfirmation,
+    updateNavigation,
+  ]);
 
   const loadHistory = useCallback(
     async ({
@@ -567,7 +659,13 @@ export function UsageMaintenancePage() {
     }: {
       clearErrorOnSuccess?: boolean;
     } = {}) => {
-      if (!mountedRef.current || !serviceBase || navigationRef.current.tab !== 'history') return;
+      if (
+        !mountedRef.current ||
+        !serviceBase ||
+        navigationRef.current.tab !== 'organize' ||
+        showingRecentArchives
+      )
+        return;
       const generation = ++historyGenerationRef.current;
       historyControllerRef.current?.abort();
       const controller = new AbortController();
@@ -579,6 +677,7 @@ export function UsageMaintenancePage() {
           managementKey,
           {
             status: archiveHistoryFilterStatus(historyFilter),
+            mode: historySource === 'all' ? undefined : historySource,
             limit: 20,
             cursor: historyCursor,
           },
@@ -586,7 +685,7 @@ export function UsageMaintenancePage() {
         );
         if (controller.signal.aborted || generation !== historyGenerationRef.current) return;
         if (!isUsageArchiveList(result)) {
-          setError(
+          setHistoryError(
             t('usage_maintenance.archive_response_invalid', {
               defaultValue: 'The server returned an invalid archive task response.',
             })
@@ -595,11 +694,11 @@ export function UsageMaintenancePage() {
         }
         setHistoryList(result);
         if (clearErrorOnSuccess) {
-          setError(null);
+          setHistoryError(null);
         }
       } catch (cause) {
         if (controller.signal.aborted || generation !== historyGenerationRef.current) return;
-        setError(cause instanceof Error ? cause.message : String(cause));
+        setHistoryError(cause instanceof Error ? cause.message : String(cause));
       } finally {
         if (generation === historyGenerationRef.current) {
           historyControllerRef.current = null;
@@ -607,21 +706,35 @@ export function UsageMaintenancePage() {
         }
       }
     },
-    [historyCursor, historyFilter, managementKey, serviceBase, t]
+    [
+      historyCursor,
+      historyFilter,
+      historySource,
+      showingRecentArchives,
+      managementKey,
+      serviceBase,
+      t,
+    ]
   );
 
   useEffect(() => {
-    if (view !== 'history') return;
+    if (navigation.tab !== 'organize' || !maintenanceLoaded || unsupported) return;
     void loadHistory();
     return () => {
       historyGenerationRef.current += 1;
       historyControllerRef.current?.abort();
       historyControllerRef.current = null;
     };
-  }, [loadHistory, view]);
+  }, [loadHistory, navigation.tab, maintenanceLoaded, unsupported]);
 
   useEffect(() => {
-    if (!selectedRunId || !serviceBase || operationControllerRef.current) return;
+    if (
+      !selectedRunId ||
+      !serviceBase ||
+      drawerConfirmation ||
+      (operationControllerRef.current && activeOperationRunIdRef.current === selectedRunId)
+    )
+      return;
     const generation = ++selectedArchiveGenerationRef.current;
     selectedArchiveControllerRef.current?.abort();
     const controller = new AbortController();
@@ -666,7 +779,14 @@ export function UsageMaintenancePage() {
         selectedArchiveControllerRef.current = null;
       }
     };
-  }, [managementKey, selectedArchiveRefreshToken, selectedRunId, serviceBase, t]);
+  }, [
+    managementKey,
+    selectedArchiveRefreshToken,
+    selectedRunId,
+    serviceBase,
+    t,
+    drawerConfirmation,
+  ]);
 
   const load = useCallback(
     async ({
@@ -708,14 +828,14 @@ export function UsageMaintenancePage() {
         if (!isUsageMaintenanceStatus(maintenanceResult) || !isUsageArchiveList(archiveResult)) {
           setUnsupported(true);
           setMaintenance(null);
-          setArchives([]);
+          setArchiveList({ runs: [] });
           setError(null);
           return null;
         }
         hasLoadedMaintenanceRef.current = true;
         setMaintenance(maintenanceResult);
         setPostDeleteRefreshFailed(false);
-        setArchives(archiveResult.runs ?? []);
+        setArchiveList(archiveResult);
         setUnsupported(false);
         setError(null);
         return maintenanceResult;
@@ -725,7 +845,7 @@ export function UsageMaintenancePage() {
         if (isUnsupportedError(cause)) {
           setUnsupported(true);
           setMaintenance(null);
-          setArchives([]);
+          setArchiveList({ runs: [] });
         } else {
           setUnsupported(false);
           setError(cause instanceof Error ? cause.message : String(cause));
@@ -749,6 +869,11 @@ export function UsageMaintenancePage() {
       loadControllerRef.current?.abort();
       loadControllerRef.current = null;
     };
+  }, [load]);
+
+  const handleUsageChanged = useCallback(() => {
+    setPreviewRefreshToken((value) => value + 1);
+    if (!operationControllerRef.current) void load({ background: true });
   }, [load]);
 
   const shouldPollMaintenance = Boolean(
@@ -783,7 +908,6 @@ export function UsageMaintenancePage() {
     () => (rawEventRange ? recommendRetentionDays(rawEventRange, referenceNowMS) : null),
     [rawEventRange, referenceNowMS]
   );
-  const maintenanceLoaded = maintenance !== null;
 
   useEffect(() => {
     if (
@@ -895,7 +1019,8 @@ export function UsageMaintenancePage() {
   };
 
   const refreshMaintenance = () => {
-    if (!selectedRunId) updateNavigation({ referenceNowMS: Date.now() }, true);
+    setTransferRefreshToken((value) => value + 1);
+    void loadHistory();
     setPreviewRefreshToken((value) => value + 1);
     void load();
     if (selectedRunId) setSelectedArchiveRefreshToken((value) => value + 1);
@@ -968,8 +1093,10 @@ export function UsageMaintenancePage() {
       if (!operationIsCurrent(operation)) return;
       const created = requireArchiveResponse(createResponse, undefined, new Set(['previewed']));
       const runID = created.run.id;
-      setSelectedArchive(created);
-      updateNavigation({ runId: runID, panel: null }, true);
+      publishOperationArchive(created);
+      if (navigationRef.current.panel === 'create') {
+        updateNavigation({ runId: runID, panel: 'run' }, true);
+      }
       setGuidedArchiveRunId(runID);
       setGuidedArchiveStage('archiving');
       const archiveResponse = await usageServiceApi.resumeUsageArchive(
@@ -985,7 +1112,7 @@ export function UsageMaintenancePage() {
         runID,
         new Set(['archived', 'verifying', 'verified', 'deleting', 'completed'])
       );
-      setSelectedArchive(archived);
+      publishOperationArchive(archived);
       let finalStatus = archived.run.status;
       if (finalStatus === 'archived' || finalStatus === 'verifying') {
         setGuidedArchiveStage('verifying');
@@ -1001,7 +1128,7 @@ export function UsageMaintenancePage() {
           runID,
           new Set(['verified', 'deleting', 'completed'])
         );
-        setSelectedArchive(verified);
+        publishOperationArchive(verified);
         finalStatus = verified.run.status;
       }
       if (finalStatus === 'deleting' || finalStatus === 'completed') {
@@ -1014,7 +1141,7 @@ export function UsageMaintenancePage() {
       }
       setGuidedArchiveStage('complete');
       setPreview(null);
-      if (navigationRef.current.tab !== 'organize' || navigationRef.current.runId !== runID) {
+      if (navigationRef.current.panel !== 'run' || navigationRef.current.runId !== runID) {
         showNotification(
           t('usage_maintenance.archive_prepare_success', {
             defaultValue: 'Archive created and verified. Raw data was not deleted.',
@@ -1023,6 +1150,7 @@ export function UsageMaintenancePage() {
         );
       }
       await load({ background: true });
+      if (operationIsCurrent(operation)) await loadHistory({ clearErrorOnSuccess: false });
     } catch (cause) {
       if (operationIsCurrent(operation)) {
         setGuidedArchiveStage('attention');
@@ -1043,7 +1171,7 @@ export function UsageMaintenancePage() {
       serviceBase,
       managementKey,
     };
-    showConfirmation({
+    setPendingConfirmation({
       title: t('usage_maintenance.archive_prepare_confirm_title', {
         defaultValue: 'Archive and verify this data?',
       }),
@@ -1123,6 +1251,10 @@ export function UsageMaintenancePage() {
     }
     const operation = beginWorking(serviceBase, managementKey);
     if (!operation) return;
+    publishOperationArchive({
+      run,
+      segments: selectedArchive?.run.id === run.id ? selectedArchive.segments : [],
+    });
     try {
       const response =
         action === 'resume'
@@ -1155,7 +1287,7 @@ export function UsageMaintenancePage() {
                 );
       if (!operationIsCurrent(operation)) return;
       const updated = requireArchiveResponse(response, run.id, expectedActionStatuses(run, action));
-      if (navigationRef.current.runId === run.id) setSelectedArchive(updated);
+      publishOperationArchive(updated);
       if (
         guidedArchiveRunId === run.id ||
         (guidedArchiveStage === 'attention' && guidedArchiveRunId === null)
@@ -1192,12 +1324,15 @@ export function UsageMaintenancePage() {
         // The mutation already succeeded. Keep its authoritative result even if a read fails.
         if (navigationRef.current.runId === run.id) setSelectedArchive(updated);
       }
-      if (view === 'history')
+      if (navigationRef.current.tab === 'organize')
         await loadHistory({ clearErrorOnSuccess: refreshedMaintenance !== null });
       if (operationIsCurrent(operation)) {
         if (destructiveCompleted) {
           // A completed deletion is authoritative even when a subsequent list read is stale.
-          setArchives((runs) => runs.map((item) => (item.id === run.id ? updated.run : item)));
+          setArchiveList((list) => ({
+            ...list,
+            runs: list.runs.map((item) => (item.id === run.id ? updated.run : item)),
+          }));
           setHistoryList((list) => ({
             ...list,
             runs: list.runs.map((item) => (item.id === run.id ? updated.run : item)),
@@ -1214,7 +1349,7 @@ export function UsageMaintenancePage() {
         await load({ background: true });
         if (operationIsCurrent(operation)) {
           setPreviewRefreshToken((value) => value + 1);
-          if (selectedRunId === run.id) {
+          if (navigationRef.current.runId === run.id) {
             setSelectedArchiveRefreshToken((value) => value + 1);
           }
         }
@@ -1256,6 +1391,7 @@ export function UsageMaintenancePage() {
       return;
     }
     if (!actionIsDestructive(run, action)) {
+      openRun(run);
       void runAction(run, action);
       return;
     }
@@ -1264,7 +1400,8 @@ export function UsageMaintenancePage() {
       serviceBase,
       managementKey,
     };
-    showConfirmation({
+    openRun(run);
+    setPendingConfirmation({
       title: t('usage_maintenance.delete_confirm_title', {
         defaultValue: 'Delete online raw data?',
       }),
@@ -1336,12 +1473,18 @@ export function UsageMaintenancePage() {
     : '';
   const navigateTo = (nextView: UsageMaintenanceView) => {
     setError(null);
-    if (nextView === 'advanced' || nextView === 'diagnostics') {
+    setPendingConfirmation(null);
+    if (nextView === 'advanced' || nextView === 'diagnostics' || nextView === 'overview') {
       updateNavigation({ panel: nextView });
       return;
     }
-    const tab = nextView === 'history' || nextView === 'transfer' ? nextView : 'organize';
-    updateNavigation({ tab, panel: null, ...(nextView === 'create' ? { runId: null } : {}) });
+    const tab = nextView === 'transfer' ? 'transfer' : 'organize';
+    updateNavigation({
+      tab,
+      panel: nextView === 'create' ? 'create' : null,
+      runId: null,
+      sessionId: null,
+    });
     if (nextView === 'create') {
       setSelectedArchive(null);
       setGuidedArchiveStage('idle');
@@ -1371,10 +1514,11 @@ export function UsageMaintenancePage() {
   }, [showNotification, t]);
 
   const openRun = (run: UsageArchiveRunSummary) => {
+    setPendingConfirmation(null);
     setSelectedArchive((current) => (current?.run.id === run.id ? current : null));
     setSelectedArchiveRefreshToken((value) => value + 1);
     setError(null);
-    updateNavigation({ runId: run.id, panel: view === 'history' ? 'run' : null });
+    updateNavigation({ runId: run.id, panel: 'run' });
   };
 
   const updateHistoryFilter = (filter: ArchiveHistoryFilter) => {
@@ -1384,11 +1528,18 @@ export function UsageMaintenancePage() {
     updateNavigation({ filter }, true);
   };
 
+  const updateHistorySource = (source: ArchiveHistorySource) => {
+    setHistoryList({ runs: [] });
+    setHistoryCursor(undefined);
+    setHistoryCursorStack([]);
+    updateNavigation({ source }, true);
+  };
+
   const nextHistoryPage = () => {
-    if (!historyList.next_cursor) return;
+    if (!displayedHistory.next_cursor) return;
     setHistoryList({ runs: [] });
     setHistoryCursorStack((stack) => [...stack, historyCursor ?? '']);
-    setHistoryCursor(historyList.next_cursor);
+    setHistoryCursor(displayedHistory.next_cursor);
   };
 
   const previousHistoryPage = () => {
@@ -1461,7 +1612,7 @@ export function UsageMaintenancePage() {
 
   useLayoutEffect(() => {
     if (drawerBodyRef.current) drawerBodyRef.current.scrollTop = 0;
-  }, [navigation.panel, selectedRunId]);
+  }, [navigation.panel, selectedRunId, drawerConfirmation]);
 
   const runActions = {
     working,
@@ -1471,23 +1622,22 @@ export function UsageMaintenancePage() {
     actionLabel: (run: UsageArchiveRunSummary, action: ArchiveRunAction) =>
       actionLabel(run, action),
   };
-  const currentArchive = selectedArchive?.run.id === selectedRunId ? selectedArchive : null;
-  const renderRun = (details = false) =>
+  const currentRunWorking = working && activeOperationRunIdRef.current === selectedRunId;
+  const currentArchive =
+    currentRunWorking && operationArchive?.run.id === selectedRunId
+      ? operationArchive
+      : selectedArchive?.run.id === selectedRunId
+        ? selectedArchive
+        : null;
+  const renderRun = () =>
     currentArchive && maintenance ? (
       <UsageArchiveRunView
         archive={currentArchive}
         maintenance={maintenance}
         active={archiveProgressStatuses.has(currentArchive.run.status)}
         intent={navigation.intent}
-        details={details}
-        onBack={() => navigateTo('create')}
-        onRefresh={() => {
-          setSelectedArchiveRefreshToken((value) => value + 1);
-          void load({ background: true });
-        }}
-        onStopWaiting={cancelGuidedArchive}
-        onOpenDetails={details ? undefined : () => updateNavigation({ panel: 'run' })}
         {...runActions}
+        working={currentRunWorking}
       />
     ) : selectedArchiveLoading ? (
       <LoadingSpinner />
@@ -1548,41 +1698,78 @@ export function UsageMaintenancePage() {
           items={[
             {
               id: 'organize',
-              label: t('usage_maintenance.workspace_organize', { defaultValue: 'Organize data' }),
+              label: t('usage_maintenance.archive_management'),
             },
             {
               id: 'transfer',
               label: t('usage_maintenance.workspace_transfer', { defaultValue: 'Import / export' }),
             },
-            {
-              id: 'history',
-              label: t('usage_maintenance.workspace_records', {
-                defaultValue: 'Processing records',
-              }),
-            },
           ]}
-          onChange={(tab) => updateNavigation({ tab, panel: null })}
+          onChange={(tab) => {
+            setPendingConfirmation(null);
+            updateNavigation({ tab, panel: null, runId: null, sessionId: null });
+          }}
         />
         <div className={styles.actions}>
-          <Button size="sm" variant="ghost" onClick={() => navigateTo('advanced')}>
-            {t('usage_maintenance.advanced_title', { defaultValue: 'Advanced maintenance' })}
-          </Button>
-          <Button size="sm" variant="ghost" onClick={() => navigateTo('diagnostics')}>
-            {t('usage_maintenance.diagnostics_title', { defaultValue: 'Diagnostics' })}
-          </Button>
           <Button
             size="sm"
             variant="secondary"
             onClick={refreshMaintenance}
             disabled={working || loading}
+            aria-label={t('common.refresh')}
+            title={t('common.refresh')}
           >
-            {t('common.refresh')}
+            <IconRefreshCw size={16} />
           </Button>
+          <DropdownMenu
+            ariaLabel={t('usage_maintenance.more_maintenance')}
+            triggerLabel={
+              <span className={styles.toolbarLabel}>{t('usage_maintenance.more_maintenance')}</span>
+            }
+            triggerIcon={<IconMoreVertical size={16} />}
+            items={[
+              {
+                key: 'storage',
+                label: t('usage_maintenance.storage_recovery'),
+                onClick: () => navigateTo('advanced'),
+              },
+              {
+                key: 'diagnostics',
+                label: t('usage_maintenance.diagnostics_title'),
+                onClick: () => navigateTo('diagnostics'),
+              },
+            ]}
+          />
+          {navigation.tab === 'transfer' ? (
+            <>
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => updateNavigation({ panel: 'export', sessionId: null })}
+              >
+                <IconDownload size={16} />
+                <span className={styles.toolbarLabel}>{t('usage_maintenance.export_online')}</span>
+                <span className={styles.srOnlyMobile}>{t('usage_maintenance.export_online')}</span>
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => updateNavigation({ panel: 'import', sessionId: null })}
+              >
+                <IconArrowUpFromLine size={16} />
+                {t('usage_maintenance.import_file')}
+              </Button>
+            </>
+          ) : (
+            <Button size="sm" onClick={() => navigateTo('create')} disabled={working || loading}>
+              <IconPlus size={16} />
+              {t('usage_maintenance.new_archive')}
+            </Button>
+          )}
         </div>
       </div>
-      {error ? (
+      {error || (navigation.tab === 'organize' && historyError) ? (
         <div className={styles.error} role="alert">
-          {error}
+          {error || historyError}
         </div>
       ) : null}
       {postDeleteNoticeVisible ? (
@@ -1621,7 +1808,7 @@ export function UsageMaintenancePage() {
             ) : null}
             <Button size="sm" variant="secondary" onClick={() => navigateTo('advanced')}>
               {t('usage_maintenance.cleanup_complete_open_advanced', {
-                defaultValue: 'View advanced maintenance',
+                defaultValue: 'View storage and compaction',
               })}
             </Button>
             <Button size="sm" variant="ghost" onClick={() => setPostDeleteNoticeVisible(false)}>
@@ -1637,20 +1824,206 @@ export function UsageMaintenancePage() {
         tabIndex={-1}
         className={styles.workspace}
       >
-        {view === 'create' ? (
+        {navigation.tab === 'organize' ? (
           <>
             <UsageMaintenanceOverviewView
               maintenance={maintenance}
-              archives={archives}
-              selectedRunId={selectedRunId}
+              archives={
+                working && operationArchive ? [operationArchive.run, ...archives] : archives
+              }
               stale={postDeleteRefreshFailed}
-              working={working}
               onNavigate={navigateTo}
               onOpenRun={openRun}
             />
-            {selectedRunId ? (
-              renderRun()
+            {working && !operationArchive ? (
+              <div className={styles.preparingNotice} role="status">
+                <span>{t('usage_maintenance.archive_prepare_creating')}</span>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => updateNavigation({ panel: 'create' })}
+                >
+                  {t('usage_maintenance.details')}
+                </Button>
+              </div>
+            ) : null}
+            <UsageArchiveHistoryView
+              archiveList={displayedHistory}
+              filter={historyFilter}
+              source={historySource}
+              loading={showingRecentArchives ? loading : historyLoading}
+              canGoBack={historyCursorStack.length > 0}
+              onFilter={updateHistoryFilter}
+              onSource={updateHistorySource}
+              onNextPage={nextHistoryPage}
+              onPreviousPage={previousHistoryPage}
+              onOpenRun={openRun}
+              {...runActions}
+            />
+          </>
+        ) : null}
+        {transferVisited ? (
+          <div hidden={view !== 'transfer'} className={styles.transferPanel}>
+            <UsageMaintenanceTransferView
+              key={`${serviceBase}\u0000${managementKey}`}
+              serviceBase={serviceBase}
+              managementKey={managementKey}
+              panel={
+                navigation.tab === 'transfer' &&
+                (navigation.panel === 'import' ||
+                  navigation.panel === 'export' ||
+                  navigation.panel === 'import-session')
+                  ? navigation.panel
+                  : null
+              }
+              sessionId={navigation.sessionId}
+              refreshToken={transferRefreshToken}
+              onUsageChanged={handleUsageChanged}
+              onOpenPanel={(panel, sessionId) =>
+                updateNavigation({ panel, sessionId: sessionId ?? null })
+              }
+              onClosePanel={closeDrawer}
+              drawerClassName={styles.drawer}
+              drawerBodyRef={setDrawerBodyRef}
+            />
+          </div>
+        ) : null}
+      </div>
+      <Drawer
+        open={
+          navigation.panel !== null &&
+          !['import', 'import-session', 'export'].includes(navigation.panel)
+        }
+        onClose={closeDrawer}
+        width="min(600px, 100vw)"
+        className={styles.drawer}
+        bodyRef={setDrawerBodyRef}
+        title={
+          drawerConfirmation?.title ??
+          (navigation.panel === 'create'
+            ? t('usage_maintenance.new_archive')
+            : navigation.panel === 'run'
+              ? t('usage_maintenance.run_detail_title')
+              : navigation.panel === 'overview'
+                ? t('usage_maintenance.online_range_title')
+                : navigation.panel === 'advanced'
+                  ? t('usage_maintenance.storage_recovery')
+                  : t('usage_maintenance.diagnostics_title'))
+        }
+        footer={
+          <div className={styles.drawerActions}>
+            {drawerConfirmation ? (
+              <>
+                <Button variant="secondary" onClick={() => setPendingConfirmation(null)}>
+                  {t('common.back')}
+                </Button>
+                <Button
+                  variant={drawerConfirmation.variant}
+                  disabled={working || (drawerConfirmation.variant === 'danger' && deleteDisabled)}
+                  onClick={() => {
+                    if (!mountedRef.current || drawerConfirmationRef.current !== drawerConfirmation)
+                      return;
+                    setPendingConfirmation(null);
+                    drawerConfirmation.onConfirm();
+                  }}
+                >
+                  {drawerConfirmation.confirmText}
+                </Button>
+              </>
+            ) : navigation.panel === 'create' ? (
+              <>
+                <Button variant="secondary" onClick={closeDrawer}>
+                  {t('common.cancel')}
+                </Button>
+                {working ? (
+                  <Button variant="secondary" onClick={cancelGuidedArchive}>
+                    {t('usage_maintenance.archive_prepare_stop')}
+                  </Button>
+                ) : null}
+                <Button
+                  onClick={confirmCreate}
+                  disabled={
+                    working ||
+                    !preview ||
+                    preview.event_count <= 0 ||
+                    previewLoading ||
+                    Boolean(previewError) ||
+                    createBlockedByMaintenance ||
+                    archiveReadinessPending
+                  }
+                >
+                  {working
+                    ? t(`usage_maintenance.archive_prepare_${guidedArchiveStage}`)
+                    : t('common.next')}
+                </Button>
+              </>
+            ) : navigation.panel === 'run' && currentArchive ? (
+              <>
+                {currentRunWorking ? (
+                  <>
+                    <Button variant="secondary" onClick={cancelGuidedArchive}>
+                      {t('usage_maintenance.archive_prepare_stop')}
+                    </Button>
+                    <Button onClick={closeDrawer}>{t('usage_maintenance.minimize')}</Button>
+                  </>
+                ) : (
+                  <>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={refreshMaintenance}
+                      aria-label={t('common.refresh')}
+                      title={t('common.refresh')}
+                    >
+                      <IconRefreshCw size={16} />
+                    </Button>
+                    <UsageArchiveRunActions
+                      run={currentArchive.run}
+                      intent={navigation.intent}
+                      {...runActions}
+                    />
+                    <Button
+                      variant={
+                        currentArchive.run.status === 'completed' ||
+                        (currentArchive.run.status === 'verified' &&
+                          navigation.intent === 'archive')
+                          ? 'primary'
+                          : 'secondary'
+                      }
+                      onClick={closeDrawer}
+                    >
+                      {currentArchive.run.status === 'completed' ||
+                      currentArchive.run.status === 'verified' ||
+                      currentArchive.run.status === 'cancelled'
+                        ? t('usage_maintenance.done')
+                        : t('common.close')}
+                    </Button>
+                  </>
+                )}
+              </>
             ) : (
+              <>
+                <Button
+                  variant="secondary"
+                  onClick={refreshMaintenance}
+                  disabled={working || loading}
+                >
+                  <IconRefreshCw size={16} />
+                  {t('common.refresh')}
+                </Button>
+                <Button variant="secondary" onClick={closeDrawer}>
+                  {t('common.close')}
+                </Button>
+              </>
+            )}
+          </div>
+        }
+      >
+        {drawerConfirmation ? (
+          drawerConfirmation.message
+        ) : (
+          <>
+            {navigation.panel === 'create' ? (
               <UsageMaintenanceCreateView
                 maintenance={maintenance}
                 preview={preview}
@@ -1661,7 +2034,6 @@ export function UsageMaintenancePage() {
                 referenceNowMS={referenceNowMS}
                 resolvedCutoffTimestamp={resolvedCutoffTimestamp}
                 recommendedRetentionDays={recommendedRetentionDays}
-                guidedArchiveStage={guidedArchiveStage}
                 intent={navigation.intent}
                 onIntent={(intent) => updateNavigation({ intent }, true)}
                 working={working}
@@ -1672,82 +2044,46 @@ export function UsageMaintenancePage() {
                 onSelectRetention={selectRetention}
                 onUpdateCustomCutoff={updateCustomCutoff}
                 onRetryPreview={() => setPreviewRefreshToken((value) => value + 1)}
-                onCreate={confirmCreate}
-                onStopWaiting={cancelGuidedArchive}
               />
-            )}
-            {guidedArchiveStage === 'attention' ? (
-              <p className={styles.error}>
-                {t('usage_maintenance.archive_prepare_attention', {
-                  defaultValue: 'Needs attention',
-                })}
-                <Button variant="ghost" onClick={() => navigateTo('history')}>
-                  {t('usage_maintenance.workspace_records', { defaultValue: 'Processing records' })}
-                </Button>
-              </p>
+            ) : null}
+            {navigation.panel === 'run' ? renderRun() : null}
+            {navigation.panel === 'overview' ? (
+              <div className={styles.confirmSummary}>
+                <p>
+                  {postDeleteRefreshFailed ? (
+                    t('usage_maintenance.workspace_cleanup_refresh_failed')
+                  ) : rawEventRange?.kind === 'empty' ? (
+                    t('usage_maintenance.raw_range_empty')
+                  ) : rawEventRange?.kind === 'available' ? (
+                    <>
+                      {formatTime(rawEventRange.minTimestampMS)}
+                      <br />
+                      {formatTime(rawEventRange.maxTimestampMS)}
+                    </>
+                  ) : (
+                    t('usage_maintenance.raw_range_unavailable')
+                  )}
+                </p>
+                <p>{t('usage_maintenance.preview_excludes_existing')}</p>
+              </div>
+            ) : null}
+            {navigation.panel === 'advanced' ? (
+              <UsageMaintenanceAdvancedView
+                maintenance={maintenance}
+                stale={postDeleteRefreshFailed}
+                onCopyCommand={() => void copyCompactCommand()}
+              />
+            ) : null}
+            {navigation.panel === 'diagnostics' ? (
+              <UsageMaintenanceDiagnosticsView
+                maintenance={maintenance}
+                onOpenActive={() => {
+                  if (maintenance.active_run) openRun(maintenance.active_run);
+                }}
+              />
             ) : null}
           </>
-        ) : null}
-        {view === 'history' ? (
-          <UsageArchiveHistoryView
-            archiveList={historyList}
-            filter={historyFilter}
-            loading={historyLoading}
-            canGoBack={historyCursorStack.length > 0}
-            onFilter={updateHistoryFilter}
-            onNextPage={nextHistoryPage}
-            onPreviousPage={previousHistoryPage}
-            onRefresh={() => void loadHistory()}
-            onNavigate={navigateTo}
-            onOpenRun={openRun}
-            {...runActions}
-          />
-        ) : null}
-        {transferVisited ? (
-          <div hidden={view !== 'transfer'} className={styles.transferPanel}>
-            <UsageMaintenanceTransferView
-              key={`${serviceBase}\u0000${managementKey}`}
-              serviceBase={serviceBase}
-              managementKey={managementKey}
-            />
-          </div>
-        ) : null}
-      </div>
-      <Drawer
-        open={navigation.panel !== null}
-        onClose={closeDrawer}
-        width="min(900px, 90vw)"
-        bodyRef={setDrawerBodyRef}
-        title={
-          navigation.panel === 'run'
-            ? t('usage_maintenance.run_detail_title', { defaultValue: 'Operation details' })
-            : navigation.panel === 'advanced'
-              ? t('usage_maintenance.advanced_title', { defaultValue: 'Advanced maintenance' })
-              : t('usage_maintenance.diagnostics_title', { defaultValue: 'Diagnostics' })
-        }
-      >
-        {navigation.panel === 'run' ? renderRun(true) : null}
-        {navigation.panel === 'advanced' ? (
-          <UsageMaintenanceAdvancedView
-            maintenance={maintenance}
-            working={working}
-            onBack={() => updateNavigation({ panel: null })}
-            onRefresh={refreshMaintenance}
-            onCopyCommand={() => void copyCompactCommand()}
-          />
-        ) : null}
-        {navigation.panel === 'diagnostics' ? (
-          <UsageMaintenanceDiagnosticsView
-            maintenance={maintenance}
-            working={working}
-            onBack={() => updateNavigation({ panel: null })}
-            onRefresh={refreshMaintenance}
-            onOpenActive={() => {
-              if (maintenance.active_run)
-                updateNavigation({ runId: maintenance.active_run.id, panel: 'run' });
-            }}
-          />
-        ) : null}
+        )}
       </Drawer>
     </div>
   );

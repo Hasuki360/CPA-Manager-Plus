@@ -30,7 +30,6 @@ type Props = {
   referenceNowMS: number;
   resolvedCutoffTimestamp?: number;
   recommendedRetentionDays: RetentionPresetDays | null;
-  guidedArchiveStage: GuidedArchiveStage;
   intent: MaintenanceIntent;
   working: boolean;
   createBlockedByMaintenance: boolean;
@@ -41,8 +40,6 @@ type Props = {
   onSelectRetention: (selection: RetentionSelection) => void;
   onUpdateCustomCutoff: (value: string) => void;
   onRetryPreview: () => void;
-  onCreate: () => void;
-  onStopWaiting: () => void;
 };
 
 export function UsageMaintenanceCreateView({
@@ -55,7 +52,6 @@ export function UsageMaintenanceCreateView({
   referenceNowMS,
   resolvedCutoffTimestamp,
   recommendedRetentionDays,
-  guidedArchiveStage,
   intent,
   working,
   createBlockedByMaintenance,
@@ -66,8 +62,6 @@ export function UsageMaintenanceCreateView({
   onSelectRetention,
   onUpdateCustomCutoff,
   onRetryPreview,
-  onCreate,
-  onStopWaiting,
 }: Props) {
   const { t, i18n } = useTranslation();
   const formatTime = (value?: number) =>
@@ -85,8 +79,6 @@ export function UsageMaintenanceCreateView({
     : archiveReadinessPending
       ? archiveReadinessHint
       : previewError || undefined;
-  const canCreate =
-    Boolean(preview && preview.event_count > 0) && !previewLoading && !working && !disabledReason;
 
   return (
     <div className={styles.view}>
@@ -253,18 +245,6 @@ export function UsageMaintenanceCreateView({
               ) : null}
             </div>
           ) : null}
-          <div className={styles.actions}>
-            <Button onClick={onCreate} disabled={!canCreate} title={disabledReason}>
-              {working
-                ? t(`usage_maintenance.archive_prepare_${guidedArchiveStage}`)
-                : t('usage_maintenance.create', { defaultValue: 'Archive and verify' })}
-            </Button>
-            {working ? (
-              <Button variant="secondary" onClick={onStopWaiting}>
-                {t('usage_maintenance.archive_prepare_stop', { defaultValue: 'Stop waiting' })}
-              </Button>
-            ) : null}
-          </div>
           {disabledReason && !previewError ? (
             <p className={styles.warning}>{disabledReason}</p>
           ) : null}

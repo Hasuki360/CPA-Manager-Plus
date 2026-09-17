@@ -1,4 +1,5 @@
-import { act } from 'react';
+import { act, useState, type ReactNode } from 'react';
+import en from '@/i18n/locales/en.json';
 import { create, type ReactTestInstance, type ReactTestRenderer } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { UsageImportSession, UsageImportSessionList } from '@/services/api/usageService';
@@ -21,6 +22,7 @@ const { mocks } = vi.hoisted(() => {
       uploadUsageImportFile: vi.fn(),
       cancelUsageImportFile: vi.fn(),
       downloadBlob: vi.fn(),
+      onUsageChanged: vi.fn(),
       t: (key: string, options?: Record<string, unknown>) => {
         let value = typeof options?.defaultValue === 'string' ? options.defaultValue : key;
         for (const [name, replacement] of Object.entries(options ?? {})) {
@@ -32,11 +34,38 @@ const { mocks } = vi.hoisted(() => {
   };
 });
 
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({
-    i18n: { language: 'en' },
-    t: mocks.t,
-  }),
+vi.mock('react-i18next', () => {
+  const t = (key: string, options?: Record<string, unknown>) => {
+    const localized = key.startsWith('usage_maintenance.')
+      ? en.usage_maintenance[key.split('.')[1] as keyof typeof en.usage_maintenance]
+      : undefined;
+    return mocks.t(key, { ...(localized ? { defaultValue: localized } : {}), ...options });
+  };
+  return { useTranslation: () => ({ i18n: { language: 'en' }, t }) };
+});
+
+vi.mock('@/components/ui/Drawer', () => ({
+  Drawer: ({
+    open,
+    title,
+    children,
+    footer,
+    onClose,
+  }: {
+    open: boolean;
+    title: ReactNode;
+    children: ReactNode;
+    footer: ReactNode;
+    onClose: () => void;
+  }) =>
+    open ? (
+      <div data-testid="transfer-drawer">
+        <strong>{title}</strong>
+        {children}
+        <div data-testid="transfer-footer">{footer}</div>
+        <button onClick={onClose}>Close drawer</button>
+      </div>
+    ) : null,
 }));
 
 vi.mock('@/stores', () => ({
@@ -113,14 +142,48 @@ const deferred = <T,>() => {
   return { promise, resolve };
 };
 
+function TransferHarness({
+  serviceBase,
+  managementKey,
+}: {
+  serviceBase: string;
+  managementKey?: string;
+}) {
+  const [panel, setPanel] = useState<'import' | 'import-session' | 'export' | null>('import');
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  return (
+    <>
+      <button onClick={() => setPanel('export')}>Open export</button>
+      <button onClick={() => setPanel('import')}>Open import</button>
+      <UsageMaintenanceTransferView
+        serviceBase={serviceBase}
+        managementKey={managementKey}
+        panel={panel}
+        sessionId={sessionId}
+        refreshToken={0}
+        onUsageChanged={mocks.onUsageChanged}
+        onOpenPanel={(value, id) => {
+          setPanel(value);
+          setSessionId(id ?? null);
+        }}
+        onClosePanel={() => {
+          setPanel(null);
+          setSessionId(null);
+        }}
+      />
+    </>
+  );
+}
+
+const getImportConfirmation = (renderer: ReactTestRenderer) => ({
+  onConfirm: findButton(renderer, 'Start import')!.props.onClick,
+});
+
 const renderView = async () => {
   let renderer!: ReactTestRenderer;
   await act(async () => {
     renderer = create(
-      <UsageMaintenanceTransferView
-        serviceBase="http://manager.local"
-        managementKey="manager-key"
-      />
+      <TransferHarness serviceBase="http://manager.local" managementKey="manager-key" />
     );
   });
   await flush();
@@ -146,6 +209,163 @@ afterEach(() => {
 });
 
 describe('UsageMaintenanceTransferView', () => {
+  it('refreshes usage after an import finishes with its drawer closed', async () => {
+    const pending = deferred<{
+      format: string;
+      added: number;
+      skipped: number;
+      total: number;
+      failed: number;
+    }>();
+    mocks.uploadUsageImportFile.mockReturnValueOnce(pending.promise);
+    const renderer = await renderView();
+    const file = new File(['{}\n'], 'background-import.jsonl');
+    act(() =>
+      renderer.root
+        .findByProps({ type: 'file' })
+        .props.onChange({ target: { files: [file], value: file.name } })
+    );
+    await act(async () => getImportConfirmation(renderer).onConfirm());
+    act(() => findButton(renderer, 'Close drawer')!.props.onClick());
+    expect(mocks.onUsageChanged).not.toHaveBeenCalled();
+    expect(mocks.uploadUsageImportFile.mock.calls[0][0].signal.aborted).toBe(false);
+
+    await act(async () =>
+      pending.resolve({ format: 'jsonl', added: 12, skipped: 0, total: 12, failed: 0 })
+    );
+    await flush();
+
+    expect(mocks.onUsageChanged).toHaveBeenCalledTimes(1);
+    expect(renderer.root.findAllByProps({ 'data-testid': 'transfer-drawer' })).toHaveLength(0);
+    act(() => renderer.unmount());
+  });
+
+  it('does not refresh a new service when an old import finishes late', async () => {
+    const pending = deferred<{
+      format: string;
+      added: number;
+      skipped: number;
+      total: number;
+      failed: number;
+    }>();
+    mocks.uploadUsageImportFile.mockReturnValueOnce(pending.promise);
+    const renderer = await renderView();
+    const file = new File(['{}\n'], 'old-service-import.jsonl');
+    act(() =>
+      renderer.root
+        .findByProps({ type: 'file' })
+        .props.onChange({ target: { files: [file], value: file.name } })
+    );
+    await act(async () => getImportConfirmation(renderer).onConfirm());
+    await act(async () =>
+      renderer.update(
+        <TransferHarness serviceBase="http://manager-new.local" managementKey="new-key" />
+      )
+    );
+    expect(mocks.uploadUsageImportFile.mock.calls[0][0].signal.aborted).toBe(true);
+
+    await act(async () =>
+      pending.resolve({ format: 'jsonl', added: 12, skipped: 0, total: 12, failed: 0 })
+    );
+    await flush();
+
+    expect(mocks.onUsageChanged).not.toHaveBeenCalled();
+    act(() => renderer.unmount());
+  });
+
+  it('keeps a fully uploaded file in processing and resumes its view after minimizing', async () => {
+    const pending = deferred<{
+      format: string;
+      added: number;
+      skipped: number;
+      total: number;
+      failed: number;
+    }>();
+    const file = new File(['{}\n'], 'processing.jsonl');
+    mocks.uploadUsageImportFile.mockImplementationOnce(
+      ({ onProgress }: { onProgress: (progress: UsageImportProgress) => void }) => {
+        onProgress({
+          filename: file.name,
+          sessionId: 'processing-import',
+          phase: 'processing',
+          status: 'processing',
+          uploadedBytes: file.size,
+          totalBytes: file.size,
+          percent: 100,
+        });
+        return pending.promise;
+      }
+    );
+    const renderer = await renderView();
+    act(() =>
+      renderer.root
+        .findByProps({ type: 'file' })
+        .props.onChange({ target: { files: [file], value: file.name } })
+    );
+    await act(async () => getImportConfirmation(renderer).onConfirm());
+    expect(getText(renderer.root)).toContain('100%');
+    expect(getText(renderer.root)).toContain('usage_stats.import_processing_hint');
+    expect(getText(renderer.root)).not.toContain('Import complete');
+    act(() => findButton(renderer, 'Minimize')!.props.onClick());
+    expect(renderer.root.findAllByProps({ 'data-testid': 'transfer-drawer' })).toHaveLength(0);
+    act(() => findButton(renderer, 'Open import')!.props.onClick());
+    expect(getText(renderer.root)).toContain(file.name);
+    expect(mocks.uploadUsageImportFile).toHaveBeenCalledTimes(1);
+    act(() => renderer.unmount());
+    pending.resolve({ format: 'jsonl', added: 0, skipped: 0, total: 0, failed: 0 });
+    await flush();
+  });
+
+  it('distinguishes completed imports with unsupported records and warnings', async () => {
+    const session: UsageImportSession = {
+      id: 'import-with-issues',
+      filename: 'history.jsonl',
+      status: 'completed',
+      size_bytes: 10,
+      received_bytes: 10,
+      chunk_size_bytes: 10,
+      created_at_ms: 1,
+      updated_at_ms: 2,
+      expires_at_ms: 3,
+      result: {
+        format: 'jsonl',
+        added: 3,
+        skipped: 1,
+        total: 5,
+        failed: 0,
+        unsupported: 1,
+        warnings: ['One record uses an unsupported format.'],
+      },
+    };
+    mocks.listUsageImportSessions.mockResolvedValueOnce(
+      sessionList({ sessions: [session], total: 1 })
+    );
+    const renderer = await renderView();
+    const row = renderer.root.findByProps({ 'data-session-id': session.id });
+    expect(getText(row)).toContain('Completed with issues');
+    expect(getText(row)).toContain('unsupported 1');
+    act(() => findButton(renderer, 'Details')!.props.onClick());
+    expect(getText(renderer.root.findByProps({ 'data-testid': 'transfer-drawer' }))).toContain(
+      'One record uses an unsupported format.'
+    );
+    act(() => renderer.unmount());
+  });
+
+  it('revokes a file confirmation when the drawer closes', async () => {
+    const renderer = await renderView();
+    const file = new File(['{}'], 'cancelled-choice.jsonl');
+    act(() =>
+      renderer.root
+        .findByProps({ type: 'file' })
+        .props.onChange({ target: { files: [file], value: file.name } })
+    );
+    const confirmation = getImportConfirmation(renderer);
+    act(() => findButton(renderer, 'Close drawer')!.props.onClick());
+    act(() => confirmation.onConfirm());
+    expect(mocks.uploadUsageImportFile).not.toHaveBeenCalled();
+    act(() => renderer.unmount());
+  });
+
   it('loads session limits and downloads a sanitized export', async () => {
     mocks.exportUsage.mockResolvedValue({
       filename: 'usage-events.jsonl',
@@ -154,6 +374,7 @@ describe('UsageMaintenanceTransferView', () => {
     const renderer = await renderView();
 
     expect(getText(renderer.root)).toContain('16.00 GB');
+    act(() => findButton(renderer, 'Open export')!.props.onClick());
     const exportButton = findButton(renderer, 'Export sanitized JSONL');
     expect(exportButton).toBeDefined();
     await act(async () => {
@@ -195,7 +416,7 @@ describe('UsageMaintenanceTransferView', () => {
     const file = new File(['different prefix'], 'history.jsonl');
 
     act(() => input.props.onChange({ target: { files: [file], value: 'history.jsonl' } }));
-    const confirmation = mocks.showConfirmation.mock.calls[0][0] as {
+    const confirmation = getImportConfirmation(renderer) as {
       onConfirm: () => Promise<void>;
     };
     await act(async () => {
@@ -217,7 +438,7 @@ describe('UsageMaintenanceTransferView', () => {
     });
 
     act(() => input.props.onChange({ target: { files: [file], value: 'history.jsonl' } }));
-    const confirmation = mocks.showConfirmation.mock.calls[0]?.[0] as {
+    const confirmation = getImportConfirmation(renderer) as {
       onConfirm: () => Promise<void>;
     };
     expect(confirmation).toBeDefined();
@@ -264,7 +485,7 @@ describe('UsageMaintenanceTransferView', () => {
     const file = new File(['{}\n'], 'history.jsonl');
 
     act(() => input.props.onChange({ target: { files: [file], value: 'history.jsonl' } }));
-    const confirmation = mocks.showConfirmation.mock.calls[0][0] as {
+    const confirmation = getImportConfirmation(renderer) as {
       onConfirm: () => Promise<void>;
     };
     await act(async () => {
@@ -287,10 +508,7 @@ describe('UsageMaintenanceTransferView', () => {
     let renderer!: ReactTestRenderer;
     await act(async () => {
       renderer = create(
-        <UsageMaintenanceTransferView
-          serviceBase="http://manager.local"
-          managementKey="manager-key"
-        />
+        <TransferHarness serviceBase="http://manager.local" managementKey="manager-key" />
       );
       await Promise.resolve();
     });
@@ -345,8 +563,10 @@ describe('UsageMaintenanceTransferView', () => {
         .findByProps({ type: 'file' })
         .props.onChange({ target: { files: [file], value: file.name } })
     );
-    act(() => mocks.showConfirmation.mock.calls[0][0].onConfirm());
-    await act(async () => findButton(renderer, 'usage_stats.import_cancel')!.props.onClick());
+    act(() => getImportConfirmation(renderer).onConfirm());
+    act(() => findButton(renderer, 'usage_stats.import_cancel')!.props.onClick());
+    expect(mocks.cancelUsageImportFile).not.toHaveBeenCalled();
+    await act(async () => mocks.showConfirmation.mock.calls[0][0].onConfirm());
     expect(getText(renderer.root)).toContain('usage_stats.import_phase_cancelled');
 
     act(() => reportProgress({ ...progress, phase: 'paused' }));
@@ -368,7 +588,7 @@ describe('maintenance import context lifetime', () => {
         .findByProps({ type: 'file' })
         .props.onChange({ target: { files: [file], value: file.name } })
     );
-    const confirmation = mocks.showConfirmation.mock.calls[0][0];
+    const confirmation = getImportConfirmation(renderer);
     act(() => renderer.unmount());
     await confirmation.onConfirm();
     expect(mocks.uploadUsageImportFile).not.toHaveBeenCalled();
@@ -382,18 +602,15 @@ describe('maintenance import context lifetime', () => {
         .findByProps({ type: 'file' })
         .props.onChange({ target: { files: [file], value: file.name } })
     );
-    const confirmation = mocks.showConfirmation.mock.calls[0][0];
+    const confirmation = getImportConfirmation(renderer);
     await act(async () => {
       renderer.update(
-        <UsageMaintenanceTransferView serviceBase="http://other.local" managementKey="other-key" />
+        <TransferHarness serviceBase="http://other.local" managementKey="other-key" />
       );
     });
     await act(async () => {
       renderer.update(
-        <UsageMaintenanceTransferView
-          serviceBase="http://manager.local"
-          managementKey="manager-key"
-        />
+        <TransferHarness serviceBase="http://manager.local" managementKey="manager-key" />
       );
     });
     await confirmation.onConfirm();
@@ -405,12 +622,13 @@ describe('maintenance import context lifetime', () => {
     const pending = deferred<{ filename: string; blob: Blob }>();
     mocks.exportUsage.mockReturnValueOnce(pending.promise);
     const renderer = await renderView();
+    act(() => findButton(renderer, 'Open export')!.props.onClick());
     act(() => {
       void findButton(renderer, 'Export sanitized JSONL')!.props.onClick();
     });
     await act(async () => {
       renderer.update(
-        <UsageMaintenanceTransferView serviceBase="http://other.local" managementKey="other-key" />
+        <TransferHarness serviceBase="http://other.local" managementKey="other-key" />
       );
     });
     await act(async () => {

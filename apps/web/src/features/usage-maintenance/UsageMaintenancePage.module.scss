@@ -18,10 +18,10 @@
   background: var(--bg-primary);
 }
 .workspaceTabs {
-  width: 360px;
+  width: 300px;
   min-width: 0;
   button {
-    padding: 8px 10px;
+    padding: 8px 12px;
     white-space: normal;
     overflow-wrap: anywhere;
   }
@@ -40,6 +40,17 @@
 }
 .transferPanel {
   min-width: 0;
+}
+.preparingNotice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-primary);
+  font-size: 13px;
 }
 .error {
   padding: 12px 16px;
@@ -70,19 +81,19 @@
   }
 }
 .confirmSummary {
-  font-size: 14px;
-  line-height: 1.7;
+  font-size: 13px;
+  line-height: 1.8;
   dl {
     display: grid;
-    gap: 10px;
-    padding: 14px;
-    border-radius: 8px;
-    background: var(--bg-secondary);
+    gap: 14px;
+    margin: 20px 0;
+    padding: 16px 0;
+    border-block: 1px solid var(--border-color);
   }
   dl > div {
     display: grid;
     grid-template-columns: minmax(100px, 0.6fr) minmax(0, 1fr);
-    gap: 10px;
+    gap: 12px;
   }
   dt {
     color: var(--text-secondary);
@@ -90,14 +101,64 @@
   dd {
     margin: 0;
     overflow-wrap: anywhere;
+    font-variant-numeric: tabular-nums;
   }
+}
+.drawerActions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  button {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    height: auto;
+    min-height: 34px;
+    max-width: 100%;
+  }
+}
+.srOnlyMobile {
+  display: none;
 }
 @media (max-width: 768px) {
   .controlsPanel {
     padding: 12px;
   }
+  .workspaceTabs {
+    width: 100%;
+  }
   .controlsPanel > .actions {
     width: 100%;
     justify-content: flex-end;
+  }
+  .toolbarLabel {
+    display: none;
+  }
+  .srOnlyMobile {
+    display: block;
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .drawer.drawer {
+    height: 100dvh;
+    max-height: 100dvh;
+    width: 100% !important;
+    border-radius: 0;
+    border: 0;
+  }
+}
+@media (max-width: 400px) {
+  .confirmSummary dl > div {
+    grid-template-columns: 1fr;
+    gap: 4px;
   }
 }

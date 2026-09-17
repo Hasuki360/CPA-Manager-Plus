@@ -21,7 +21,19 @@ export type UsageMaintenanceView =
   | 'advanced'
   | 'diagnostics';
 
-export type ArchiveHistoryFilter = 'all' | 'archiving' | 'archived' | 'verified' | 'failed';
+export type ArchiveHistoryFilter =
+  | 'all'
+  | 'previewed'
+  | 'archiving'
+  | 'archived'
+  | 'verifying'
+  | 'verified'
+  | 'deleting'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
+
+export type ArchiveHistorySource = 'all' | 'manual' | 'retention';
 
 export type ArchiveRunAction = 'resume' | 'verify' | 'delete' | 'cancel';
 

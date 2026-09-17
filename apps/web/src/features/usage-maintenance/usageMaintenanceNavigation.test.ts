@@ -30,7 +30,7 @@ describe('usage maintenance navigation', () => {
       '&filter=verified&delete=true';
     const state = readUsageMaintenanceNavigation(hash, now);
     expect(state).toMatchObject({
-      tab: 'history',
+      tab: 'organize',
       runId: 'archive-123',
       panel: 'run',
       intent: 'cleanup',
@@ -80,5 +80,45 @@ describe('usage maintenance navigation', () => {
       now
     );
     expect(state).toMatchObject({ tab: 'organize', filter: 'all', panel: null, runId: null });
+  });
+
+  it('normalizes legacy history links to archive management with their source and status', () => {
+    expect(
+      readUsageMaintenanceNavigation(
+        '#/usage-maintenance?tab=history&source=retention&filter=completed',
+        now
+      )
+    ).toMatchObject({ tab: 'organize', panel: null, source: 'retention', filter: 'completed' });
+  });
+
+  it('opens creation only when requested and prevents a record ID from blocking its preview', () => {
+    expect(readUsageMaintenanceNavigation('#/usage-maintenance?days=7', now).panel).toBeNull();
+    expect(
+      readUsageMaintenanceNavigation('#/usage-maintenance?panel=create&run=unrelated&days=7', now)
+    ).toMatchObject({ panel: 'create', runId: null, retention: 7 });
+  });
+
+  it('restores an import detail without accepting archive action parameters', () => {
+    const state = readUsageMaintenanceNavigation(
+      '#/usage-maintenance?tab=transfer&panel=import-session&session=import-123&run=unrelated&delete=true',
+      now
+    );
+    expect(state).toMatchObject({ panel: 'import-session', sessionId: 'import-123', runId: null });
+    expect(writeUsageMaintenanceNavigation(state)).not.toContain('delete');
+    expect(
+      readUsageMaintenanceNavigation(
+        '#/usage-maintenance' + writeUsageMaintenanceNavigation(state),
+        now
+      )
+    ).toEqual(state);
+  });
+
+  it('rejects unsupported sources and unsafe import identifiers', () => {
+    expect(
+      readUsageMaintenanceNavigation(
+        '#/usage-maintenance?tab=transfer&panel=import-session&session=../../admin&source=external',
+        now
+      )
+    ).toMatchObject({ panel: null, sessionId: null, source: 'all' });
   });
 });

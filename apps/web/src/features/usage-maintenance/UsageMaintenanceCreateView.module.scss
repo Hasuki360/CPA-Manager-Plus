@@ -5,18 +5,16 @@
 }
 .layout {
   display: grid;
-  grid-template-columns: minmax(260px, 0.9fr) minmax(0, 1.3fr);
-  gap: 16px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 24px;
   align-items: start;
 }
 .card {
   min-width: 0;
-  padding: 20px;
-  border: 1px solid var(--border-color);
-  border-radius: 12px;
-  background: var(--bg-secondary);
+  padding: 0;
+  background: transparent;
   h2 {
-    font-size: 15px;
+    font-size: 14px;
     margin: 0 0 12px;
   }
 }
@@ -149,7 +147,7 @@
     grid-template-columns: minmax(0, 1fr);
   }
   .card {
-    padding: 16px;
+    padding: 0;
   }
   .intentOptions {
     margin-bottom: 18px;

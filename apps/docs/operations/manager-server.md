@@ -258,21 +258,21 @@ USAGE_DASHBOARD_HOURLY_ROLLUP_ENABLED=false
 - `HEAD /v0/management/usage/maintenance`：仅 Admin Key 可用的 capability probe；支持该功能的 Manager Server 返回 `204 No Content`。
 - `GET /v0/management/usage/maintenance`：读取 raw/已删除数量、活动 run/锁、迁移与 aggregate readiness，以及 SQLite page/freelist 和文件大小统计。
 
-创建 run 不会立即删除 raw。手动执行 `resume` 时，如果 cache-accounting migration 尚未完成会返回 coverage conflict；迁移完成后会先补齐仍待处理的 response metadata，再写入第一个 segment。稳定的手动 `archived` 和 `verified` run 不会阻止后续手动归档，因此无需启用删除也可以持续使用 archive/verify；自动 retention run 则会保持活动状态，直到 delete 阶段完成。放弃任务不会删除 raw rows、已发布归档 segment 或 identity ledger。对于在 archiving / verifying 阶段失败且尚未开始 raw delete 的 run，取消操作还会释放该 run 的活动归档事件引用和维护锁，使底层 raw event 可以重新参与后续维护。只有 archive 文件、manifest 和 identity ledger 已验证，并且 cache-accounting migration、永久小时 aggregate、pricing/monitoring rollup、监控搜索索引以及 account-history/dashboard checkpoint 都已追平 run target 后，才允许删除。`GET /v0/management/usage/maintenance` 汇总主要 readiness 信号，而 delete 会在每个有界事务内重新执行完整门禁。服务重启或进程中断后可用同一个 run 继续；已取消的 run 不会自动 resume，也不会阻塞手动或 retention run。删除只清理 `usage_events` 行，归档文件和 identity ledger 会保留，因此重复导入已归档事件仍会被幂等跳过。该流程不会在线执行 SQLite `VACUUM`。自动 retention 默认关闭；当 `USAGE_DASHBOARD_HOURLY_ROLLUP_ENABLED=false` 时不会启动，启用前应确认归档目录有足够空间并演练恢复。
+创建 run 不会立即删除 raw。手动执行 `resume` 时，如果 cache-accounting migration 尚未完成会返回 coverage conflict；迁移完成后会先补齐仍待处理的 response metadata，再写入第一个 segment。稳定的手动 `archived` 和 `verified` run 不会阻止后续手动归档，因此无需启用删除也可以持续使用 archive/verify；自动 retention run 则会保持活动状态，直到 delete 阶段完成。放弃任务不会删除 raw rows、已发布归档 segment 或 identity ledger。对于在 archiving / verifying 阶段失败且尚未开始 raw delete 的 run，取消操作还会释放该 run 的活动归档事件引用和维护锁，使底层 raw event 可以重新参与后续维护。只有 archive 文件、manifest 和 identity ledger 已验证，并且 cache-accounting migration、永久小时 aggregate、pricing/monitoring rollup、监控搜索索引以及 account-history checkpoint 都已追平 run target 后，才允许删除。Dashboard 的当前覆盖由永久小时 aggregate 校验，不再要求已经停用的旧 `dashboard_hourly` checkpoint。`GET /v0/management/usage/maintenance` 汇总主要 readiness 信号，而 delete 会在每个有界事务内重新执行完整门禁。服务重启或进程中断后可用同一个 run 继续；已取消的 run 不会自动 resume，也不会阻塞手动或 retention run。删除只清理 `usage_events` 行，归档文件和 identity ledger 会保留，因此重复导入已归档事件仍会被幂等跳过。该流程不会在线执行 SQLite `VACUUM`。自动 retention 默认关闭；当 `USAGE_DASHBOARD_HOURLY_ROLLUP_ENABLED=false` 时不会启动，启用前应确认归档目录有足够空间并演练恢复。
 
 当当前查询范围或 summary comparison 范围命中已完成验证归档并删除的 raw 历史时，Monitoring analytics 响应会返回 `coverage` 对象。当前范围与对比范围的 raw/deleted 数量分别报告；这些数量只按时间范围统计，不会被提供方、模型、账号、搜索或其他 analytics 筛选条件缩小。对象同时包含 `core_aggregate_used` 和机器可读的 `fidelity_limitations`。永久小时 aggregate 与 event projection 仍可准确提供受支持的 summary、model 和 timeline 核心统计，但仅依赖 raw 的事件明细、延迟百分位、分布、失败诊断、凭证时间线或不受支持的搜索可能不完整。Monitoring 与 Usage Analytics 页面会明确展示该限制，不会把缺失的 raw rows 或仅 raw 指标中的零值误认为完整历史。
 
 只有面板由 Manager Server 托管且 Manager Service 可用时，才会显示“用量维护”页面；普通 CPA 托管面板不会显示该入口。页面可以执行 preview/create/resume/verify/delete/cancel 并显示可回收空间，但物理压缩始终是离线 CLI 操作。
 
-“用量维护”按任务分为“数据整理”“导入 / 导出”和“处理记录”：
+“用量维护”分为“归档管理”和“导入 / 导出”两个页签，以记录列表为默认入口：
 
-- **数据整理**：选择“仅归档”或“归档后清理”，再选择截止时间、核对预览并确认归档。预览只统计尚未归档的在线明细；日期仅用于本次操作，不会设置自动保留策略。源数据体积估算不等于归档文件大小或可释放的磁盘空间。
-- **连续处理**：归档和校验完成后，当前记录直接展示结果及可用的下一步。“仅归档”到此完成，在线明细仍保留；清理必须另行确认，且只作用于确认框指明的整条归档记录。新归档所选日期不会缩小已有归档记录的清理范围。
-- **处理记录**：按时间、范围、归档数量、清理数量和状态查看记录，在详情抽屉中查看技术信息或继续失败阶段。“停止等待”只停止浏览器等待，不会取消当前服务端作业；页面离开后的后续阶段不会自动获得清理授权。重新进入时读取服务端实际状态，能否放弃任务仍由现有状态规则决定。
-- **导入 / 导出**：与请求监控共用导入进度及暂停、恢复、取消交互。恢复上传需使用原文件。导出包含当前全部在线明细，不会合并已清理明细的归档内容，也不能代替完整灾备备份；其他部署模式的原有导入导出入口仍保持可用。
-- **高级维护与诊断**：从工作台工具栏打开。高级维护提供完整备份要求和离线压缩步骤；诊断展示覆盖、存储、锁和能力状态。
+- **归档管理**：先查看在线明细、已清理明细、SQLite 文件合计和可回收空间，再按状态或来源筛选归档记录。在线明细摘要中的“其中已归档”是在线总量的子集；在线时间范围按需打开查看。
+- **新建归档**：从工具栏打开抽屉，选择“仅归档”或“归档后清理”，再选择截止时间、核对预览并确认归档。预览只统计尚未归档的在线明细；日期仅用于本次操作，不会设置自动保留策略。源数据体积估算不等于归档文件大小或可释放的磁盘空间。
+- **连续处理与详情**：同一抽屉衔接范围确认、执行、结果和后续操作。“仅归档”在校验完成后即可结束，在线明细仍保留；清理必须另行确认，且只作用于确认页指明的整条归档记录。新归档所选日期不会缩小已有归档记录的清理范围。详情中的技术字段和分段信息可按需展开，也可继续失败阶段。“停止等待”只停止浏览器等待，不会取消当前服务端作业；重新进入时读取服务端实际状态，能否放弃任务仍由现有状态规则决定。
+- **导入 / 导出**：默认展示最近 20 条导入记录，文件选择、确认、进度和结果在抽屉内呈现。与请求监控共用暂停、恢复、取消交互，恢复上传需使用原文件。上传达到 100% 后仍需等待服务端处理结果；存在失败、不支持或警告时单独提示。导出包含当前全部在线明细，不会合并已清理明细的归档内容，也不能代替完整灾备备份；其他部署模式的原有导入导出入口仍保持可用。
+- **存储与回收、诊断**：从工具栏的“更多维护”打开。存储与回收提供完整备份要求和离线压缩步骤；诊断展示覆盖、存储、锁和能力状态。
 
-页面 URL 保存分段、处理目的、截止时间、筛选与当前记录；刷新和前进后退只恢复视图并读取状态，不会自动创建归档或执行清理。清理成功后若存储统计刷新失败，页面仍显示清理成功，并提供重新读取统计的入口，无需再次清理。
+页面 URL 保存页签、处理目的、截止时间、状态与来源筛选、当前记录和抽屉；刷新和前进后退只恢复视图并读取状态，不会自动创建归档或执行清理。手机端抽屉占满屏幕，底部操作区保持可见。清理成功后若存储统计刷新失败，页面仍显示清理成功，并提供重新读取统计的入口，无需再次清理。
 
 ### 停服回收 SQLite 空间
 
