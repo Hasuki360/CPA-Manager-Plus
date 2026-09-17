@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -24,11 +25,19 @@ import (
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/security"
 	bootstrapservice "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/bootstrap"
 	collectorservice "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/collector"
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/buildinfo"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/store"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/worker"
 )
 
 func main() {
+	if handled, err := writeVersion(os.Args[1:], os.Stdout); handled {
+		if err != nil {
+			log.Printf("write version: %v", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "reset-admin-key", "reset-admin-password":
@@ -40,6 +49,14 @@ func main() {
 		}
 	}
 	runServer()
+}
+
+func writeVersion(args []string, stdout io.Writer) (bool, error) {
+	if len(args) != 1 || (args[0] != "-v" && args[0] != "--version") {
+		return false, nil
+	}
+	_, err := fmt.Fprintln(stdout, buildinfo.Version)
+	return true, err
 }
 
 func runServer() {

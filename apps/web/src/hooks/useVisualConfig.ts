@@ -640,6 +640,12 @@ function getNextDirtyFields(
       arePayloadFilterRulesEqual(nextValues.payloadFilterRules, baselineValues.payloadFilterRules)
     );
   }
+  if (Object.prototype.hasOwnProperty.call(patch, 'devinSensitiveWords')) {
+    updateDirty(
+      'devinSensitiveWords',
+      areStringArraysEqual(nextValues.devinSensitiveWords, baselineValues.devinSensitiveWords)
+    );
+  }
   if (patch.streaming) {
     const streamingPatch = patch.streaming;
     if (Object.prototype.hasOwnProperty.call(streamingPatch, 'keepaliveSeconds')) {
@@ -749,6 +755,7 @@ export function useVisualConfig() {
       const claudeHeaderDefaults = asRecord(parsed['claude-header-defaults']);
       const codexHeaderDefaults = asRecord(parsed['codex-header-defaults']);
       const codex = asRecord(parsed.codex);
+      const devin = asRecord(parsed.devin);
 
       const newValues: VisualConfigValues = {
         host: typeof parsed.host === 'string' ? parsed.host : '',
@@ -853,6 +860,7 @@ export function useVisualConfig() {
             ? codexHeaderDefaults['beta-features']
             : '',
         codexIdentityConfuse: Boolean(codex?.['identity-confuse'] ?? codex?.identityConfuse),
+        devinSensitiveWords: parseStringList(devin?.['sensitive-words']),
 
         quotaSwitchProject: Boolean(quotaExceeded?.['switch-project'] ?? false),
         quotaSwitchPreviewModel: Boolean(quotaExceeded?.['switch-preview-model'] ?? false),
@@ -1202,6 +1210,17 @@ export function useVisualConfig() {
             doc.deleteIn(codexIdentityConfuseLegacyPath);
           }
           deleteIfMapEmpty(doc, ['codex']);
+        }
+
+        if (isDirty('devinSensitiveWords')) {
+          const devinSensitiveWords = serializeStringListForYaml(values.devinSensitiveWords);
+          if (devinSensitiveWords.length > 0) {
+            ensureMapInDoc(doc, ['devin']);
+            doc.setIn(['devin', 'sensitive-words'], devinSensitiveWords);
+          } else if (docHas(doc, ['devin', 'sensitive-words'])) {
+            doc.deleteIn(['devin', 'sensitive-words']);
+          }
+          deleteIfMapEmpty(doc, ['devin']);
         }
 
         const writeQuotaSwitchProject = isDirty('quotaSwitchProject');

@@ -20,6 +20,10 @@ describe('dashboard version release links', () => {
   it('preserves valid prerelease identifiers while normalizing the v prefix', () => {
     expect(normalizeDashboardReleaseTag(' V1.12.0-rc.1 ')).toBe('v1.12.0-rc.1');
     expect(normalizeDashboardReleaseTag('1.12.0-beta3')).toBe('v1.12.0-beta3');
+    expect(normalizeDashboardReleaseTag('v1.13.0-旧面板-hasuki')).toBe('v1.13.0-旧面板-hasuki');
+    expect(buildDashboardVersionReleaseURL('manager', 'v1.13.0-旧面板-hasuki')).toBe(
+      'https://github.com/seakee/CPA-Manager-Plus/releases/tag/' + encodeURIComponent('v1.13.0-旧面板-hasuki')
+    );
   });
 
   it.each([

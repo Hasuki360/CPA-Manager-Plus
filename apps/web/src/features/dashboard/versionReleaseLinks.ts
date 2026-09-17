@@ -5,7 +5,7 @@ const RELEASE_REPOSITORIES: Record<DashboardVersionReleaseTarget, string> = {
   core: 'router-for-me/CLIProxyAPI',
 };
 
-const prereleaseIdentifier = String.raw`(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)`;
+const prereleaseIdentifier = String.raw`(?:0|[1-9]\d*|\d*[A-Za-z\u4e00-\u9fa5-][0-9A-Za-z\u4e00-\u9fa5-]*)`;
 const releaseVersionPattern = new RegExp(
   String.raw`^[vV]?(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-${prereleaseIdentifier}(?:\.${prereleaseIdentifier})*)?$`
 );

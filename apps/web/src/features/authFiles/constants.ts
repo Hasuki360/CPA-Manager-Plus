@@ -2,6 +2,8 @@ import type { TFunction } from 'i18next';
 import iconAntigravity from '@/assets/icons/antigravity.svg';
 import iconClaude from '@/assets/icons/claude.svg';
 import iconCodex from '@/assets/icons/codex.svg';
+import iconDevin from '@/assets/icons/devin.svg';
+import iconDevinDark from '@/assets/icons/devin-dark.svg';
 import iconGemini from '@/assets/icons/gemini.svg';
 import iconGrok from '@/assets/icons/grok.svg';
 import iconGrokDark from '@/assets/icons/grok-dark.svg';
@@ -98,6 +100,10 @@ export const TYPE_COLORS: Record<string, TypeColorSet> = {
     light: { bg: '#e4edfd', text: '#2b5fbc' },
     dark: { bg: '#1a3d80', text: '#89b3f7' },
   },
+  devin: {
+    light: { bg: '#e8f4ff', text: '#155e9b' },
+    dark: { bg: '#123b5d', text: '#8dc9f5' },
+  },
   empty: {
     light: { bg: '#f5f5f5', text: '#616161' },
     dark: { bg: '#424242', text: '#bdbdbd' },
@@ -113,6 +119,7 @@ export const AUTH_FILE_ICONS: Record<string, AuthFileIconAsset> = {
   aistudio: iconGemini,
   claude: iconClaude,
   codex: iconCodex,
+  devin: { light: iconDevin, dark: iconDevinDark },
   gemini: iconGemini,
   xai: { light: iconGrok, dark: iconGrokDark },
   iflow: iconIflow,
