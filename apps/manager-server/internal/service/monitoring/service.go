@@ -1026,6 +1026,9 @@ func (s *Service) analytics(ctx context.Context, req Request) (Response, error) 
 			location,
 			hourlyTimelineRepresentable,
 		)
+		if hourlySnapshot.ReadError != nil {
+			return Response{}, hourlySnapshot.ReadError
+		}
 	}
 	if hourlySnapshotAvailable {
 		prices = hourlySnapshot.Prices
@@ -1295,6 +1298,9 @@ func (s *Service) analytics(ctx context.Context, req Request) (Response, error) 
 						location,
 						false,
 					)
+					if prevSnapshot.ReadError != nil {
+						return Response{}, prevSnapshot.ReadError
+					}
 				}
 				if prevSnapshotAvailable {
 					prevAgg = prevSnapshot.Aggregate

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"fmt"
 	"io"
 	"sync"
 	"time"
@@ -653,9 +654,18 @@ func (s *Store) LoadUsageHourlyPricingSnapshot(
 	if err != nil {
 		return UsageHourlyPricingSnapshot{}, err
 	}
-	pricingRows, pricingState, pricingAvailable, err := s.UsagePricing.LoadHourlyRowsTx(ctx, tx, pricingFilter)
-	if err != nil {
-		return UsageHourlyPricingSnapshot{}, err
+	pricingRows, pricingState, pricingAvailable, pricingErr := s.UsagePricing.LoadHourlyRowsTx(ctx, tx, pricingFilter)
+	if aggregateAvailable && (pricingErr != nil || !pricingAvailable || !hourlyPricingCoverageMatches(aggregateRows, pricingRows)) {
+		pricingRows, err = s.UsagePricing.LoadHourlyRowsFromEventsTx(ctx, tx, pricingFilter)
+		if err != nil {
+			return UsageHourlyPricingSnapshot{}, fmt.Errorf("%w: retained event query: %w", ErrUsagePricingCoverageIncomplete, err)
+		}
+		if !hourlyPricingCoverageMatches(aggregateRows, pricingRows) {
+			return UsageHourlyPricingSnapshot{}, ErrUsagePricingCoverageIncomplete
+		}
+		pricingAvailable = true
+	} else if pricingErr != nil {
+		return UsageHourlyPricingSnapshot{}, pricingErr
 	}
 	prices, err := s.ModelPrices.LoadAllTx(ctx, tx)
 	if err != nil {
@@ -685,9 +695,20 @@ func (s *Store) LoadUsagePricingAccountSnapshot(ctx context.Context, accountKeys
 		return UsagePricingAccountSnapshot{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	rows, state, available, err := s.UsagePricing.LoadAccountRowsTx(ctx, tx, accountKeys)
+	coreRows, err := s.UsageRollups.AccountHistoryRowsTx(ctx, tx, accountKeys)
 	if err != nil {
 		return UsagePricingAccountSnapshot{}, err
+	}
+	rows, state, available, pricingErr := s.UsagePricing.LoadAccountRowsTx(ctx, tx, accountKeys)
+	if pricingErr != nil || !available || !accountPricingCoverageMatches(coreRows, rows) {
+		rows, err = s.UsagePricing.LoadAccountRowsFromEventsTx(ctx, tx, accountKeys)
+		if err != nil {
+			return UsagePricingAccountSnapshot{}, fmt.Errorf("%w: retained account event query: %w", ErrUsagePricingCoverageIncomplete, err)
+		}
+		if !accountPricingCoverageMatches(coreRows, rows) {
+			return UsagePricingAccountSnapshot{}, ErrUsagePricingCoverageIncomplete
+		}
+		available = true
 	}
 	prices, err := s.ModelPrices.LoadAllTx(ctx, tx)
 	if err != nil {
