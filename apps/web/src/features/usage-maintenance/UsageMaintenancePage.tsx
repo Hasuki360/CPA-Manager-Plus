@@ -412,10 +412,10 @@ export function UsageMaintenancePage() {
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const syncFromHash = () => {
+      const pathname = window.location.hash.split('?')[0];
       if (
-        !['#/usage-maintenance', '#/demo/usage-maintenance'].includes(
-          window.location.hash.split('?')[0]
-        )
+        pathname !== '#/usage-maintenance' &&
+        !(__DEMO_SITE__ && pathname === '#/demo/usage-maintenance')
       )
         return;
       const next = readUsageMaintenanceNavigation();
