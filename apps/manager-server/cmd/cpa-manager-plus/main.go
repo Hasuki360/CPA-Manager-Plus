@@ -340,6 +340,9 @@ func runServer() {
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Printf("shutdown: %v", err)
 	}
+	if err := usageArchiveRetentionWorker.StopAndWait(shutdownCtx); err != nil {
+		log.Printf("shutdown usage archive retention: %v", err)
+	}
 	if err := serverApp.AppContext().UsageService.WaitArchiveJobs(shutdownCtx); err != nil {
 		log.Printf("shutdown usage archive jobs: %v", err)
 	}

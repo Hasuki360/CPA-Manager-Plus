@@ -25,7 +25,10 @@ type UsageArchiveRetentionWorker struct {
 	interval      time.Duration
 	retryInterval time.Duration
 	running       atomic.Int32
-	start         sync.Once
+	lifecycleMu   sync.Mutex
+	cancel        context.CancelFunc
+	done          chan struct{}
+	stopped       bool
 	now           func() time.Time
 }
 
@@ -51,9 +54,44 @@ func (w *UsageArchiveRetentionWorker) Start(ctx context.Context) {
 	if w == nil || w.service == nil || w.retentionDays <= 0 {
 		return
 	}
-	w.start.Do(func() {
-		go w.loop(ctx)
-	})
+	w.lifecycleMu.Lock()
+	defer w.lifecycleMu.Unlock()
+	if w.done != nil || w.stopped || ctx.Err() != nil {
+		return
+	}
+	workerCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	w.cancel = cancel
+	w.done = done
+	go func() {
+		defer close(done)
+		defer cancel()
+		w.loop(workerCtx)
+	}()
+}
+
+// StopAndWait fences delayed startup, cancels retention work, and waits for
+// archive-file and database cleanup before the shared store is closed.
+func (w *UsageArchiveRetentionWorker) StopAndWait(ctx context.Context) error {
+	if w == nil {
+		return nil
+	}
+	w.lifecycleMu.Lock()
+	w.stopped = true
+	cancel, done := w.cancel, w.done
+	w.lifecycleMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if done == nil {
+		return nil
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (w *UsageArchiveRetentionWorker) loop(ctx context.Context) {

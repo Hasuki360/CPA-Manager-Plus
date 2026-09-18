@@ -275,6 +275,76 @@ func TestUsageArchiveRetentionWorkerLoopUsesShortRetryAfterFailure(t *testing.T)
 	cancel()
 }
 
+func TestUsageArchiveRetentionWorkerStopWaitsForCleanup(t *testing.T) {
+	drain := make(chan struct{})
+	service := &blockingRetentionService{
+		started: make(chan struct{}), returned: make(chan struct{}, 1),
+		release: make(chan struct{}), drain: drain,
+	}
+	worker := NewUsageArchiveRetentionWorker(service, 30)
+	t.Cleanup(func() {
+		select {
+		case <-drain:
+		default:
+			close(drain)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = worker.StopAndWait(ctx)
+	})
+	worker.Start(context.Background())
+	select {
+	case <-service.started:
+	case <-time.After(time.Second):
+		t.Fatal("retention worker did not start")
+	}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := worker.StopAndWait(cancelled); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled shutdown wait = %v", err)
+	}
+	select {
+	case <-service.returned:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown did not cancel the in-flight retention operation")
+	}
+	deadline, cancelDeadline := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancelDeadline()
+	if err := worker.StopAndWait(deadline); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("wait returned before retention cleanup finished: %v", err)
+	}
+	close(drain)
+	waitCtx, cancelWait := context.WithTimeout(context.Background(), time.Second)
+	defer cancelWait()
+	if err := worker.StopAndWait(waitCtx); err != nil {
+		t.Fatalf("wait for drained retention worker: %v", err)
+	}
+	worker.Start(context.Background())
+	if calls := service.calls.Load(); calls != 1 {
+		t.Fatalf("stopped retention worker restarted: %d calls", calls)
+	}
+}
+
+func TestUsageArchiveRetentionWorkerStopFencesDelayedStart(t *testing.T) {
+	var absent *UsageArchiveRetentionWorker
+	if err := absent.StopAndWait(context.Background()); err != nil {
+		t.Fatalf("wait for absent worker: %v", err)
+	}
+	for _, days := range []int{0, 30} {
+		worker := NewUsageArchiveRetentionWorker(&fakeUsageArchiveRetentionService{}, days)
+		if err := worker.StopAndWait(context.Background()); err != nil {
+			t.Fatalf("wait before startup: %v", err)
+		}
+		worker.Start(context.Background())
+		worker.lifecycleMu.Lock()
+		started := worker.done != nil
+		worker.lifecycleMu.Unlock()
+		if started {
+			t.Fatal("retention worker started after shutdown")
+		}
+	}
+}
+
 func TestUsageArchiveRetentionWorkerResumesPersistedStagesAfterStoreRestart(t *testing.T) {
 	for _, test := range []struct {
 		name    string
@@ -564,6 +634,7 @@ type blockingRetentionService struct {
 	started  chan struct{}
 	returned chan struct{}
 	release  chan struct{}
+	drain    <-chan struct{}
 }
 
 type retryingRetentionService struct {
@@ -582,6 +653,9 @@ func (f *blockingRetentionService) ActiveArchiveRun(ctx context.Context) (store.
 	select {
 	case f.returned <- struct{}{}:
 	default:
+	}
+	if f.drain != nil {
+		<-f.drain
 	}
 	return store.UsageArchiveRun{}, false, errors.New("probe complete")
 }
