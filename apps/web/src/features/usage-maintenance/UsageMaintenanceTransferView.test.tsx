@@ -406,6 +406,33 @@ describe('UsageMaintenanceTransferView', () => {
     act(() => renderer.unmount());
   });
 
+  it('reports export failure as export failure and allows retry without a fake download', async () => {
+    mocks.exportUsage.mockRejectedValueOnce(new Error('503 raw upstream failure'));
+    const renderer = await renderView();
+    act(() => findButton(renderer, 'Open export')!.props.onClick());
+    await act(async () => findButton(renderer, 'Export sanitized JSONL')!.props.onClick());
+
+    expect(mocks.showNotification).toHaveBeenCalledWith(
+      'The export request could not be completed. Please retry.',
+      'error'
+    );
+    expect(mocks.showNotification).not.toHaveBeenCalledWith(expect.anything(), 'success');
+    expect(mocks.downloadBlob).not.toHaveBeenCalled();
+    expect(findButton(renderer, 'Export sanitized JSONL')!.props.disabled).toBeFalsy();
+
+    mocks.exportUsage.mockResolvedValueOnce({
+      filename: 'retry.jsonl',
+      blob: new Blob(['{}\n']),
+    });
+    await act(async () => findButton(renderer, 'Export sanitized JSONL')!.props.onClick());
+    expect(mocks.downloadBlob).toHaveBeenCalledTimes(1);
+    expect(mocks.showNotification).toHaveBeenCalledWith(
+      'Sanitized usage JSONL export downloaded.',
+      'success'
+    );
+    act(() => renderer.unmount());
+  });
+
   it('shows a dedicated file-mismatch message and never starts a chunk upload', async () => {
     mocks.uploadUsageImportFile.mockRejectedValueOnce({
       code: 'usage_import_session_file_mismatch',
@@ -473,6 +500,67 @@ describe('UsageMaintenanceTransferView', () => {
       'The Manager Server import disk quota is currently reserved by other sessions.'
     );
     expect(getText(renderer.root)).not.toContain('usage_import_session_quota_exceeded');
+    expect(getText(renderer.root)).not.toContain('No import sessions yet.');
+    expect(getText(renderer.root)).not.toContain('Current 0 / 0');
+    expect(findButton(renderer, 'common.retry')).toBeDefined();
+    act(() => renderer.unmount());
+  });
+
+  it('does not render a confirmed empty list or zero limits while the first request is loading', async () => {
+    const pending = deferred<UsageImportSessionList>();
+    mocks.listUsageImportSessions.mockReturnValueOnce(pending.promise);
+    const renderer = await renderView();
+
+    expect(getText(renderer.root)).toContain('common.loading');
+    expect(getText(renderer.root)).not.toContain('No import sessions yet.');
+    expect(getText(renderer.root)).not.toContain('Current 0 / 0');
+
+    await act(async () => pending.resolve(sessionList()));
+    expect(getText(renderer.root)).toContain('No import sessions yet.');
+    expect(getText(renderer.root)).toContain('Current 0 / 2');
+    act(() => renderer.unmount());
+  });
+
+  it('only renders the empty result after a failed request is successfully retried', async () => {
+    mocks.listUsageImportSessions.mockRejectedValueOnce(new Error('503'));
+    const renderer = await renderView();
+
+    expect(renderer.root.findAllByProps({ role: 'alert' })).toHaveLength(1);
+    expect(getText(renderer.root)).not.toContain('No import sessions yet.');
+    expect(getText(renderer.root)).not.toContain('Current 0 / 0');
+    await act(async () => findButton(renderer, 'common.retry')!.props.onClick());
+
+    expect(mocks.listUsageImportSessions).toHaveBeenCalledTimes(2);
+    expect(renderer.root.findAllByProps({ role: 'alert' })).toHaveLength(0);
+    expect(getText(renderer.root)).toContain('No import sessions yet.');
+    expect(getText(renderer.root)).toContain('Current 0 / 2');
+    act(() => renderer.unmount());
+  });
+
+  it('preserves previously loaded rows and offers retry when a refresh fails', async () => {
+    vi.useFakeTimers();
+    const session: UsageImportSession = {
+      id: 'existing-session',
+      filename: 'existing.jsonl',
+      status: 'uploading',
+      size_bytes: 100,
+      received_bytes: 50,
+      chunk_size_bytes: 1024,
+      created_at_ms: 1,
+      updated_at_ms: 1,
+      expires_at_ms: Date.now() + 60_000,
+    };
+    mocks.listUsageImportSessions
+      .mockResolvedValueOnce(sessionList({ sessions: [session], total: 1, active_sessions: 1 }))
+      .mockRejectedValueOnce(new Error('503'));
+    const renderer = await renderView();
+    await act(async () => vi.advanceTimersByTimeAsync(5000));
+
+    expect(renderer.root.findAllByProps({ role: 'alert' })).toHaveLength(1);
+    expect(getText(renderer.root)).toContain('existing.jsonl');
+    expect(getText(renderer.root)).not.toContain('No import sessions yet.');
+    expect(getText(renderer.root)).not.toContain('Current 0 / 0');
+    expect(findButton(renderer, 'common.retry')).toBeDefined();
     act(() => renderer.unmount());
   });
 

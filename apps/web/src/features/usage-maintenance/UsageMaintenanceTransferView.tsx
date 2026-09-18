@@ -483,9 +483,14 @@ export function UsageMaintenanceTransferView({
         }),
         'success'
       );
-    } catch (cause) {
+    } catch {
       if (!mountedRef.current || generation !== contextGenerationRef.current) return;
-      showNotification(formatImportError(cause, t), 'error');
+      showNotification(
+        t('usage_maintenance.transfer_export_error', {
+          defaultValue: 'The export request could not be completed. Please retry.',
+        }),
+        'error'
+      );
     } finally {
       if (mountedRef.current && generation === contextGenerationRef.current) setExporting(false);
     }
@@ -671,6 +676,14 @@ export function UsageMaintenanceTransferView({
       {error ? (
         <div className={styles.error} role="alert">
           {error}
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={loading || refreshing}
+            onClick={() => void loadSessions()}
+          >
+            {t('common.retry')}
+          </Button>
         </div>
       ) : null}
       {activeTask && !['completed', 'cancelled'].includes(activeTask.progress.phase) ? (
@@ -688,10 +701,12 @@ export function UsageMaintenanceTransferView({
         <div className={styles.sectionHeader}>
           <h2>{t('usage_maintenance.transfer_sessions_title')}</h2>
           <span>
-            {t('usage_maintenance.transfer_session_count', {
-              current: sessionList?.active_sessions ?? 0,
-              total: sessionList?.max_sessions ?? 0,
-            })}
+            {sessionList && !error
+              ? t('usage_maintenance.transfer_session_count', {
+                  current: sessionList.active_sessions,
+                  total: sessionList.max_sessions,
+                })
+              : '—'}
           </span>
         </div>
         <table className={styles.sessionTable}>
@@ -771,19 +786,15 @@ export function UsageMaintenanceTransferView({
             ))}
           </tbody>
         </table>
-        {sessions.length === 0 ? (
+        {sessions.length === 0 && loading ? (
+          <div className={styles.empty}>{t('common.loading')}</div>
+        ) : null}
+        {sessions.length === 0 && !loading && !error && sessionList ? (
           <div className={styles.empty}>
-            {loading ? t('common.loading') : t('usage_maintenance.transfer_no_sessions')}
-            {!loading && !error ? (
-              <Button size="sm" onClick={() => onOpenPanel('import')}>
-                {t('usage_maintenance.import_file')}
-              </Button>
-            ) : null}
-            {error ? (
-              <Button size="sm" variant="secondary" onClick={() => void loadSessions()}>
-                {t('common.retry')}
-              </Button>
-            ) : null}
+            {t('usage_maintenance.transfer_no_sessions')}
+            <Button size="sm" onClick={() => onOpenPanel('import')}>
+              {t('usage_maintenance.import_file')}
+            </Button>
           </div>
         ) : null}
         <p className={styles.listNote}>{t('usage_maintenance.recent_imports_note')}</p>
