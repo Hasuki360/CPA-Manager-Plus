@@ -232,6 +232,7 @@ export function UsageMaintenanceTransferView({
       contextGenerationRef.current += 1;
       operationIDRef.current += 1;
       operationRef.current?.abort();
+      operationRef.current = null;
     };
   }, [managementKey, serviceBase]);
 
@@ -276,9 +277,6 @@ export function UsageMaintenanceTransferView({
   useEffect(() => {
     void loadSessions();
     return () => {
-      operationIDRef.current += 1;
-      operationRef.current?.abort();
-      operationRef.current = null;
       sessionRequestIDRef.current += 1;
       sessionRequestRef.current?.abort();
       sessionRequestRef.current = null;
@@ -514,29 +512,47 @@ export function UsageMaintenanceTransferView({
         file: task.file,
       });
       if (!mountedRef.current || generation !== contextGenerationRef.current) return;
-      if (result) {
-        setActiveTask((current) =>
-          current?.file === task.file
-            ? {
-                ...current,
-                progress: {
-                  ...current.progress,
-                  sessionId: result.id,
-                  filename: result.filename,
-                  phase: result.status === 'completed' ? 'completed' : 'cancelled',
-                  status: result.status,
-                  uploadedBytes: result.received_bytes,
-                  totalBytes: result.size_bytes,
-                  percent: progressPercent(result),
-                  result: result.result,
-                },
-              }
-            : current
-        );
+      if (result && result.status !== 'completed' && result.status !== 'cancelled') {
+        throw new Error('usage import cancellation did not reach a terminal state');
       }
+      // A settled server result wins over late progress or errors from the aborted upload.
+      operationIDRef.current += 1;
+      operationRef.current = null;
+      const completed = result?.status === 'completed';
+      setActiveTask((current) =>
+        current?.file === task.file
+          ? {
+              ...current,
+              progress: {
+                ...current.progress,
+                sessionId: result?.id ?? current.progress.sessionId,
+                filename: result?.filename ?? current.progress.filename,
+                phase: completed ? 'completed' : 'cancelled',
+                status: result?.status ?? 'cancelled',
+                uploadedBytes: result?.received_bytes ?? current.progress.uploadedBytes,
+                totalBytes: result?.size_bytes ?? current.progress.totalBytes,
+                percent: result ? progressPercent(result) : current.progress.percent,
+                result: result?.result ?? current.progress.result,
+                error: undefined,
+                retryable: false,
+              },
+            }
+          : current
+      );
       showNotification(
-        t('usage_maintenance.transfer_cancelled', { defaultValue: 'Import session cancelled.' }),
-        'success'
+        completed
+          ? t('usage_stats.import_completed_before_cancel', {
+              defaultValue:
+                'The import completed before cancellation took effect ({{added}} added, {{skipped}} skipped).',
+              added: result.result?.added ?? 0,
+              skipped: result.result?.skipped ?? 0,
+            })
+          : result
+            ? t('usage_maintenance.transfer_cancelled', {
+                defaultValue: 'Import session cancelled.',
+              })
+            : t('usage_maintenance.transfer_error_not_found'),
+        !result || completed ? 'warning' : 'success'
       );
       await loadSessions(true);
     } catch (cause) {

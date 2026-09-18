@@ -23,6 +23,7 @@ const { mocks } = vi.hoisted(() => {
       cancelUsageImportFile: vi.fn(),
       downloadBlob: vi.fn(),
       onUsageChanged: vi.fn(),
+      language: 'en',
       t: (key: string, options?: Record<string, unknown>) => {
         let value = typeof options?.defaultValue === 'string' ? options.defaultValue : key;
         for (const [name, replacement] of Object.entries(options ?? {})) {
@@ -41,7 +42,13 @@ vi.mock('react-i18next', () => {
       : undefined;
     return mocks.t(key, { ...(localized ? { defaultValue: localized } : {}), ...options });
   };
-  return { useTranslation: () => ({ i18n: { language: 'en' }, t }) };
+  const translatedT = (key: string, options?: Record<string, unknown>) => t(key, options);
+  return {
+    useTranslation: () => ({
+      i18n: { language: mocks.language },
+      t: mocks.language === 'en' ? t : translatedT,
+    }),
+  };
 });
 
 vi.mock('@/components/ui/Drawer', () => ({
@@ -192,6 +199,7 @@ const renderView = async () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.language = 'en';
   mocks.listUsageImportSessions.mockResolvedValue(sessionList());
   mocks.uploadUsageImportFile.mockResolvedValue({
     format: 'jsonl',
@@ -209,6 +217,61 @@ afterEach(() => {
 });
 
 describe('UsageMaintenanceTransferView', () => {
+  it.each(['uploading', 'processing'] as const)(
+    'keeps an active %s import running when the language changes',
+    async (phase) => {
+      const result = { format: 'jsonl', added: 1, skipped: 0, total: 1, failed: 0 };
+      const pending = deferred<typeof result>();
+      const file = new File(['{}\n'], 'language-change.jsonl');
+      let reportProgress!: (value: UsageImportProgress) => void;
+      const progress: UsageImportProgress = {
+        filename: file.name,
+        sessionId: 'language-change',
+        phase,
+        status: phase,
+        uploadedBytes: phase === 'processing' ? file.size : 0,
+        totalBytes: file.size,
+        percent: phase === 'processing' ? 100 : 0,
+      };
+      mocks.uploadUsageImportFile.mockImplementationOnce(
+        ({ onProgress }: { onProgress: typeof reportProgress }) => {
+          reportProgress = onProgress;
+          reportProgress(progress);
+          return pending.promise;
+        }
+      );
+      const renderer = await renderView();
+      try {
+        act(() =>
+          renderer.root
+            .findByProps({ type: 'file' })
+            .props.onChange({ target: { files: [file], value: file.name } })
+        );
+        act(() => getImportConfirmation(renderer).onConfirm());
+        mocks.language = 'zh-CN';
+        await act(async () =>
+          renderer.update(
+            <TransferHarness serviceBase="http://manager.local" managementKey="manager-key" />
+          )
+        );
+
+        expect(mocks.uploadUsageImportFile.mock.calls[0][0].signal.aborted).toBe(false);
+        expect(mocks.uploadUsageImportFile).toHaveBeenCalledTimes(1);
+        await act(async () => {
+          reportProgress({ ...progress, phase: 'completed', status: 'completed', result });
+          pending.resolve(result);
+        });
+        await flush();
+        expect(getText(renderer.root)).toContain('usage_stats.import_phase_completed');
+        expect(mocks.onUsageChanged).toHaveBeenCalledTimes(1);
+      } finally {
+        act(() => renderer.unmount());
+        pending.resolve(result);
+        await flush();
+      }
+    }
+  );
+
   it('refreshes usage after an import finishes with its drawer closed', async () => {
     const pending = deferred<{
       format: string;
@@ -608,63 +671,102 @@ describe('UsageMaintenanceTransferView', () => {
     await pending.promise;
   });
 
-  it('keeps a confirmed cancellation when the aborted upload reports a late pause', async () => {
-    const pending = deferred<{
-      format: string;
-      added: number;
-      total: number;
-      skipped: number;
-      failed: number;
-    }>();
-    const file = new File(['{}\n'], 'history.jsonl');
-    const progress: UsageImportProgress = {
-      filename: file.name,
-      sessionId: 'cancelled-session',
-      phase: 'uploading',
-      status: 'uploading',
-      uploadedBytes: 0,
-      totalBytes: file.size,
-      percent: 0,
-    };
-    let reportProgress!: (value: UsageImportProgress) => void;
-    mocks.uploadUsageImportFile.mockImplementationOnce(
-      (options: { onProgress: typeof reportProgress }) => {
-        reportProgress = options.onProgress;
-        reportProgress(progress);
-        return pending.promise;
+  it.each(['cancelled', 'completed', 'completed-with-issues', 'missing'] as const)(
+    'preserves the %s cancellation outcome when the aborted upload reports a late pause',
+    async (outcome) => {
+      const pending = deferred<{
+        format: string;
+        added: number;
+        total: number;
+        skipped: number;
+        failed: number;
+      }>();
+      const file = new File(['{}\n'], 'history.jsonl');
+      const progress: UsageImportProgress = {
+        filename: file.name,
+        sessionId: 'cancelled-session',
+        phase: 'uploading',
+        status: 'uploading',
+        uploadedBytes: 0,
+        totalBytes: file.size,
+        percent: 0,
+      };
+      let reportProgress!: (value: UsageImportProgress) => void;
+      mocks.uploadUsageImportFile.mockImplementationOnce(
+        (options: { onProgress: typeof reportProgress }) => {
+          reportProgress = options.onProgress;
+          reportProgress(progress);
+          return pending.promise;
+        }
+      );
+      const completed = outcome === 'completed' || outcome === 'completed-with-issues';
+      mocks.cancelUsageImportFile.mockResolvedValueOnce(
+        outcome === 'missing'
+          ? null
+          : {
+              id: progress.sessionId,
+              filename: file.name,
+              status: completed ? 'completed' : 'cancelled',
+              size_bytes: file.size,
+              received_bytes: 0,
+              chunk_size_bytes: file.size,
+              created_at_ms: 1,
+              updated_at_ms: 2,
+              expires_at_ms: 3,
+              result: completed
+                ? {
+                    format: 'jsonl',
+                    added: 1,
+                    skipped: 0,
+                    total: 1,
+                    failed: 0,
+                    warnings:
+                      outcome === 'completed-with-issues' ? ['Review unsupported records.'] : [],
+                  }
+                : undefined,
+            }
+      );
+      const renderer = await renderView();
+      act(() =>
+        renderer.root
+          .findByProps({ type: 'file' })
+          .props.onChange({ target: { files: [file], value: file.name } })
+      );
+      act(() => getImportConfirmation(renderer).onConfirm());
+      act(() => findButton(renderer, 'usage_stats.import_cancel')!.props.onClick());
+      expect(mocks.cancelUsageImportFile).not.toHaveBeenCalled();
+      await act(async () => mocks.showConfirmation.mock.calls[0][0].onConfirm());
+      const expectedPhase = completed ? 'completed' : 'cancelled';
+      expect(getText(renderer.root)).toContain(`usage_stats.import_phase_${expectedPhase}`);
+      expect(mocks.showNotification).toHaveBeenCalledWith(
+        completed
+          ? 'The import completed before cancellation took effect (1 added, 0 skipped).'
+          : outcome === 'missing'
+            ? 'The resumable session has expired or no longer exists.'
+            : 'Import session cancelled.',
+        outcome !== 'cancelled' ? 'warning' : 'success'
+      );
+      if (completed || outcome === 'missing') {
+        expect(mocks.showNotification).not.toHaveBeenCalledWith(
+          'Import session cancelled.',
+          'success'
+        );
       }
-    );
-    mocks.cancelUsageImportFile.mockResolvedValueOnce({
-      id: progress.sessionId,
-      filename: file.name,
-      status: 'cancelled',
-      size_bytes: file.size,
-      received_bytes: 0,
-      chunk_size_bytes: file.size,
-      created_at_ms: 1,
-      updated_at_ms: 2,
-      expires_at_ms: 3,
-    });
-    const renderer = await renderView();
-    act(() =>
-      renderer.root
-        .findByProps({ type: 'file' })
-        .props.onChange({ target: { files: [file], value: file.name } })
-    );
-    act(() => getImportConfirmation(renderer).onConfirm());
-    act(() => findButton(renderer, 'usage_stats.import_cancel')!.props.onClick());
-    expect(mocks.cancelUsageImportFile).not.toHaveBeenCalled();
-    await act(async () => mocks.showConfirmation.mock.calls[0][0].onConfirm());
-    expect(getText(renderer.root)).toContain('usage_stats.import_phase_cancelled');
 
-    act(() => reportProgress({ ...progress, phase: 'paused' }));
-    expect(getText(renderer.root)).toContain('usage_stats.import_phase_cancelled');
-    expect(findButton(renderer, 'usage_stats.import_resume')).toBeUndefined();
+      act(() => reportProgress({ ...progress, phase: 'paused' }));
+      expect(getText(renderer.root)).toContain(`usage_stats.import_phase_${expectedPhase}`);
+      expect(findButton(renderer, 'usage_stats.import_resume')).toBeUndefined();
 
-    act(() => renderer.unmount());
-    pending.resolve({ format: 'jsonl', added: 0, total: 0, skipped: 0, failed: 0 });
-    await flush();
-  });
+      await act(async () =>
+        pending.resolve({ format: 'jsonl', added: 0, total: 0, skipped: 0, failed: 0 })
+      );
+      await flush();
+      expect(getText(renderer.root)).toContain(`usage_stats.import_phase_${expectedPhase}`);
+      expect(mocks.showNotification).toHaveBeenCalledTimes(1);
+      expect(mocks.onUsageChanged).toHaveBeenCalledTimes(1);
+      act(() => renderer.unmount());
+    }
+  );
 });
 
 describe('maintenance import context lifetime', () => {
