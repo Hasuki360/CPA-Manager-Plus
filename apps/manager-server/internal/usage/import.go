@@ -939,7 +939,7 @@ func streamLegacyDetailsValue(
 			return false, err
 		}
 		var detail map[string]any
-		if err := json.Unmarshal(raw, &detail); err != nil || detail == nil {
+		if err := decodeJSON(raw, &detail); err != nil || detail == nil {
 			result.Failed++
 			detailIndex++
 			continue

@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -864,7 +865,7 @@ func readOptionalFloat(record map[string]any, keys ...string) *float64 {
 	default:
 		return nil
 	}
-	if err != nil {
+	if err != nil || math.IsNaN(value) || math.IsInf(value, 0) {
 		return nil
 	}
 	return &value

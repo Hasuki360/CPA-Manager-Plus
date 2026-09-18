@@ -216,6 +216,24 @@ func TestParseImportPayloadPreservesExportedEventHash(t *testing.T) {
 	}
 }
 
+func TestParseImportPayloadIgnoresNonFiniteOptionalPercentages(t *testing.T) {
+	for _, value := range []string{"NaN", "Inf", "+Inf", "-Inf"} {
+		t.Run(value, func(t *testing.T) {
+			payload := []byte(`{"event_hash":"finite-percentage","timestamp_ms":1,"timestamp":"1970-01-01T00:00:00.001Z","model":"gpt-test","header_quota_used_percent":"` + value + `"}`)
+			result, err := ParseImportPayload(payload)
+			if err != nil || len(result.Events) != 1 {
+				t.Fatalf("parse optional percentage: %#v, %v", result, err)
+			}
+			if _, err := json.Marshal(result.Events[0]); err != nil {
+				t.Fatalf("imported event is not JSON-serializable: %v", err)
+			}
+			if result.Events[0].HeaderQuotaUsedPercent != nil {
+				t.Fatalf("non-finite optional percentage was retained: %v", result.Events[0].HeaderQuotaUsedPercent)
+			}
+		})
+	}
+}
+
 func TestParseImportPayloadRejectsUnsupportedArchiveSchemaVersion(t *testing.T) {
 	payload := `{
 	  "_cpamp_archive_schema_version": 2,
@@ -967,6 +985,20 @@ func TestStreamImportPayloadLegacyMatchesExistingParser(t *testing.T) {
 		{name: "wrapped export", payload: legacyUsageExportFixture},
 		{name: "direct payload", payload: directFixture},
 		{name: "partial records", payload: partialFixture},
+		{
+			name: "numeric spelling preserves legacy identity",
+			payload: `{"apis":{"POST /v1/chat/completions":{"models":{"gpt-test":{"details":[{
+			  "timestamp":"2026-01-02T03:04:05Z", "legacy_metric":123.0, "legacy_score":1e2,
+			  "tokens":{"input_tokens":100,"output_tokens":20,"total_tokens":120}
+			}]}}}}}`,
+		},
+		{
+			name: "integer precision preserves values and identity",
+			payload: `{"apis":{"POST /v1/chat/completions":{"models":{"gpt-test":{"details":[{
+			  "timestamp":"2026-01-02T03:04:05Z", "request_id":9007199254740993,
+			  "tokens":{"input_tokens":9007199254740993,"total_tokens":9007199254740993}
+			}]}}}}}`,
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			parsed, err := ParseImportPayload([]byte(test.payload))
