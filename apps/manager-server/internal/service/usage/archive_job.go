@@ -31,6 +31,7 @@ type archiveJobRunner struct {
 	mu           sync.Mutex
 	started      bool
 	rootCtx      context.Context
+	done         chan struct{}
 	recovered    bool
 	inFlight     map[archiveJobKey]struct{}
 	waiters      map[archiveJobKey][]chan archiveJobResult
@@ -69,10 +70,36 @@ func (s *Service) StartArchiveJobs(ctx context.Context) error {
 	}
 	runner.started = true
 	runner.rootCtx = ctx
+	runner.done = make(chan struct{})
+	done := runner.done
 	runner.mu.Unlock()
-	go runner.loop(ctx)
+	go func() {
+		defer close(done)
+		runner.loop(ctx)
+	}()
 	runner.wakeRunner()
 	return nil
+}
+
+// WaitArchiveJobs drains the current runner after its lifecycle context is
+// cancelled. Callers must wait before closing the database or removing files.
+func (s *Service) WaitArchiveJobs(ctx context.Context) error {
+	if s.archiveJobs == nil {
+		return nil
+	}
+	runner := s.archiveJobs
+	runner.mu.Lock()
+	done := runner.done
+	runner.mu.Unlock()
+	if done == nil {
+		return nil
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (s *Service) SubmitArchiveResume(

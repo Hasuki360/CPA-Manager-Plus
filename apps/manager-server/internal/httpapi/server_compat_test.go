@@ -61,7 +61,14 @@ func newCompatHandler(t *testing.T, cfg config.Config, setup *store.Setup) (http
 	manager := collector.NewManager(cfg, db)
 	server := New(cfg, db, manager)
 	workerCtx, cancelWorkers := context.WithCancel(context.Background())
-	t.Cleanup(cancelWorkers)
+	t.Cleanup(func() {
+		cancelWorkers()
+		waitCtx, stopWaiting := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stopWaiting()
+		if err := server.AppContext().UsageService.WaitArchiveJobs(waitCtx); err != nil {
+			t.Errorf("wait for archive jobs before closing test database: %v", err)
+		}
+	})
 	if err := server.AppContext().UsageService.StartImportSessionCleanup(workerCtx); err != nil {
 		t.Fatalf("start import session cleanup: %v", err)
 	}

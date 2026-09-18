@@ -288,24 +288,19 @@ func TestArchiveJobDoesNotResumeCancelledRunAfterRestart(t *testing.T) {
 
 func TestArchiveJobRunnerCanRestartAfterLifecycleEnds(t *testing.T) {
 	service, _, _ := newArchiveTestService(t, 1, 1, archiveTestServiceEvents(1))
+	if err := service.WaitArchiveJobs(context.Background()); err != nil {
+		t.Fatalf("wait for unstarted runner: %v", err)
+	}
 	firstCtx, stopFirst := context.WithCancel(context.Background())
 	if err := service.StartArchiveJobs(firstCtx); err != nil {
 		t.Fatalf("start first archive job lifecycle: %v", err)
 	}
 	stopFirst()
 
-	deadline := time.Now().Add(3 * time.Second)
-	for {
-		service.archiveJobs.mu.Lock()
-		started := service.archiveJobs.started
-		service.archiveJobs.mu.Unlock()
-		if !started {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("first archive job lifecycle did not stop")
-		}
-		time.Sleep(10 * time.Millisecond)
+	waitCtx, cancelWait := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancelWait()
+	if err := service.WaitArchiveJobs(waitCtx); err != nil {
+		t.Fatalf("wait for first archive job lifecycle: %v", err)
 	}
 
 	secondCtx, stopSecond := context.WithCancel(context.Background())
@@ -325,6 +320,60 @@ func TestArchiveJobRunnerCanRestartAfterLifecycleEnds(t *testing.T) {
 	)
 	if err != nil || !queued || archived.Run.Status != usagearchive.StatusArchived {
 		t.Fatalf("archive after runner restart = %#v queued=%t err=%v", archived, queued, err)
+	}
+	stopSecond()
+	if err := service.WaitArchiveJobs(waitCtx); err != nil {
+		t.Fatalf("wait for second archive job lifecycle: %v", err)
+	}
+}
+
+func TestWaitArchiveJobsDrainsInFlightStageBeforeReturning(t *testing.T) {
+	service, _, _ := newArchiveTestService(t, 1, 1, archiveTestServiceEvents(2))
+	rootCtx, stop := context.WithCancel(context.Background())
+	t.Cleanup(stop)
+	if err := service.StartArchiveJobs(rootCtx); err != nil {
+		t.Fatal(err)
+	}
+	created, err := service.CreateArchive(context.Background(), 3_000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var signalStarted, releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(unblock)
+	service.archive.testHook = func(point string) error {
+		if point == "segment_published" {
+			signalStarted.Do(func() { close(started) })
+			<-release
+		}
+		return nil
+	}
+	if _, _, err := service.SubmitArchiveResume(context.Background(), created.Run.ID, usagearchive.StatusArchiving, false); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("archive stage did not start")
+	}
+	stop()
+	shortCtx, cancelShort := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancelShort()
+	if err := service.WaitArchiveJobs(shortCtx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("wait returned while the cancelled stage was still running: %v", err)
+	}
+	unblock()
+	waitCtx, cancelWait := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancelWait()
+	if err := service.WaitArchiveJobs(waitCtx); err != nil {
+		t.Fatalf("drain cancelled archive stage: %v", err)
+	}
+	service.archiveJobs.mu.Lock()
+	defer service.archiveJobs.mu.Unlock()
+	if service.archiveJobs.started || len(service.archiveJobs.inFlight) != 0 || len(service.archiveJobs.waiters) != 0 {
+		t.Fatal("runner retained live work after WaitArchiveJobs returned")
 	}
 }
 
