@@ -37,6 +37,10 @@ import {
   type AuthFilePatchTarget,
 } from '@/features/authFiles/model/credentialStatus';
 import {
+  getAuthFileSourceMemberKey,
+  lookupAuthFileMutationSnapshot,
+} from '@/features/authFiles/model/authFileMutationSnapshot';
+import {
   clearCodexInspectionDisableOwnership,
   clearCodexInspectionDisableOwnershipForFile,
   getCodexInspectionOwnershipIdentityForFile,
@@ -45,11 +49,7 @@ import {
   authFileStatusMutationLockSetsOverlap,
   getAuthFileStatusSelectionKey,
   getAuthFileStatusMutationLockKeys,
-  readAuthFileStatusAccountId,
-  readAuthFileStatusAccountSnapshot,
-  readAuthFileStatusCodexMember,
   readAuthFileStatusPhysicalName,
-  readAuthFileStatusProvider,
   readAuthFileStatusRuntimeId,
   resolveAuthFileStatusMutationTarget,
 } from '@/utils/authFileStatusMutation';
@@ -115,6 +115,7 @@ export type UseAuthFilesDataResult = {
     fields: AuthFileFieldsPatch
   ) => Promise<AuthFilesBatchPatchResult | null>;
   batchDelete: (targets: AuthFileItem[], options?: AuthFilesBatchDeleteOptions) => void;
+  reconcileAuthFileSource: (physicalName: string) => Promise<void>;
 };
 
 type AuthFilePreparationFailure = {
@@ -138,33 +139,8 @@ const CREDENTIAL_REFRESH_POLL_ATTEMPTS = 15;
 const CREDENTIAL_REFRESH_CLOCK_SKEW_MS = 5 * 60_000;
 const CREDENTIAL_REFRESH_TIMESTAMP_RESOLUTION_MS = 1_000;
 
-const getAuthFileSourceMemberKey = (file: AuthFileItem): string =>
-  JSON.stringify([
-    getAuthFileSelectionKey(file),
-    readAuthFileStatusRuntimeId(file),
-    readAuthFileStatusProvider(file),
-    readAuthFileStatusAccountId(file),
-    readAuthFileStatusProvider(file) === 'codex'
-      ? readAuthFileStatusCodexMember(file)
-      : readAuthFileStatusAccountSnapshot(file),
-  ]);
-
 const getAuthFileSourceMembers = (files: AuthFileItem[], physicalName: string): AuthFileItem[] =>
   files.filter((file) => readAuthFileStatusPhysicalName(file) === physicalName);
-
-const mergeAuthFileLookupSnapshots = (...snapshots: AuthFileItem[][]): AuthFileItem[] => {
-  const seen = new Set<string>();
-  const merged: AuthFileItem[] = [];
-  snapshots.forEach((files) => {
-    files.forEach((file) => {
-      const key = getAuthFileSourceMemberKey(file);
-      if (seen.has(key)) return;
-      seen.add(key);
-      merged.push(file);
-    });
-  });
-  return merged;
-};
 
 const replaceAuthFileSourceSnapshot = (
   files: AuthFileItem[],
@@ -565,7 +541,8 @@ const verifyPluginSourceStatusFallback = async (
   target: AuthFilePatchTarget,
   targetChangedError: string,
   allowSharedSourceMutation: boolean,
-  requestScope?: AuthFilesApiRequestScope
+  requestScope?: AuthFilesApiRequestScope,
+  readFreshMutationSnapshot?: () => Promise<AuthFileItem[]>
 ): Promise<AuthFilePatchTarget[]> => {
   const physicalName = String(target.name ?? '').trim();
   const runtimeId = String(target.runtimeId ?? '').trim();
@@ -574,8 +551,15 @@ const verifyPluginSourceStatusFallback = async (
   }
 
   const expectedMembers = getAuthFileSourceMembers(snapshotFiles, physicalName);
-  const response = requestScope ? await authFilesApi.list(requestScope) : await authFilesApi.list();
-  const freshFiles = Array.isArray(response.files) ? response.files : [];
+  let freshFiles: AuthFileItem[];
+  if (readFreshMutationSnapshot) {
+    freshFiles = await readFreshMutationSnapshot();
+  } else {
+    const response = requestScope
+      ? await authFilesApi.list(requestScope)
+      : await authFilesApi.list();
+    freshFiles = Array.isArray(response.files) ? response.files : [];
+  }
   const freshMembers = getAuthFileSourceMembers(freshFiles, physicalName);
   const resolution = resolveAuthFileStatusMutationTarget(freshFiles, target);
   const physicalSelectorCollides = freshFiles.some(
@@ -602,7 +586,8 @@ const setAuthFileStatusWithVerifiedPluginFallback = (
   disabled: boolean,
   targetChangedError: string,
   allowSharedSourceMutation = false,
-  requestScope?: AuthFilesApiRequestScope
+  requestScope?: AuthFilesApiRequestScope,
+  readFreshMutationSnapshot?: () => Promise<AuthFileItem[]>
 ) => {
   const requestTarget = getStatusRequestTarget(target);
   const physicalName = String(requestTarget.name ?? '').trim();
@@ -631,7 +616,8 @@ const setAuthFileStatusWithVerifiedPluginFallback = (
               target,
               targetChangedError,
               allowSharedSourceMutation,
-              requestScope
+              requestScope,
+              readFreshMutationSnapshot
             ),
           requestScope
         )
@@ -640,7 +626,9 @@ const setAuthFileStatusWithVerifiedPluginFallback = (
             snapshotFiles,
             target,
             targetChangedError,
-            allowSharedSourceMutation
+            allowSharedSourceMutation,
+            undefined,
+            readFreshMutationSnapshot
           )
         )
     : requestScope
@@ -1366,33 +1354,8 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
             t('auth_files.status_mutation_scope_ambiguous', { name: item.name })
           );
         }
-        const lookupSourceAndIdentity = async (expectedFile: AuthFileItem) => {
-          const expectedRuntimeId = readAuthFileStatusRuntimeId(expectedFile);
-          // Source scope preserves shared-file membership while identity scope
-          // retains the cross-source collision checks previously supplied by a full list.
-          const snapshots = await Promise.all([
-            lookupFiles({ name: physicalName }),
-            expectedRuntimeId && expectedRuntimeId !== physicalName
-              ? lookupFiles({ name: expectedRuntimeId })
-              : Promise.resolve([]),
-          ]);
-          let observedFiles = mergeAuthFileLookupSnapshots(...snapshots);
-          const observedTarget = findCredentialRefreshTarget(observedFiles, expectedFile);
-          const observedRuntimeId = observedTarget
-            ? readAuthFileStatusRuntimeId(observedTarget)
-            : '';
-          if (
-            observedRuntimeId &&
-            observedRuntimeId !== physicalName &&
-            observedRuntimeId !== expectedRuntimeId
-          ) {
-            observedFiles = mergeAuthFileLookupSnapshots(
-              observedFiles,
-              await lookupFiles({ name: observedRuntimeId })
-            );
-          }
-          return observedFiles;
-        };
+        const lookupSourceAndIdentity = (expectedFile: AuthFileItem) =>
+          lookupAuthFileMutationSnapshot(getAuthFilePatchTarget(expectedFile), lookupFiles);
         const currentFiles = await lookupSourceAndIdentity(item);
         const resolution = resolveAuthFileStatusMutationTarget(
           currentFiles,
@@ -1556,12 +1519,37 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
       setBatchStatusUpdating(true);
 
       try {
-        const response = requestScope
-          ? await authFilesApi.list(requestScope)
-          : await authFilesApi.list();
+        const singleTarget = normalizedTargets.length === 1 ? normalizedTargets[0] : null;
+        const lookupFiles = (target: AuthFileLookupTarget) =>
+          requestScope ? authFilesApi.lookup(target, requestScope) : authFilesApi.lookup(target);
+        const readFreshMutationSnapshot = singleTarget
+          ? async () => {
+              const snapshot = await lookupAuthFileMutationSnapshot(singleTarget, lookupFiles);
+              if (authFilesOperationGenerationRef.current !== generation) {
+                throw new AuthFileMutationTargetChangedError(
+                  t('auth_files.status_mutation_scope_ambiguous', { name: singleTarget.name })
+                );
+              }
+              return snapshot;
+            }
+          : undefined;
+        let currentFiles: AuthFileItem[];
+        if (readFreshMutationSnapshot) {
+          currentFiles = await readFreshMutationSnapshot();
+        } else {
+          const response = requestScope
+            ? await authFilesApi.list(requestScope)
+            : await authFilesApi.list();
+          currentFiles = Array.isArray(response.files) ? response.files : [];
+        }
         if (authFilesOperationGenerationRef.current !== generation) return;
-        const currentFiles = Array.isArray(response.files) ? response.files : [];
-        if (filesRevisionRef.current === filesRevision) commitFiles(currentFiles);
+        if (filesRevisionRef.current === filesRevision) {
+          commitFiles((previousFiles) =>
+            singleTarget
+              ? replaceAuthFileSourceSnapshot(previousFiles, singleTarget.name, currentFiles)
+              : currentFiles
+          );
+        }
 
         type ResolvedStatusEntry = {
           file: AuthFileItem;
@@ -1683,22 +1671,15 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
                 const targetChangedError = t('auth_files.status_mutation_scope_ambiguous', {
                   name: entry.file.name,
                 });
-                const value = requestScope
-                  ? await setAuthFileStatusWithVerifiedPluginFallback(
-                      currentFiles,
-                      entry.target,
-                      nextDisabled,
-                      targetChangedError,
-                      allowSharedSourceMutation,
-                      requestScope
-                    )
-                  : await setAuthFileStatusWithVerifiedPluginFallback(
-                      currentFiles,
-                      entry.target,
-                      nextDisabled,
-                      targetChangedError,
-                      allowSharedSourceMutation
-                    );
+                const value = await setAuthFileStatusWithVerifiedPluginFallback(
+                  currentFiles,
+                  entry.target,
+                  nextDisabled,
+                  targetChangedError,
+                  allowSharedSourceMutation,
+                  requestScope,
+                  readFreshMutationSnapshot
+                );
                 outcomes.push({ entry, result: { status: 'fulfilled', value } });
                 if (authFilesOperationGenerationRef.current !== generation) break;
                 if (value.mutationScope === 'source-file') break;
@@ -1803,6 +1784,31 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
           );
         }
 
+        // CPA may apply a mutation even when the client loses its response.
+        if (singleTarget && results.length > 0) {
+          try {
+            // Keep status locks through read-back. Other refreshes can still
+            // replace files, so discard stale reads and retry at most once.
+            for (let attempt = 0; attempt < 2; attempt += 1) {
+              const revision = filesRevisionRef.current;
+              const sourceFiles = await lookupFiles({ name: singleTarget.name });
+              if (authFilesOperationGenerationRef.current !== generation) return;
+              if (filesRevisionRef.current === revision) {
+                commitFiles((previousFiles) =>
+                  replaceAuthFileSourceSnapshot(previousFiles, singleTarget.name, sourceFiles)
+                );
+                break;
+              }
+              if (attempt === 1) showNotification(t('notification.refresh_failed'), 'warning');
+            }
+          } catch (err: unknown) {
+            if (authFilesOperationGenerationRef.current !== generation) return;
+            const errorMessage =
+              err instanceof Error ? err.message : t('notification.refresh_failed');
+            showNotification(`${t('notification.refresh_failed')}: ${errorMessage}`, 'warning');
+          }
+        }
+
         deselectAll();
       } catch (err: unknown) {
         if (authFilesOperationGenerationRef.current !== generation) return;
@@ -1848,16 +1854,32 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
       if (normalizedTargets.length === 0) return null;
       if (Object.keys(fields).length === 0) return null;
 
+      const singleTarget = normalizedTargets.length === 1 ? normalizedTargets[0] : null;
+
       batchFieldsPendingRef.current = generation;
       setBatchFieldsUpdating(true);
 
       try {
-        const response = requestScope
-          ? await authFilesApi.list(requestScope)
-          : await authFilesApi.list();
+        const lookupFiles = (target: AuthFileLookupTarget) =>
+          requestScope ? authFilesApi.lookup(target, requestScope) : authFilesApi.lookup(target);
+
+        let currentFiles: AuthFileItem[];
+        if (singleTarget) {
+          currentFiles = await lookupAuthFileMutationSnapshot(singleTarget, lookupFiles);
+        } else {
+          const response = requestScope
+            ? await authFilesApi.list(requestScope)
+            : await authFilesApi.list();
+          currentFiles = Array.isArray(response.files) ? response.files : [];
+        }
         if (authFilesOperationGenerationRef.current !== generation) return null;
-        const currentFiles = Array.isArray(response.files) ? response.files : [];
-        if (filesRevisionRef.current === filesRevision) commitFiles(currentFiles);
+        if (filesRevisionRef.current === filesRevision) {
+          commitFiles((previousFiles) =>
+            singleTarget
+              ? replaceAuthFileSourceSnapshot(previousFiles, singleTarget.name, currentFiles)
+              : currentFiles
+          );
+        }
 
         let success = 0;
         let failed = 0;
@@ -1945,15 +1967,17 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
           failedNames.add(group.name);
         });
 
-        if (success > 0) {
-          try {
-            await loadFiles({ throwOnError: true });
-            if (authFilesOperationGenerationRef.current !== generation) return null;
-          } catch (err: unknown) {
-            if (authFilesOperationGenerationRef.current !== generation) return null;
-            const errorMessage =
-              err instanceof Error ? err.message : t('notification.refresh_failed');
-            showNotification(`${t('notification.refresh_failed')}: ${errorMessage}`, 'warning');
+        if (!singleTarget) {
+          if (success > 0) {
+            try {
+              await loadFiles({ throwOnError: true });
+              if (authFilesOperationGenerationRef.current !== generation) return null;
+            } catch (err: unknown) {
+              if (authFilesOperationGenerationRef.current !== generation) return null;
+              const errorMessage =
+                err instanceof Error ? err.message : t('notification.refresh_failed');
+              showNotification(`${t('notification.refresh_failed')}: ${errorMessage}`, 'warning');
+            }
           }
         }
 
@@ -1961,6 +1985,29 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
           showNotification(t('auth_files.batch_fields_success', { count: success }), 'success');
         } else {
           showNotification(t('auth_files.batch_fields_partial', { success, failed }), 'warning');
+        }
+
+        // CPA may apply a mutation even when the client loses its response.
+        if (singleTarget && results.length > 0) {
+          try {
+            for (let attempt = 0; attempt < 2; attempt += 1) {
+              const revision = filesRevisionRef.current;
+              const sourceFiles = await lookupFiles({ name: singleTarget.name });
+              if (authFilesOperationGenerationRef.current !== generation) return null;
+              if (filesRevisionRef.current === revision) {
+                commitFiles((previousFiles) =>
+                  replaceAuthFileSourceSnapshot(previousFiles, singleTarget.name, sourceFiles)
+                );
+                break;
+              }
+              if (attempt === 1) showNotification(t('notification.refresh_failed'), 'warning');
+            }
+          } catch (err: unknown) {
+            if (authFilesOperationGenerationRef.current !== generation) return null;
+            const errorMessage =
+              err instanceof Error ? err.message : t('notification.refresh_failed');
+            showNotification(`${t('notification.refresh_failed')}: ${errorMessage}`, 'warning');
+          }
         }
 
         deselectAll();
@@ -2110,6 +2157,33 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
     ]
   );
 
+  const reconcileAuthFileSource = useCallback(
+    async (physicalName: string): Promise<void> => {
+      const trimmedName = physicalName.trim();
+      if (!trimmedName) return;
+
+      const generation = authFilesOperationGenerationRef.current;
+      const lookupFiles = (target: AuthFileLookupTarget) =>
+        requestScope ? authFilesApi.lookup(target, requestScope) : authFilesApi.lookup(target);
+
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const revision = filesRevisionRef.current;
+        const sourceFiles = await lookupFiles({ name: trimmedName });
+        if (authFilesOperationGenerationRef.current !== generation) return;
+        if (filesRevisionRef.current === revision) {
+          commitFiles((previousFiles) =>
+            replaceAuthFileSourceSnapshot(previousFiles, trimmedName, sourceFiles)
+          );
+          return;
+        }
+      }
+
+      if (authFilesOperationGenerationRef.current !== generation) return;
+      throw new Error(t('notification.refresh_failed'));
+    },
+    [commitFiles, requestScope, t]
+  );
+
   return {
     files,
     selectedFiles,
@@ -2138,5 +2212,6 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
     batchSetStatus,
     batchPatchFields,
     batchDelete,
+    reconcileAuthFileSource,
   };
 }
