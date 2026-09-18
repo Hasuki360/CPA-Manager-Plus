@@ -1165,6 +1165,107 @@ func TestUsageArchiveServiceRejectsChecksumMismatch(t *testing.T) {
 	}
 }
 
+func TestUsageArchiveDeletionRevalidatesPublishedFiles(t *testing.T) {
+	for _, stage := range []string{"verified", "deleting", "failed-deleting"} {
+		for _, damage := range []string{"missing manifest", "corrupt manifest", "missing segment", "corrupt segment"} {
+			t.Run(stage+"/"+damage, func(t *testing.T) {
+				service, st, rawDB, archiveDirectory := newRawArchiveTestService(t, 2, 1)
+				ctx := context.Background()
+				insertArchiveTestEvents(t, st, archiveTestServiceEvents(4))
+				catchUpUsageAggregate(t, st)
+				created, err := service.CreateArchive(ctx, 5_000)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := service.ResumeArchive(ctx, created.Run.ID); err != nil {
+					t.Fatal(err)
+				}
+				verified, err := service.VerifyArchive(ctx, created.Run.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var deletedBefore int64
+				if stage != "verified" {
+					if _, err := st.UsageArchives.BeginDelete(ctx, created.Run.ID, time.Now().UnixMilli()); err != nil {
+						t.Fatal(err)
+					}
+					batch, err := st.UsageArchives.DeleteBatch(ctx, created.Run.ID, 1, time.Now().UnixMilli())
+					if err != nil || batch.Deleted != 1 {
+						t.Fatalf("initial delete batch = %#v, %v", batch, err)
+					}
+					deletedBefore = batch.Run.DeletedEventCount
+					if stage == "failed-deleting" {
+						if _, err := st.UsageArchives.RecordFailure(ctx, created.Run.ID, usagearchive.StatusDeleting, errors.New("isolated interruption"), time.Now().UnixMilli()); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+
+				fileName := verified.Run.ManifestFile
+				if strings.HasSuffix(damage, "segment") {
+					fileName = verified.Segments[len(verified.Segments)-1].FileName
+				}
+				filePath := filepath.Join(archiveDirectory, filepath.FromSlash(fileName))
+				original, err := os.ReadFile(filePath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if strings.HasPrefix(damage, "missing") {
+					err = os.Remove(filePath)
+				} else {
+					err = os.WriteFile(filePath, append(append([]byte(nil), original...), []byte("corrupt")...), 0o600)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				counts := func() [5]int64 {
+					t.Helper()
+					var result [5]int64
+					if err := rawDB.QueryRowContext(ctx, `select
+						(select count(*) from usage_events),
+						(select count(*) from usage_event_identity_ledger),
+						(select count(*) from usage_event_identity_ledger where raw_event_id is not null),
+						(select count(*) from usage_archive_event_refs),
+						(select count(*) from usage_archive_event_refs where raw_deleted_at_ms is not null)`,
+					).Scan(&result[0], &result[1], &result[2], &result[3], &result[4]); err != nil {
+						t.Fatal(err)
+					}
+					return result
+				}
+				before := counts()
+				restarted := New(st, WithArchive(ArchiveConfig{
+					Directory: archiveDirectory, SegmentEventLimit: 2, DeleteBatchSize: 1, AggregateReadsEnabled: true,
+				}))
+				switch stage {
+				case "verified":
+					_, _, err = restarted.SubmitArchiveDeletion(ctx, created.Run.ID, true)
+				case "deleting":
+					_, err = restarted.ResumeArchiveAtStage(ctx, created.Run.ID, usagearchive.StatusDeleting)
+				default:
+					_, err = restarted.ResumeArchive(ctx, created.Run.ID)
+				}
+				if err == nil {
+					t.Fatal("raw cleanup proceeded after a verified archive file was lost or corrupted")
+				}
+				if after := counts(); after != before {
+					t.Fatalf("unsafe cleanup changed raw data or identity evidence: before=%v after=%v", before, after)
+				}
+				failed, err := restarted.ArchiveStatus(ctx, created.Run.ID)
+				if err != nil || failed.Run.Status != usagearchive.StatusFailed || failed.Run.ResumeStatus != usagearchive.StatusDeleting || failed.Run.DeletedEventCount != deletedBefore {
+					t.Fatalf("cleanup failure must remain recoverable without advancing: %#v, %v", failed.Run, err)
+				}
+				if err := os.WriteFile(filePath, original, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				completed, err := restarted.ResumeArchive(ctx, created.Run.ID)
+				if err != nil || completed.Run.Status != usagearchive.StatusCompleted || completed.Run.DeletedEventCount != 4 {
+					t.Fatalf("cleanup should resume after restoring the exact archive: %#v, %v", completed.Run, err)
+				}
+			})
+		}
+	}
+}
+
 func TestUsageArchiveServiceCanAbandonFailedVerificationAndRearchiveRawEvents(t *testing.T) {
 	service, st, rawDB, _ := newRawArchiveTestService(t, 2, 1)
 	events := archiveTestServiceEvents(2)

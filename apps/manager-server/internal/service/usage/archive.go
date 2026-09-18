@@ -39,17 +39,17 @@ const (
 )
 
 var (
-	ErrArchiveUnavailable         = errors.New("usage archive is not configured")
-	ErrArchiveInvalidRequest      = errors.New("invalid usage archive request")
-	ErrArchiveDeleteUnavailable   = errors.New("usage archive delete requires permanent hourly aggregate reads")
-	ErrArchiveInvalidID           = errors.New("invalid usage archive run id")
-	ErrArchiveNotFound            = usagearchive.ErrNotFound
-	ErrArchiveNoEvents            = usagearchive.ErrNoEvents
-	ErrArchiveInvalidState        = usagearchive.ErrInvalidState
-	ErrArchiveCancelUnsafe        = usagearchive.ErrCancelUnsafe
-	ErrArchiveCancelPublished     = usagearchive.ErrCancelPublished
-	ErrArchiveCancelCleanupFailed = errors.New("usage archive cancel cleanup failed")
-	ErrArchiveMaintenanceLocked   = usagearchive.ErrMaintenanceLocked
+	ErrArchiveUnavailable           = errors.New("usage archive is not configured")
+	ErrArchiveInvalidRequest        = errors.New("invalid usage archive request")
+	ErrArchiveDeleteUnavailable     = errors.New("usage archive delete requires permanent hourly aggregate reads")
+	ErrArchiveInvalidID             = errors.New("invalid usage archive run id")
+	ErrArchiveNotFound              = usagearchive.ErrNotFound
+	ErrArchiveNoEvents              = usagearchive.ErrNoEvents
+	ErrArchiveInvalidState          = usagearchive.ErrInvalidState
+	ErrArchiveCancelUnsafe          = usagearchive.ErrCancelUnsafe
+	ErrArchiveCancelPublished       = usagearchive.ErrCancelPublished
+	ErrArchiveCancelCleanupFailed   = errors.New("usage archive cancel cleanup failed")
+	ErrArchiveMaintenanceLocked     = usagearchive.ErrMaintenanceLocked
 	ErrArchiveCoverageIncomplete    = usagearchive.ErrCoverageIncomplete
 	ErrArchiveUnrestorableEventHash = usagearchive.ErrUnrestorableEventHash
 )
@@ -984,6 +984,13 @@ func (m *archiveManager) deleteLocked(ctx context.Context, runID string) (Archiv
 	run, err := m.store.UsageArchives.BeginDelete(ctx, runID, time.Now().UnixMilli())
 	if err != nil {
 		return ArchiveStatus{}, err
+	}
+	// A persisted verified state only proves the files were valid earlier.
+	// Revalidate before the first raw-delete batch of every invocation, including
+	// recovery after a restart, so missing or changed archives cannot lose data.
+	if err := m.verifyManifest(ctx, run, status.Segments); err != nil {
+		return ArchiveStatus{}, m.recordFailure(ctx, run.ID, usagearchive.StatusDeleting,
+			fmt.Errorf("revalidate usage archive before raw cleanup: %w", err))
 	}
 	for run.Status == usagearchive.StatusDeleting {
 		if err := ctx.Err(); err != nil {

@@ -262,6 +262,8 @@ USAGE_DASHBOARD_HOURLY_ROLLUP_ENABLED=false
 
 当当前查询范围或 summary comparison 范围命中已完成验证归档并删除的 raw 历史时，Monitoring analytics 响应会返回 `coverage` 对象。当前范围与对比范围的 raw/deleted 数量分别报告；这些数量只按时间范围统计，不会被提供方、模型、账号、搜索或其他 analytics 筛选条件缩小。对象同时包含 `core_aggregate_used` 和机器可读的 `fidelity_limitations`。永久小时 aggregate 与 event projection 仍可准确提供受支持的 summary、model 和 timeline 核心统计，但仅依赖 raw 的事件明细、延迟百分位、分布、失败诊断、凭证时间线或不受支持的搜索可能不完整。Monitoring 与 Usage Analytics 页面会明确展示该限制，不会把缺失的 raw rows 或仅 raw 指标中的零值误认为完整历史。
 
+每次开始或恢复 raw 清理时，服务会在删除第一批明细前重新读取 manifest 和全部 segment，核对文件权限、校验和与事件摘要，不会仅依赖先前的 `verified` 状态。若归档在校验后丢失或损坏，run 会停在可恢复的删除失败状态，剩余明细及 identity ledger 不会继续减少。应先从可信备份还原该 run 的原始归档文件，再恢复同一个 run；不要手工跳过校验或改动删除进度。
+
 只有面板由 Manager Server 托管且 Manager Service 可用时，才会显示“用量维护”页面；普通 CPA 托管面板不会显示该入口。页面可以执行 preview/create/resume/verify/delete/cancel 并显示可回收空间，但物理压缩始终是离线 CLI 操作。
 
 “用量维护”分为“归档管理”和“导入 / 导出”两个页签，以记录列表为默认入口：
