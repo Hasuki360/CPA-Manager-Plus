@@ -244,3 +244,69 @@ type roundTripperFunc func(*http.Request) (*http.Response, error)
 func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
 }
+
+type staticSetupResolver struct {
+	setup store.Setup
+}
+
+func (r staticSetupResolver) ResolveSetup(ctx context.Context) (store.Setup, bool, error) {
+	return r.setup, true, nil
+}
+
+func TestHandleRuntimeModels_AuthorizationAndResponse(t *testing.T) {
+	cpaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v0/management/api-keys":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"api-keys": []string{"test-key"},
+			})
+		case "/v1/models":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": []map[string]any{
+					{"id": "m1"},
+					{"id": "m2"},
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer cpaServer.Close()
+
+	cfg := testutil.NewConfig(t)
+	st := testutil.NewStore(t, cfg)
+	resolver := staticSetupResolver{
+		setup: store.Setup{
+			CPAUpstreamURL: cpaServer.URL,
+			ManagementKey:  "mgmt-key",
+		},
+	}
+
+	handler := &Handler{App: &app.Context{
+		Config:            cfg,
+		AdminAuthService:  adminauthsvc.New(cfg, st),
+		ModelPriceService: modelpricesvc.New(st, nil, resolver),
+	}}
+
+	unauth := httptest.NewRecorder()
+	handler.Handle(unauth, httptest.NewRequest(http.MethodGet, "/v0/management/model-prices/runtime-models", nil))
+	if unauth.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", unauth.Code)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v0/management/model-prices/runtime-models", nil)
+	req.Header.Set("Authorization", "Bearer "+testutil.AdminKey)
+	recorder := httptest.NewRecorder()
+	handler.Handle(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d, body: %s", recorder.Code, recorder.Body.String())
+	}
+
+	var status modelpricesvc.RuntimeModelPricingStatus
+	if err := json.NewDecoder(recorder.Body).Decode(&status); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if status.Count != 2 || status.UnpricedCount != 2 {
+		t.Fatalf("expected count=2 and unpricedCount=2, got %d, %d", status.Count, status.UnpricedCount)
+	}
+}

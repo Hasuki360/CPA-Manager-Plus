@@ -18,6 +18,7 @@ var ErrInvalidEventHash = usage.ErrInvalidEventHash
 
 type Repository interface {
 	InsertBatch(ctx context.Context, events []model.UsageEvent) (model.InsertResult, error)
+	ExistingEventHashes(ctx context.Context, hashes []string) (map[string]struct{}, error)
 	ResolveCodexLegacyAccountKey(ctx context.Context, fields usageidentity.Fields) (string, bool, error)
 	ListRecent(ctx context.Context, limit int) ([]model.UsageEvent, error)
 	ModelUsageSummary(ctx context.Context, limit int) (model.ModelUsageSummary, error)
@@ -128,6 +129,60 @@ func (r *repository) queryExistingLedgerHashes(ctx context.Context, hashes []str
 				return nil, err
 			}
 			existing[h] = struct{}{}
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rows.Close()
+	}
+	return existing, nil
+}
+
+func (r *repository) ExistingEventHashes(ctx context.Context, hashes []string) (map[string]struct{}, error) {
+	if len(hashes) == 0 {
+		return map[string]struct{}{}, nil
+	}
+	unique := make([]string, 0, len(hashes))
+	seen := make(map[string]struct{}, len(hashes))
+	for _, hash := range hashes {
+		if _, ok := seen[hash]; ok {
+			continue
+		}
+		seen[hash] = struct{}{}
+		unique = append(unique, hash)
+	}
+
+	existing := make(map[string]struct{}, len(unique))
+	const chunkSize = 200
+	for start := 0; start < len(unique); start += chunkSize {
+		end := start + chunkSize
+		if end > len(unique) {
+			end = len(unique)
+		}
+		chunk := unique[start:end]
+		placeholders := make([]string, len(chunk))
+		args := make([]any, 0, len(chunk)*2)
+		for i, hash := range chunk {
+			placeholders[i] = "?"
+			args = append(args, hash)
+		}
+		args = append(args, append([]any(nil), args...)...)
+		inClause := strings.Join(placeholders, ",")
+		rows, err := r.db.QueryContext(ctx, `
+			select event_hash from usage_event_identity_ledger where event_hash in (`+inClause+`)
+			union
+			select event_hash from usage_events where event_hash in (`+inClause+`)`, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var hash string
+			if err := rows.Scan(&hash); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			existing[hash] = struct{}{}
 		}
 		if err := rows.Err(); err != nil {
 			rows.Close()

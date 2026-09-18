@@ -7,6 +7,8 @@ import type {
   ClaudeQuotaWindow,
   CodexQuotaState,
   CodexQuotaWindow,
+  DevinQuotaState,
+  DevinQuotaWindow,
   KimiQuotaState,
   KimiQuotaRow,
   XaiBillingSummary,
@@ -1284,6 +1286,36 @@ const buildXaiAccountQuotaWindows = (
   return windows;
 };
 
+const buildDevinAccountQuotaWindows = (
+  windows: DevinQuotaWindow[] | undefined,
+  t: TFunction
+): AccountQuotaWindow[] =>
+  (windows ?? []).map((window) => {
+    const remainingPercent =
+      typeof window.remainingPercent === 'number' && Number.isFinite(window.remainingPercent)
+        ? Math.max(0, Math.min(100, window.remainingPercent))
+        : null;
+    const hasReset =
+      typeof window.resetAtMs === 'number' &&
+      Number.isFinite(window.resetAtMs) &&
+      window.resetAtMs > 0;
+    const resetLabel =
+      hasReset && window.resetAtMs !== null
+        ? formatQuotaResetTime(window.resetAtMs)
+        : '-';
+    const label = window.id === 'daily' ? t('devin_quota.daily') : t('devin_quota.weekly');
+
+    return {
+      id: window.id,
+      label,
+      remainingPercent,
+      resetLabel,
+      resetAtMs: window.resetAtMs,
+      resetAccuracy: hasReset ? 'exact' : 'unknown',
+      usageLabel: null,
+    };
+  });
+
 export const getAccountQuotaProviderLabel = (
   provider: MonitoringAccountQuotaProvider,
   t: TFunction
@@ -1297,6 +1329,8 @@ export const getAccountQuotaProviderLabel = (
       return t('kimi_quota.title');
     case 'xai':
       return t('xai_quota.title');
+    case 'devin':
+      return t('devin_quota.title');
     case 'codex':
     default:
       return t('codex_quota.title');
@@ -1313,6 +1347,8 @@ const getAccountQuotaEmptyMessage = (provider: MonitoringAccountQuotaProvider, t
       return t('kimi_quota.empty_data');
     case 'xai':
       return t('xai_quota.empty_data');
+    case 'devin':
+      return t('devin_quota.empty_data');
     case 'codex':
     default:
       return t('codex_quota.empty_windows');
@@ -1341,6 +1377,7 @@ export type MonitoringQuotaStores = {
   antigravityQuota: Record<string, AntigravityQuotaState>;
   claudeQuota: Record<string, ClaudeQuotaState>;
   codexQuota: Record<string, CodexQuotaState>;
+  devinQuota: Record<string, DevinQuotaState>;
   kimiQuota: Record<string, KimiQuotaState>;
   xaiQuota: Record<string, XaiQuotaState>;
 };
@@ -1349,6 +1386,7 @@ export type MonitoringProviderQuotaState =
   | AntigravityQuotaState
   | ClaudeQuotaState
   | CodexQuotaState
+  | DevinQuotaState
   | KimiQuotaState
   | XaiQuotaState;
 
@@ -1462,6 +1500,26 @@ export const buildAccountQuotaEntryFromProviderState = (
         quota
       );
     }
+    case 'devin': {
+      const quota = state as DevinQuotaState;
+      const planType = quota.plan ?? target.planType;
+      const metaLabels: string[] = [];
+      if (quota.plan) {
+        metaLabels.push(`${t('devin_quota.plan_label')}: ${quota.plan}`);
+      }
+      return applyProviderQuotaStateMetadata(
+        {
+          ...buildBaseAccountQuotaEntry(
+            { ...target, planType },
+            t,
+            metaLabels
+          ),
+          planType,
+          windows: buildDevinAccountQuotaWindows(quota.windows, t),
+        },
+        quota
+      );
+    }
     case 'codex':
     default: {
       const quota = state as CodexQuotaState;
@@ -1506,6 +1564,12 @@ export const buildCachedAccountQuotaEntry = (
       return buildAccountQuotaEntryFromProviderState(
         target,
         getCredentialScopedQuotaState(stores.codexQuota, target.file),
+        t
+      );
+    case 'devin':
+      return buildAccountQuotaEntryFromProviderState(
+        target,
+        getCredentialScopedQuotaState(stores.devinQuota, target.file),
         t
       );
     case 'kimi':

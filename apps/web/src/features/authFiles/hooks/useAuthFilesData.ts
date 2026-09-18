@@ -13,6 +13,7 @@ import { useTranslation } from 'react-i18next';
 import {
   authFilesApi,
   type AuthFileFieldsPatch,
+  type AuthFileLookupTarget,
   type AuthFilesApiRequestScope,
 } from '@/services/api';
 import { apiClient, createScopedApiRequestConfig } from '@/services/api/client';
@@ -150,6 +151,42 @@ const getAuthFileSourceMemberKey = (file: AuthFileItem): string =>
 
 const getAuthFileSourceMembers = (files: AuthFileItem[], physicalName: string): AuthFileItem[] =>
   files.filter((file) => readAuthFileStatusPhysicalName(file) === physicalName);
+
+const mergeAuthFileLookupSnapshots = (...snapshots: AuthFileItem[][]): AuthFileItem[] => {
+  const seen = new Set<string>();
+  const merged: AuthFileItem[] = [];
+  snapshots.forEach((files) => {
+    files.forEach((file) => {
+      const key = getAuthFileSourceMemberKey(file);
+      if (seen.has(key)) return;
+      seen.add(key);
+      merged.push(file);
+    });
+  });
+  return merged;
+};
+
+const replaceAuthFileSourceSnapshot = (
+  files: AuthFileItem[],
+  physicalName: string,
+  snapshotFiles: AuthFileItem[]
+): AuthFileItem[] => {
+  const sourceSnapshot = getAuthFileSourceMembers(snapshotFiles, physicalName);
+  const nextFiles: AuthFileItem[] = [];
+  let inserted = false;
+  files.forEach((file) => {
+    if (readAuthFileStatusPhysicalName(file) !== physicalName) {
+      nextFiles.push(file);
+      return;
+    }
+    if (!inserted) {
+      nextFiles.push(...sourceSnapshot);
+      inserted = true;
+    }
+  });
+  if (!inserted) nextFiles.push(...sourceSnapshot);
+  return nextFiles;
+};
 
 type AuthFileDeleteSnapshot = {
   name: string;
@@ -1321,10 +1358,42 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
       setCredentialRefreshing((prev) => ({ ...prev, [operationKey]: true }));
 
       try {
-        const response = requestScope
-          ? await authFilesApi.list(requestScope)
-          : await authFilesApi.list();
-        const currentFiles = Array.isArray(response.files) ? response.files : [];
+        const lookupFiles = (target: AuthFileLookupTarget) =>
+          requestScope ? authFilesApi.lookup(target, requestScope) : authFilesApi.lookup(target);
+        const physicalName = readAuthFileStatusPhysicalName(item);
+        if (!physicalName) {
+          throw new AuthFileMutationTargetChangedError(
+            t('auth_files.status_mutation_scope_ambiguous', { name: item.name })
+          );
+        }
+        const lookupSourceAndIdentity = async (expectedFile: AuthFileItem) => {
+          const expectedRuntimeId = readAuthFileStatusRuntimeId(expectedFile);
+          // Source scope preserves shared-file membership while identity scope
+          // retains the cross-source collision checks previously supplied by a full list.
+          const snapshots = await Promise.all([
+            lookupFiles({ name: physicalName }),
+            expectedRuntimeId && expectedRuntimeId !== physicalName
+              ? lookupFiles({ name: expectedRuntimeId })
+              : Promise.resolve([]),
+          ]);
+          let observedFiles = mergeAuthFileLookupSnapshots(...snapshots);
+          const observedTarget = findCredentialRefreshTarget(observedFiles, expectedFile);
+          const observedRuntimeId = observedTarget
+            ? readAuthFileStatusRuntimeId(observedTarget)
+            : '';
+          if (
+            observedRuntimeId &&
+            observedRuntimeId !== physicalName &&
+            observedRuntimeId !== expectedRuntimeId
+          ) {
+            observedFiles = mergeAuthFileLookupSnapshots(
+              observedFiles,
+              await lookupFiles({ name: observedRuntimeId })
+            );
+          }
+          return observedFiles;
+        };
+        const currentFiles = await lookupSourceAndIdentity(item);
         const resolution = resolveAuthFileStatusMutationTarget(
           currentFiles,
           getAuthFilePatchTarget(item)
@@ -1342,7 +1411,9 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
         const currentTarget = getAuthFilePatchTarget(currentFile);
         const baselineTimestamp = readCredentialRefreshTimestamp(currentFile);
         const baselinePlanType = readCredentialPlanType(currentFile);
-        commitFiles(currentFiles);
+        commitFiles((previousFiles) =>
+          replaceAuthFileSourceSnapshot(previousFiles, physicalName, currentFiles)
+        );
 
         const requestedAtMs = await waitForCredentialRefreshTimestampTick(baselineTimestamp);
         if (credentialRefreshGenerationRef.current !== generation) return;
@@ -1359,7 +1430,13 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
         } else {
           await authFilesApi.requestCredentialRefresh(currentTarget, sourceIdentities);
         }
-        let latestFiles: AuthFileItem[] | null = null;
+        const currentRuntimeId = readAuthFileStatusRuntimeId(currentFile);
+        const pollAuthIndex = normalizePatchTargetAuthIndex(currentTarget.authIndex);
+        const pollTarget =
+          pollAuthIndex !== null
+            ? { name: physicalName, authIndex: pollAuthIndex }
+            : { name: currentRuntimeId || physicalName };
+        let latestSourceFiles: AuthFileItem[] | null = null;
 
         for (let attempt = 0; attempt < CREDENTIAL_REFRESH_POLL_ATTEMPTS; attempt += 1) {
           if (attempt > 0) {
@@ -1368,12 +1445,13 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
           if (credentialRefreshGenerationRef.current !== generation) return;
 
           try {
-            const data = requestScope
-              ? await authFilesApi.list(requestScope)
-              : await authFilesApi.list();
+            const sourceRead = attempt === CREDENTIAL_REFRESH_POLL_ATTEMPTS - 1;
+            const observedFiles = sourceRead
+              ? await lookupSourceAndIdentity(currentFile)
+              : await lookupFiles(pollTarget);
             if (credentialRefreshGenerationRef.current !== generation) return;
-            latestFiles = data?.files || [];
-            const refreshedTarget = findCredentialRefreshTarget(latestFiles, currentFile);
+            if (sourceRead) latestSourceFiles = observedFiles;
+            const refreshedTarget = findCredentialRefreshTarget(observedFiles, currentFile);
             if (
               refreshedTarget &&
               hasCredentialRefreshCompleted(
@@ -1383,11 +1461,30 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
                 requestedAtMs
               )
             ) {
+              const verifiedSourceFiles = sourceRead
+                ? observedFiles
+                : await lookupSourceAndIdentity(currentFile);
+              if (credentialRefreshGenerationRef.current !== generation) return;
+              latestSourceFiles = verifiedSourceFiles;
+              const verifiedTarget = findCredentialRefreshTarget(verifiedSourceFiles, currentFile);
+              if (
+                !verifiedTarget ||
+                !hasCredentialRefreshCompleted(
+                  verifiedTarget,
+                  baselineTimestamp,
+                  baselinePlanType,
+                  requestedAtMs
+                )
+              ) {
+                continue;
+              }
               notifyCredentialSelectionChanged('credential-refreshed', [
                 getAuthFileSelectionKey(currentFile),
-                getAuthFileSelectionKey(refreshedTarget),
+                getAuthFileSelectionKey(verifiedTarget),
               ]);
-              commitFiles(latestFiles);
+              commitFiles((previousFiles) =>
+                replaceAuthFileSourceSnapshot(previousFiles, physicalName, verifiedSourceFiles)
+              );
               showNotification(
                 t('auth_files.credential_refresh_completed', { name: item.name }),
                 'success'
@@ -1400,7 +1497,11 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
         }
 
         if (credentialRefreshGenerationRef.current !== generation) return;
-        if (latestFiles) commitFiles(latestFiles);
+        if (latestSourceFiles) {
+          commitFiles((previousFiles) =>
+            replaceAuthFileSourceSnapshot(previousFiles, physicalName, latestSourceFiles)
+          );
+        }
         showNotification(
           t('auth_files.credential_refresh_pending', { name: item.name }),
           'warning'

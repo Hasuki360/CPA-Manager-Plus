@@ -7,6 +7,7 @@ const { mocks } = vi.hoisted(() => {
   return {
     mocks: {
       list: vi.fn(),
+      lookup: vi.fn(),
       saveJsonObject: vi.fn(),
       uploadFiles: vi.fn(),
       deleteFiles: vi.fn(),
@@ -67,6 +68,7 @@ vi.mock('@/stores', () => ({
 vi.mock('@/services/api', () => ({
   authFilesApi: {
     list: mocks.list,
+    lookup: mocks.lookup,
     saveJsonObject: mocks.saveJsonObject,
     uploadFiles: mocks.uploadFiles,
     deleteFiles: mocks.deleteFiles,
@@ -196,6 +198,7 @@ const mountUseAuthFilesData = (
 
 beforeEach(() => {
   mocks.list.mockReset();
+  mocks.lookup.mockReset();
   mocks.saveJsonObject.mockReset();
   mocks.uploadFiles.mockReset();
   mocks.deleteFiles.mockReset();
@@ -210,6 +213,7 @@ beforeEach(() => {
   mocks.showConfirmation.mockReset();
 
   mocks.list.mockResolvedValue({ files: [] });
+  mocks.lookup.mockResolvedValue([]);
   mocks.saveJsonObject.mockResolvedValue(undefined);
   mocks.uploadFiles.mockResolvedValue({ status: 'ok', uploaded: 0, files: [], failed: [] });
   mocks.deleteFiles.mockResolvedValue({ deleted: 0, failed: [], files: [] });
@@ -3376,9 +3380,7 @@ describe('useAuthFilesData handleCredentialRefresh', () => {
       ...file,
       last_refresh: '2026-01-01T00:00:01Z',
     } as AuthFileItem;
-    mocks.list.mockResolvedValueOnce({ files: [file] }).mockResolvedValue({
-      files: [refreshedFile],
-    });
+    mocks.lookup.mockResolvedValueOnce([file]).mockResolvedValue([refreshedFile]);
     const hook = mountUseAuthFilesData();
     let request!: Promise<void>;
 
@@ -3439,9 +3441,10 @@ describe('useAuthFilesData handleCredentialRefresh', () => {
         id_token: { plan_type: 'plus' },
       },
     ];
-    mocks.list
-      .mockResolvedValueOnce({ files: [refreshedFiles[0], file] })
-      .mockResolvedValue({ files: refreshedFiles });
+    mocks.lookup
+      .mockResolvedValueOnce([refreshedFiles[0], file])
+      .mockResolvedValueOnce([refreshedFiles[1]])
+      .mockResolvedValue(refreshedFiles);
     const operationKey = 'shared-codex.json\u0000auth-2';
     let request!: Promise<void>;
 
@@ -3494,6 +3497,47 @@ describe('useAuthFilesData handleCredentialRefresh', () => {
     hook.unmount();
   });
 
+  it('reconciles the refreshed source without replacing unrelated account rows', async () => {
+    const unrelated = {
+      id: 'claude-runtime-auth-id',
+      name: 'claude-account.json',
+      authIndex: 'claude-auth-1',
+      type: 'claude',
+      note: 'keep-me',
+    } as AuthFileItem;
+    const file = {
+      id: 'codex-runtime-auth-id',
+      name: 'codex-account.json',
+      authIndex: 'auth-1',
+      type: 'codex',
+      last_refresh: '2026-01-01T00:00:00Z',
+    } as AuthFileItem;
+    const refreshedFile = {
+      ...file,
+      last_refresh: '2026-01-02T00:00:00Z',
+    } as AuthFileItem;
+    mocks.list.mockResolvedValue({ files: [unrelated, file] });
+    mocks.lookup
+      .mockResolvedValueOnce([file])
+      .mockResolvedValueOnce([file])
+      .mockResolvedValue([refreshedFile]);
+    const hook = mountUseAuthFilesData();
+
+    await act(async () => {
+      await hook.getCurrent().loadFiles();
+      await hook.getCurrent().handleCredentialRefresh(file);
+    });
+
+    expect(hook.getCurrent().files).toEqual([unrelated, refreshedFile]);
+    expect(mocks.lookup).toHaveBeenNthCalledWith(1, { name: 'codex-account.json' });
+    expect(mocks.lookup).toHaveBeenNthCalledWith(3, {
+      name: 'codex-account.json',
+      authIndex: 'auth-1',
+    });
+    expect(mocks.list).toHaveBeenCalledTimes(1);
+    hook.unmount();
+  });
+
   it('keeps the request pending when CPA does not confirm the refresh in time', async () => {
     vi.useFakeTimers();
     const file: AuthFileItem = {
@@ -3504,7 +3548,7 @@ describe('useAuthFilesData handleCredentialRefresh', () => {
       last_refresh: '2026-01-01T00:00:00Z',
       id_token: { plan_type: 'free' },
     };
-    mocks.list.mockResolvedValue({ files: [file] });
+    mocks.lookup.mockResolvedValue([file]);
     const onCredentialFilesChanged = vi.fn();
     const hook = mountUseAuthFilesData(undefined, undefined, onCredentialFilesChanged);
     let request!: Promise<void>;
@@ -3521,7 +3565,8 @@ describe('useAuthFilesData handleCredentialRefresh', () => {
       await request;
     });
 
-    expect(mocks.list).toHaveBeenCalledTimes(16);
+    expect(mocks.lookup).toHaveBeenCalledTimes(18);
+    expect(mocks.list).not.toHaveBeenCalled();
     expect(hook.getCurrent().files).toEqual([file]);
     expect(
       hook.getCurrent().credentialRefreshing['codex-account.json\u0000auth-1']
@@ -3550,9 +3595,10 @@ describe('useAuthFilesData handleCredentialRefresh', () => {
       account_id: 'replacement-account',
       last_refresh: '2026-01-02T00:00:00Z',
     } as AuthFileItem;
-    mocks.list.mockResolvedValueOnce({ files: [original] }).mockResolvedValue({
-      files: [replacement],
-    });
+    mocks.lookup
+      .mockResolvedValueOnce([original])
+      .mockResolvedValueOnce([original])
+      .mockResolvedValue([replacement]);
     const hook = mountUseAuthFilesData();
     let request!: Promise<void>;
 
@@ -3599,10 +3645,12 @@ describe('useAuthFilesData handleCredentialRefresh', () => {
       type: 'codex',
       last_refresh: '2026-01-01T00:00:00Z',
     };
-    mocks.list
-      .mockResolvedValueOnce({ files: [file] })
-      .mockResolvedValueOnce({ files: [file] })
-      .mockResolvedValue({ files: [{ ...file, last_refresh: '2026-01-02T00:00:00Z' }] });
+    mocks.lookup
+      .mockResolvedValueOnce([file])
+      .mockResolvedValueOnce([file])
+      .mockResolvedValueOnce([file])
+      .mockResolvedValueOnce([file])
+      .mockResolvedValue([{ ...file, last_refresh: '2026-01-02T00:00:00Z' }]);
     const hook = mountUseAuthFilesData('connection-a');
     let firstRequest!: Promise<void>;
     let secondRequest!: Promise<void>;
@@ -3651,7 +3699,7 @@ describe('useAuthFilesData handleCredentialRefresh', () => {
       type: 'codex',
       last_refresh: '2026-01-01T00:00:00Z',
     };
-    mocks.list.mockResolvedValue({ files: [file] });
+    mocks.lookup.mockResolvedValue([file]);
     mocks.requestCredentialRefresh
       .mockReturnValueOnce(firstRequest.promise)
       .mockReturnValueOnce(secondRequest.promise);
@@ -3676,9 +3724,7 @@ describe('useAuthFilesData handleCredentialRefresh', () => {
     expect(layoutRequest).toBeDefined();
 
     await act(async () => {
-      mocks.list.mockResolvedValue({
-        files: [{ ...file, last_refresh: '2026-01-02T00:00:00Z' }],
-      });
+      mocks.lookup.mockResolvedValue([{ ...file, last_refresh: '2026-01-02T00:00:00Z' }]);
       firstRequest.resolve();
       secondRequest.resolve();
       await Promise.all([initialRequest, layoutRequest]);
@@ -3694,7 +3740,7 @@ describe('useAuthFilesData handleCredentialRefresh', () => {
       authIndex: 'auth-1',
       type: 'codex',
     } as AuthFileItem;
-    mocks.list.mockResolvedValue({ files: [file] });
+    mocks.lookup.mockResolvedValue([file]);
     const hook = mountUseAuthFilesData();
 
     await act(async () => {
@@ -3732,9 +3778,7 @@ describe('useAuthFilesData handleCredentialRefresh', () => {
       type: 'codex',
       account_id: 'original-account',
     } as AuthFileItem;
-    mocks.list.mockResolvedValue({
-      files: [{ ...original, account_id: 'replacement-account' }],
-    });
+    mocks.lookup.mockResolvedValue([{ ...original, account_id: 'replacement-account' }]);
     const hook = mountUseAuthFilesData();
 
     await act(async () => {
@@ -3744,6 +3788,38 @@ describe('useAuthFilesData handleCredentialRefresh', () => {
     expect(mocks.requestCredentialRefresh).not.toHaveBeenCalled();
     expect(mocks.showNotification).toHaveBeenCalledWith(
       'auth_files.credential_refresh_failed:same.json',
+      'error'
+    );
+    hook.unmount();
+  });
+
+  it('rejects a runtime identity collision outside the target source', async () => {
+    const original = {
+      id: 'runtime-auth-1',
+      name: 'source-a.json',
+      authIndex: 'auth-1',
+      type: 'codex',
+      account_id: 'account-a',
+    } as AuthFileItem;
+    const collision = {
+      id: 'runtime-auth-1',
+      name: 'source-b.json',
+      authIndex: 'auth-2',
+      type: 'codex',
+      account_id: 'account-b',
+    } as AuthFileItem;
+    mocks.lookup.mockResolvedValueOnce([original]).mockResolvedValueOnce([original, collision]);
+    const hook = mountUseAuthFilesData();
+
+    await act(async () => {
+      await hook.getCurrent().handleCredentialRefresh(original);
+    });
+
+    expect(mocks.lookup).toHaveBeenNthCalledWith(1, { name: 'source-a.json' });
+    expect(mocks.lookup).toHaveBeenNthCalledWith(2, { name: 'runtime-auth-1' });
+    expect(mocks.requestCredentialRefresh).not.toHaveBeenCalled();
+    expect(mocks.showNotification).toHaveBeenCalledWith(
+      'auth_files.credential_refresh_failed:source-a.json',
       'error'
     );
     hook.unmount();

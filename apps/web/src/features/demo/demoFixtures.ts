@@ -16,6 +16,7 @@ import type {
   MonitoringAnalyticsRequest,
   MonitoringAnalyticsResponse,
   QuotaCooldownInfo,
+  RuntimeModelPricingStatusResponse,
   UsageArchiveList,
   UsageArchivePreview,
   UsageArchiveRunSummary,
@@ -38,6 +39,7 @@ import type {
   ClaudeQuotaState,
   CodexQuotaState,
   CredentialScopedQuotaState,
+  DevinQuotaState,
   KimiQuotaState,
   XaiQuotaState,
 } from '@/types';
@@ -63,6 +65,7 @@ export type DemoQuotaStoreState = {
   antigravityQuota: Record<string, AntigravityQuotaState>;
   claudeQuota: Record<string, ClaudeQuotaState>;
   codexQuota: Record<string, CodexQuotaState>;
+  devinQuota: Record<string, DevinQuotaState>;
   kimiQuota: Record<string, KimiQuotaState>;
   xaiQuota: Record<string, XaiQuotaState>;
 };
@@ -6023,6 +6026,15 @@ export const getDemoAccountWindowUsage = (
 };
 export const getDemoModelPrices = () => clone(demoModelPrices);
 export const getDemoModelPriceUsageSummary = () => clone(demoModelPriceUsageSummary);
+export const getDemoRuntimeModelPricingStatus = (): RuntimeModelPricingStatusResponse => {
+  const models = Object.keys(demoModelPrices.prices).sort();
+  return {
+    models,
+    unpricedModels: [],
+    count: models.length,
+    unpricedCount: 0,
+  };
+};
 export const getDemoUsagePayload = () => {
   const dashboard = dashboardBase();
   return {
@@ -6793,6 +6805,7 @@ const getDemoQuotaStoreStateByFileName = (
       },
     },
   },
+  devinQuota: {},
 });
 
 const scopeDemoQuotaRecord = <TState extends CredentialScopedQuotaState>(
@@ -6831,6 +6844,7 @@ export const getDemoQuotaStoreState = (
     antigravityQuota: scopeDemoQuotaRecord(raw.antigravityQuota, filesByName),
     claudeQuota: scopeDemoQuotaRecord(raw.claudeQuota, filesByName),
     codexQuota: scopeDemoQuotaRecord(raw.codexQuota, filesByName),
+    devinQuota: scopeDemoQuotaRecord(raw.devinQuota, filesByName),
     kimiQuota: scopeDemoQuotaRecord(raw.kimiQuota, filesByName),
     xaiQuota: scopeDemoQuotaRecord(raw.xaiQuota, filesByName),
   };

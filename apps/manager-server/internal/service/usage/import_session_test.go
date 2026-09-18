@@ -1376,7 +1376,7 @@ func requireImportSessionErrorCode(t *testing.T, err error, want ImportSessionEr
 	}
 }
 
-func TestImportSessionRejectsInvalidEventHashAsNonRetryable(t *testing.T) {
+func TestImportSessionAcceptsLegacyNoncanonicalEventHash(t *testing.T) {
 	service, cancel := newImportSessionTestService(t, ImportSessionConfig{
 		Directory:      filepath.Join(t.TempDir(), "imports"),
 		ChunkSizeBytes: 256,
@@ -1386,9 +1386,9 @@ func TestImportSessionRejectsInvalidEventHashAsNonRetryable(t *testing.T) {
 	})
 	defer cancel()
 
-	invalidPayload := `{"event_hash":"invalid-short-hash","timestamp_ms":1,"timestamp":"2026-01-01T00:00:00Z","model":"gpt-test"}` + "\n"
+	legacyPayload := `{"event_hash":"legacy-short-hash","timestamp_ms":1,"timestamp":"2026-01-01T00:00:00Z","model":"gpt-test"}` + "\n"
 
-	session, err := service.CreateImportSession(context.Background(), "history.jsonl", int64(len(invalidPayload)), "")
+	session, err := service.CreateImportSession(context.Background(), "history.jsonl", int64(len(legacyPayload)), "")
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -1397,8 +1397,8 @@ func TestImportSessionRejectsInvalidEventHashAsNonRetryable(t *testing.T) {
 		context.Background(),
 		session.ID,
 		0,
-		int64(len(invalidPayload)),
-		strings.NewReader(invalidPayload),
+		int64(len(legacyPayload)),
+		strings.NewReader(legacyPayload),
 	)
 	if err != nil {
 		t.Fatalf("write chunk: %v", err)
@@ -1409,8 +1409,8 @@ func TestImportSessionRejectsInvalidEventHashAsNonRetryable(t *testing.T) {
 		t.Fatalf("complete session: %v", err)
 	}
 
-	failed := waitForImportSessionStatus(t, service, session.ID, ImportSessionStatusFailed)
-	if failed.Retryable {
-		t.Fatalf("expected Retryable to be false for ErrInvalidEventHash, got true: %#v", failed)
+	completed := waitForImportSessionStatus(t, service, session.ID, ImportSessionStatusCompleted)
+	if completed.Result == nil || completed.Result.Added != 1 || completed.Result.Skipped != 0 {
+		t.Fatalf("completed session result = %#v", completed)
 	}
 }
