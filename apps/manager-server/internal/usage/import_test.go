@@ -599,7 +599,9 @@ func TestImportBatcherFlushesByRetainedBytes(t *testing.T) {
 func TestStreamImportPayloadEnforcesJSONLRecordLimit(t *testing.T) {
 	buildRecord := func(size int) []byte {
 		t.Helper()
-		prefix := []byte(`{"event_hash":"record-limit","timestamp_ms":1,"timestamp":"2026-01-02T03:04:05Z","model":"gpt-4o","raw_json":"`)
+		// Exercise the wire-record limit independently of credential sanitization:
+		// megabytes of malformed raw_json otherwise dominate race-instrumented runs.
+		prefix := []byte(`{"event_hash":"record-limit","timestamp_ms":1,"timestamp":"2026-01-02T03:04:05Z","model":"gpt-4o","padding":"`)
 		suffix := []byte(`"}`)
 		if size < len(prefix)+len(suffix) {
 			t.Fatalf("record size %d is too small", size)
