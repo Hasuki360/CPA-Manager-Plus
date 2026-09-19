@@ -31,6 +31,62 @@ beforeEach(() => {
   mocks.delete.mockReset();
 });
 
+describe('authFilesApi OAuth excluded model normalization', () => {
+  it.each([
+    { 'oauth-excluded-models': null },
+    { 'oauth-excluded-models': {} },
+    { items: null },
+    { items: {} },
+    { },
+    null,
+  ])('returns an empty map for %j', async (payload) => {
+    mocks.get.mockResolvedValue(payload);
+
+    await expect(authFilesApi.getOauthExcludedModels()).resolves.toEqual({});
+    expect(mocks.get).toHaveBeenCalledWith('/oauth-excluded-models');
+  });
+
+  it.each([
+    { 'oauth-excluded-models': { ' Codex ': [' model-a ', 'MODEL-A', 'model-b'] } },
+    { items: { ' Codex ': [' model-a ', 'MODEL-A', 'model-b'] } },
+    { ' Codex ': [' model-a ', 'MODEL-A', 'model-b'] },
+    { codex: ' model-a, MODEL-A\nmodel-b ' },
+  ])('preserves supported response formats and normalization for %j', async (payload) => {
+    mocks.get.mockResolvedValue(payload);
+
+    await expect(authFilesApi.getOauthExcludedModels()).resolves.toEqual({
+      codex: ['model-a', 'model-b'],
+    });
+  });
+
+  it('does not fall through an explicit null wrapper to items or provider keys', async () => {
+    mocks.get.mockResolvedValue({
+      'oauth-excluded-models': null,
+      items: { codex: ['model-a'] },
+      codex: ['model-b'],
+    });
+
+    await expect(authFilesApi.getOauthExcludedModels()).resolves.toEqual({});
+  });
+
+  it('does not fall through an explicit null items wrapper to provider keys', async () => {
+    mocks.get.mockResolvedValue({ items: null, codex: ['model-a'] });
+
+    await expect(authFilesApi.getOauthExcludedModels()).resolves.toEqual({});
+  });
+
+  it('prefers the canonical wrapper over items', async () => {
+    mocks.get.mockResolvedValue({
+      'oauth-excluded-models': { codex: ['model-a'] },
+      items: { codex: ['model-b'] },
+    });
+
+    await expect(authFilesApi.getOauthExcludedModels()).resolves.toEqual({
+      codex: ['model-a'],
+    });
+  });
+});
+
 describe('authFilesApi OAuth model alias normalization', () => {
   it('preserves force-mapping returned by CPA', async () => {
     mocks.get.mockResolvedValue({

@@ -108,6 +108,18 @@ export const buildEventRows = (
       const xForwardedFor = readString(detail.x_forwarded_for ?? detail.xForwardedFor);
       const userAgent = readString(detail.user_agent ?? detail.userAgent);
       const resolvedModel = readString(detail.__resolvedModel);
+      const responseModel = readString(
+        detail.__responseModel ?? detail.response_model ?? detail.responseModel
+      );
+      const sessionId = readString(detail.session_id ?? detail.sessionId);
+      const parentSessionId = readString(
+        detail.parent_session_id ?? detail.parentSessionId
+      );
+      const accessTokenSha256 = readString(
+        detail.access_token_sha256 ?? detail.accessTokenSha256
+      );
+      const generate = typeof detail.generate === 'boolean' ? detail.generate : undefined;
+      const stream = typeof detail.stream === 'boolean' ? detail.stream : undefined;
       const projectId = readString(detail.auth_project_id_snapshot ?? detail.authProjectIdSnapshot);
       const inputTokens = Math.max(Number(detail.tokens?.input_tokens) || 0, 0);
       const outputTokens = Math.max(Number(detail.tokens?.output_tokens) || 0, 0);
@@ -232,6 +244,12 @@ export const buildEventRows = (
         cacheCreationTokens,
         totalTokens,
         totalCost,
+        responseModel,
+        sessionId,
+        parentSessionId,
+        accessTokenSha256,
+        generate,
+        stream,
         reasoningEffort,
         serviceTier,
         requestServiceTier,

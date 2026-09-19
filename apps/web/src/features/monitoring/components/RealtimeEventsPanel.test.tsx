@@ -79,6 +79,14 @@ const t = ((key: string, options?: Record<string, unknown>) => {
     'monitoring.this_call_cost': 'Cost',
     'monitoring.this_call_usage': 'Usage',
     'monitoring.ttft_short': 'TTFT',
+    'monitoring.model_mismatch': 'Model mismatch',
+    'monitoring.requested_model': 'Requested model',
+    'monitoring.resolved_model': 'Routed model',
+    'monitoring.response_model': 'Response model',
+    'monitoring.session_id': 'Session ID (i18n)',
+    'monitoring.parent_session_id': 'Parent session ID (i18n)',
+    'monitoring.generate': 'Generate (i18n)',
+    'monitoring.stream': 'Stream (i18n)',
   };
   let message = messages[key] ?? key;
   if (options) {
@@ -415,7 +423,7 @@ describe('RealtimeEventsPanel', () => {
       'claude-opus-4-6-thinking-with-a-very-long-provider-routing-suffix-for-realtime-monitoring';
     const markup = renderPanel(baseRow({ model: longModel, resolvedModel: longModel }));
 
-    expect(markup).toContain(`title="${longModel}"`);
+    expect(markup).toContain(`title="Requested model: ${longModel}"`);
     expect(markup).toContain(longModel);
     expect(markup).toMatch(/class="[^"]*realtimeModelCell[^"]*"/);
     expect(markup).toMatch(/class="[^"]*realtimeModelText[^"]*"/);

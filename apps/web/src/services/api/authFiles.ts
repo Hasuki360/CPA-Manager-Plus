@@ -742,7 +742,12 @@ const normalizeOauthExcludedModels = (payload: unknown): Record<string, string[]
   if (!payload || typeof payload !== 'object') return {};
 
   const record = payload as Record<string, unknown>;
-  const source = record['oauth-excluded-models'] ?? record.items ?? payload;
+  // An explicit null wrapper means no exclusions, not a bare provider map.
+  const source = Object.prototype.hasOwnProperty.call(record, 'oauth-excluded-models')
+    ? record['oauth-excluded-models']
+    : Object.prototype.hasOwnProperty.call(record, 'items')
+      ? record.items
+      : payload;
   if (!source || typeof source !== 'object') return {};
 
   const result: Record<string, string[]> = {};
