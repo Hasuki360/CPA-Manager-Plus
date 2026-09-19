@@ -1854,7 +1854,15 @@ const archiveRecordExpression = `json_patch(
 			'api_key_hash', coalesce(e.api_key_hash, ''),
 			'account_snapshot', coalesce(e.account_snapshot, ''),
 			'auth_label_snapshot', coalesce(e.auth_label_snapshot, ''),
-			'auth_file_snapshot', coalesce(e.auth_file_snapshot, '')
+			'auth_file_snapshot', coalesce(e.auth_file_snapshot, ''),
+			'generate', case
+				when e.generate is null then null
+				else json(case when e.generate != 0 then 'true' else 'false' end)
+			end,
+			'stream', case
+				when e.stream is null then null
+				else json(case when e.stream != 0 then 'true' else 'false' end)
+			end
 		),
 		json_object(
 			'auth_provider_snapshot', coalesce(e.auth_provider_snapshot, ''),
@@ -1863,6 +1871,10 @@ const archiveRecordExpression = `json_patch(
 			'auth_snapshot_at_ms', coalesce(e.auth_snapshot_at_ms, 0),
 			'requested_model', coalesce(e.requested_model, ''),
 			'resolved_model', coalesce(e.resolved_model, ''),
+			'response_model', coalesce(e.response_model, ''),
+			'session_id', coalesce(e.session_id, ''),
+			'parent_session_id', coalesce(e.parent_session_id, ''),
+			'access_token_sha256', coalesce(e.access_token_sha256, ''),
 			'reasoning_effort', coalesce(e.reasoning_effort, ''),
 			'service_tier', coalesce(e.service_tier, ''),
 			'request_service_tier', coalesce(e.request_service_tier, ''),

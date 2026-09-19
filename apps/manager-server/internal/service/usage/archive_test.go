@@ -493,6 +493,8 @@ func TestUsageArchiveServiceBackfillsMetadataBeforeManualArchive(t *testing.T) {
 func TestUsageArchiveSegmentsRestoreEventDataIntoFreshStore(t *testing.T) {
 	events := archiveTestServiceEvents(2)
 	quotaUsedPercent := 73.5
+	generate := true
+	stream := false
 	events[0].ClientIP = "192.0.2.10"
 	events[0].XForwardedFor = "198.51.100.7, 192.0.2.10"
 	events[0].UserAgent = "cpamp-archive-restore/1.0"
@@ -506,6 +508,12 @@ func TestUsageArchiveSegmentsRestoreEventDataIntoFreshStore(t *testing.T) {
 	events[0].AuthSnapshotAtMS = 900
 	events[0].RequestedModel = "gpt-restore-alias"
 	events[0].ResolvedModel = "gpt-5.6-sol"
+	events[0].ResponseModel = "gpt-5.6-sol-response"
+	events[0].SessionID = "restore-session"
+	events[0].ParentSessionID = "restore-parent-session"
+	events[0].AccessTokenSHA256 = "restore-access-token-sha256"
+	events[0].Generate = &generate
+	events[0].Stream = &stream
 	events[0].ReasoningEffort = "high"
 	events[0].RequestServiceTier = "priority"
 	events[0].ResponseServiceTier = "default"
@@ -712,6 +720,14 @@ func TestUsageArchiveSegmentsRestoreEventDataIntoFreshStore(t *testing.T) {
 	if restoredMetadata.ResponseMetadata == nil || restoredMetadata.ResponseMetadata.Trace == nil ||
 		restoredMetadata.ResponseMetadata.Trace.PrimaryTraceID != "trace-restore" {
 		t.Fatalf("restored response metadata = %#v", restoredMetadata.ResponseMetadata)
+	}
+	if restoredMetadata.ResponseModel != events[0].ResponseModel ||
+		restoredMetadata.SessionID != events[0].SessionID ||
+		restoredMetadata.ParentSessionID != events[0].ParentSessionID ||
+		restoredMetadata.AccessTokenSHA256 != events[0].AccessTokenSHA256 ||
+		restoredMetadata.Generate == nil || *restoredMetadata.Generate != generate ||
+		restoredMetadata.Stream == nil || *restoredMetadata.Stream != stream {
+		t.Fatalf("restored request metadata = %#v", restoredMetadata)
 	}
 	if restoredMetadata.HeaderQuotaRecoverAtMS != 98_765 || restoredMetadata.HeaderQuotaUsedPercent == nil ||
 		*restoredMetadata.HeaderQuotaUsedPercent != 12.5 || restoredMetadata.HeaderQuotaPlanType != "stored-flat-plan" ||

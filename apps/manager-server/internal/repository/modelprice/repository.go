@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"math"
 	"sort"
 	"time"
 
@@ -22,6 +24,24 @@ type Repository interface {
 
 type repository struct {
 	db *sql.DB
+}
+
+type configuredFlag bool
+
+func (f *configuredFlag) Scan(value any) error {
+	switch value := value.(type) {
+	case int64:
+		*f = value != 0
+		return nil
+	case float64:
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			return fmt.Errorf("invalid configured flag numeric value %v", value)
+		}
+		*f = value != 0
+		return nil
+	default:
+		return fmt.Errorf("invalid configured flag storage type %T", value)
+	}
 }
 
 func New(db *sql.DB) Repository {
@@ -60,7 +80,7 @@ func (r *repository) LoadAllTx(ctx context.Context, tx *sql.Tx) (map[string]mode
 		var price model.ModelPrice
 		var source, sourceModelID, rawJSON sql.NullString
 		var syncedAt sql.NullInt64
-		var promptConfigured, completionConfigured, cacheReadConfigured, cacheCreationConfigured int
+		var promptConfigured, completionConfigured, cacheReadConfigured, cacheCreationConfigured configuredFlag
 		if err := rows.Scan(
 			&modelID,
 			&price.Prompt,
@@ -81,10 +101,10 @@ func (r *repository) LoadAllTx(ctx context.Context, tx *sql.Tx) (map[string]mode
 			return nil, err
 		}
 		price.Source = source.String
-		price.PromptConfigured = promptConfigured != 0
-		price.CompletionConfigured = completionConfigured != 0
-		price.CacheReadConfigured = cacheReadConfigured != 0
-		price.CacheCreationConfigured = cacheCreationConfigured != 0
+		price.PromptConfigured = bool(promptConfigured)
+		price.CompletionConfigured = bool(completionConfigured)
+		price.CacheReadConfigured = bool(cacheReadConfigured)
+		price.CacheCreationConfigured = bool(cacheCreationConfigured)
 		price.SourceModelID = sourceModelID.String
 		price.RawJSON = rawJSON.String
 		if syncedAt.Valid {
@@ -111,7 +131,7 @@ func (r *repository) LoadAllTx(ctx context.Context, tx *sql.Tx) (map[string]mode
 	for tierRows.Next() {
 		var modelID string
 		var tier model.ModelPriceContextTier
-		var promptConfigured, completionConfigured, cacheConfigured, cacheReadConfigured, cacheCreationConfigured int
+		var promptConfigured, completionConfigured, cacheConfigured, cacheReadConfigured, cacheCreationConfigured configuredFlag
 		if err := tierRows.Scan(
 			&modelID,
 			&tier.ThresholdTokens,
@@ -128,11 +148,11 @@ func (r *repository) LoadAllTx(ctx context.Context, tx *sql.Tx) (map[string]mode
 		); err != nil {
 			return nil, err
 		}
-		tier.PromptConfigured = promptConfigured != 0
-		tier.CompletionConfigured = completionConfigured != 0
-		tier.CacheConfigured = cacheConfigured != 0
-		tier.CacheReadConfigured = cacheReadConfigured != 0
-		tier.CacheCreationConfigured = cacheCreationConfigured != 0
+		tier.PromptConfigured = bool(promptConfigured)
+		tier.CompletionConfigured = bool(completionConfigured)
+		tier.CacheConfigured = bool(cacheConfigured)
+		tier.CacheReadConfigured = bool(cacheReadConfigured)
+		tier.CacheCreationConfigured = bool(cacheCreationConfigured)
 		price, ok := prices[modelID]
 		if !ok {
 			continue
@@ -158,7 +178,7 @@ func (r *repository) LoadAllTx(ctx context.Context, tx *sql.Tx) (map[string]mode
 	for serviceTierRows.Next() {
 		var modelID string
 		var tier model.ModelPriceServiceTier
-		var promptConfigured, completionConfigured, cacheConfigured, cacheReadConfigured, cacheCreationConfigured int
+		var promptConfigured, completionConfigured, cacheConfigured, cacheReadConfigured, cacheCreationConfigured configuredFlag
 		if err := serviceTierRows.Scan(
 			&modelID,
 			&tier.Mode,
@@ -176,11 +196,11 @@ func (r *repository) LoadAllTx(ctx context.Context, tx *sql.Tx) (map[string]mode
 		); err != nil {
 			return nil, err
 		}
-		tier.PromptConfigured = promptConfigured != 0
-		tier.CompletionConfigured = completionConfigured != 0
-		tier.CacheConfigured = cacheConfigured != 0
-		tier.CacheReadConfigured = cacheReadConfigured != 0
-		tier.CacheCreationConfigured = cacheCreationConfigured != 0
+		tier.PromptConfigured = bool(promptConfigured)
+		tier.CompletionConfigured = bool(completionConfigured)
+		tier.CacheConfigured = bool(cacheConfigured)
+		tier.CacheReadConfigured = bool(cacheReadConfigured)
+		tier.CacheCreationConfigured = bool(cacheCreationConfigured)
 		price, ok := prices[modelID]
 		if !ok {
 			continue

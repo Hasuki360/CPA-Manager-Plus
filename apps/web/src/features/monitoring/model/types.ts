@@ -160,6 +160,12 @@ export type MonitoringEventRow = {
   model: string;
   requestedModel?: string;
   resolvedModel?: string;
+  responseModel?: string;
+  sessionId?: string;
+  parentSessionId?: string;
+  accessTokenSha256?: string;
+  generate?: boolean;
+  stream?: boolean;
   endpoint: string;
   endpointMethod: string;
   endpointPath: string;

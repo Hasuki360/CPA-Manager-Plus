@@ -30,6 +30,14 @@ func TestRepositoryArchiveVerifyResumeAndBoundedDelete(t *testing.T) {
 	db := openArchiveTestDB(t)
 	ctx := context.Background()
 	events := archiveTestEvents()
+	generate := true
+	stream := false
+	events[0].ResponseModel = "grok-archive-response"
+	events[0].SessionID = "archive-session"
+	events[0].ParentSessionID = "archive-parent-session"
+	events[0].AccessTokenSHA256 = "archive-access-token-sha256"
+	events[0].Generate = &generate
+	events[0].Stream = &stream
 	inserted, err := usageevent.New(db).InsertBatch(ctx, events)
 	if err != nil {
 		t.Fatalf("insert usage events: %v", err)
@@ -84,11 +92,17 @@ func TestRepositoryArchiveVerifyResumeAndBoundedDelete(t *testing.T) {
 		t.Fatalf("decode archive record: %v", err)
 	}
 	for key, want := range map[string]any{
-		"client_ip":       events[0].ClientIP,
-		"x_forwarded_for": events[0].XForwardedFor,
-		"user_agent":      events[0].UserAgent,
-		"fail_body":       events[0].FailBody,
-		"raw_json":        events[0].RawJSON,
+		"client_ip":           events[0].ClientIP,
+		"x_forwarded_for":     events[0].XForwardedFor,
+		"user_agent":          events[0].UserAgent,
+		"response_model":      events[0].ResponseModel,
+		"session_id":          events[0].SessionID,
+		"parent_session_id":   events[0].ParentSessionID,
+		"access_token_sha256": events[0].AccessTokenSHA256,
+		"generate":            generate,
+		"stream":              stream,
+		"fail_body":           events[0].FailBody,
+		"raw_json":            events[0].RawJSON,
 	} {
 		if archivedPayload[key] != want {
 			t.Fatalf("archive payload %s = %#v, want %#v", key, archivedPayload[key], want)
@@ -107,6 +121,12 @@ func TestRepositoryArchiveVerifyResumeAndBoundedDelete(t *testing.T) {
 		restored[0].ClientIP != events[0].ClientIP ||
 		restored[0].XForwardedFor != events[0].XForwardedFor ||
 		restored[0].UserAgent != events[0].UserAgent ||
+		restored[0].ResponseModel != events[0].ResponseModel ||
+		restored[0].SessionID != events[0].SessionID ||
+		restored[0].ParentSessionID != events[0].ParentSessionID ||
+		restored[0].AccessTokenSHA256 != events[0].AccessTokenSHA256 ||
+		restored[0].Generate == nil || *restored[0].Generate != generate ||
+		restored[0].Stream == nil || *restored[0].Stream != stream ||
 		restored[0].FailBody != events[0].FailBody {
 		t.Fatalf("restored result=%#v events=%#v", result, restored)
 	}
