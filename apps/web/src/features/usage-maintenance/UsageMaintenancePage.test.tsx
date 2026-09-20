@@ -2806,4 +2806,68 @@ describe('maintenance workspace navigation and continuous operations', () => {
 
     act(() => renderer.unmount());
   });
+
+  it('supports clearing search input and opening run details via row click', async () => {
+    const run1 = archive('completed', 'run-target-row-click');
+    const renderer = await renderHistoryPage(maintenance(), [run1]);
+
+    const searchInput = renderer.root
+      .findAllByType('input')
+      .find((input) => input.props.type === 'search');
+    expect(searchInput).toBeDefined();
+
+    act(() => {
+      searchInput!.props.onChange({ target: { value: 'target' } });
+    });
+    expect(searchInput!.props.value).toBe('target');
+
+    const clearBtn = renderer.root
+      .findAllByType('button')
+      .find(
+        (btn) =>
+          btn.props.className?.includes('searchClearBtn') ||
+          btn.props['aria-label'] === 'Clear' ||
+          btn.props['aria-label'] === '清空'
+      );
+    expect(clearBtn).toBeDefined();
+    act(() => {
+      clearBtn!.props.onClick();
+    });
+    expect(searchInput!.props.value).toBe('');
+
+    const row = renderer.root.findByProps({ 'data-run-id': run1.id });
+    act(() => {
+      row.props.onClick({ target: row });
+    });
+    expect(mocks.getUsageArchive).toHaveBeenCalledWith(
+      'http://manager-a.local:18317',
+      run1.id,
+      'management-key-a',
+      expect.any(AbortSignal)
+    );
+
+    act(() => renderer.unmount());
+  });
+
+  it('renders semantic tags for fully cleaned and retained archive runs', async () => {
+    const runCleaned = {
+      ...archive('completed', 'run-cleaned'),
+      event_count: 500,
+      archived_event_count: 500,
+      deleted_event_count: 500,
+    };
+    const runRetained = {
+      ...archive('verified', 'run-retained'),
+      event_count: 300,
+      archived_event_count: 300,
+      deleted_event_count: 0,
+    };
+    const renderer = await renderHistoryPage(maintenance(), [runCleaned, runRetained]);
+
+    const text = getText(renderer.root);
+    expect(text).toContain('Archived · Raw cleaned');
+    expect(text).toContain('Archived · Retained online');
+
+    act(() => renderer.unmount());
+  });
 });

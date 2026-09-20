@@ -11,6 +11,11 @@ import {
   IconDatabaseZap,
   IconHardDrive,
   IconSparkles,
+  IconSearch,
+  IconX,
+  IconChevronLeft,
+  IconChevronRight,
+  IconCircleHelp,
 } from '@/components/ui/icons';
 import { useNotificationStore } from '@/stores';
 import { copyToClipboard } from '@/utils/clipboard';
@@ -360,18 +365,32 @@ export function UsageArchiveHistoryView({
               ),
             }))}
           />
-          <input
-            type="search"
-            className={styles.searchInput}
-            placeholder={t('usage_maintenance.search_runs_placeholder', {
-              defaultValue: '搜索任务 ID / 状态…',
-            })}
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            aria-label={t('usage_maintenance.search_runs_placeholder', {
-              defaultValue: '搜索任务 ID / 状态…',
-            })}
-          />
+          <div className={styles.searchWrap}>
+            <IconSearch size={14} className={styles.searchIcon} aria-hidden="true" />
+            <input
+              type="search"
+              className={styles.searchInput}
+              placeholder={t('usage_maintenance.search_runs_placeholder', {
+                defaultValue: '搜索任务 ID / 状态…',
+              })}
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              aria-label={t('usage_maintenance.search_runs_placeholder', {
+                defaultValue: '搜索任务 ID / 状态…',
+              })}
+            />
+            {searchQuery ? (
+              <button
+                type="button"
+                className={styles.searchClearBtn}
+                onClick={() => setSearchQuery('')}
+                title={t('common.clear', { defaultValue: '清空' })}
+                aria-label={t('common.clear', { defaultValue: '清空' })}
+              >
+                <IconX size={12} />
+              </button>
+            ) : null}
+          </div>
         </div>
       </div>
       <div className={styles.tableScroller}>
@@ -380,7 +399,22 @@ export function UsageArchiveHistoryView({
             <tr>
               <th>{t('usage_maintenance.created_at')}</th>
               <th>{t('usage_maintenance.technical_mode')}</th>
-              <th>{t('usage_maintenance.cutoff')}</th>
+              <th>
+                <span className={styles.thWithHelp}>
+                  {t('usage_maintenance.cutoff_short', { defaultValue: '归档截止点' })}
+                  <span
+                    className={styles.helpIcon}
+                    title={t('usage_maintenance.resolved_cutoff_hint', {
+                      defaultValue: '更早事件进入归档，更新事件继续在线保留。',
+                    })}
+                    aria-label={t('usage_maintenance.resolved_cutoff_hint', {
+                      defaultValue: '更早事件进入归档，更新事件继续在线保留。',
+                    })}
+                  >
+                    <IconCircleHelp size={13} />
+                  </span>
+                </span>
+              </th>
               <th>{t('usage_maintenance.workspace_record_count')}</th>
               <th>{t('usage_maintenance.technical_status')}</th>
               <th>
@@ -403,23 +437,25 @@ export function UsageArchiveHistoryView({
               </tr>
             ) : (
               filteredRuns.map((run) => (
-                <tr key={run.id} data-run-id={run.id}>
+                <tr
+                  key={run.id}
+                  data-run-id={run.id}
+                  className={styles.clickableRow}
+                  onClick={(e) => {
+                    const target = e.target as HTMLElement | null;
+                    if (typeof target?.closest === 'function' && target.closest('button, a, input')) return;
+                    onOpenRun(run);
+                  }}
+                >
                   <td data-label={t('usage_maintenance.created_at')}>
-                    <div className={styles.identityCell}>
-                      <span
-                        className={`${styles.identityIcon} ${run.mode === 'retention' ? styles.iconPurple : styles.iconBlue}`}
-                        aria-hidden="true"
+                    <div className={styles.identityMeta}>
+                      <button
+                        className={styles.recordTitle}
+                        type="button"
+                        onClick={() => onOpenRun(run)}
                       >
-                        <IconArchive size={15} />
-                      </span>
-                      <div className={styles.identityMeta}>
-                        <button
-                          className={styles.recordTitle}
-                          type="button"
-                          onClick={() => onOpenRun(run)}
-                        >
-                          {formatTime(run.created_at_ms)}
-                        </button>
+                        {formatTime(run.created_at_ms)}
+                      </button>
                         <span className={styles.identityHash} title={run.id}>
                           #{run.id.slice(0, 8)}
                           <button
@@ -436,7 +472,6 @@ export function UsageArchiveHistoryView({
                           </button>
                         </span>
                       </div>
-                    </div>
                   </td>
                   <td data-label={t('usage_maintenance.technical_mode')}>
                     <span
@@ -452,18 +487,30 @@ export function UsageArchiveHistoryView({
                     <div className={styles.metricsStack}>
                       <strong className={styles.numeric}>
                         {run.event_count.toLocaleString(i18n.language)}
+                        <span className={styles.numericUnit}>
+                          {' '}
+                          {t('usage_maintenance.events_suffix', { defaultValue: '条' })}
+                        </span>
                       </strong>
                       <div className={styles.metricTags}>
-                        <span className={styles.metaTag}>
-                          {t('usage_maintenance.archived_count')}{' '}
-                          {run.archived_event_count.toLocaleString(i18n.language)}
-                        </span>
-                        {run.deleted_event_count > 0 ? (
-                          <span className={`${styles.metaTag} ${styles.metaTagDanger}`}>
-                            {t('usage_maintenance.deleted_events')}{' '}
-                            {run.deleted_event_count.toLocaleString(i18n.language)}
+                        {run.deleted_event_count >= run.event_count && run.event_count > 0 ? (
+                          <span className={`${styles.metaTag} ${styles.metaTagCleaned}`}>
+                            <IconCheck size={11} aria-hidden="true" />
+                            {t('usage_maintenance.meta_cleaned_all')}
                           </span>
-                        ) : null}
+                        ) : run.deleted_event_count === 0 ? (
+                          <span className={`${styles.metaTag} ${styles.metaTagRetained}`}>
+                            {t('usage_maintenance.meta_archived_only')}
+                          </span>
+                        ) : (
+                          <span className={`${styles.metaTag} ${styles.metaTagPartial}`}>
+                            {t('usage_maintenance.meta_partially_cleaned', {
+                              defaultValue: `已清理 ${run.deleted_event_count.toLocaleString(i18n.language)} / ${run.event_count.toLocaleString(i18n.language)}`,
+                              deleted: run.deleted_event_count.toLocaleString(i18n.language),
+                              total: run.event_count.toLocaleString(i18n.language),
+                            })}
+                          </span>
+                        )}
                       </div>
                     </div>
                   </td>
@@ -486,8 +533,14 @@ export function UsageArchiveHistoryView({
                     </div>
                   </td>
                   <td className={styles.recordActions}>
-                    <Button size="sm" variant="ghost" onClick={() => onOpenRun(run)}>
-                      {t('usage_maintenance.details')}
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => onOpenRun(run)}
+                      className={styles.detailBtn}
+                    >
+                      <span>{t('usage_maintenance.details')}</span>
+                      <IconChevronRight size={13} aria-hidden="true" />
                     </Button>
                     <UsageArchiveRunActions run={run} compact {...actions} />
                   </td>
@@ -504,7 +557,15 @@ export function UsageArchiveHistoryView({
       ) : null}
       <div className={styles.pagination}>
         <div className={styles.paginationInfo}>
-          <span>{t('usage_maintenance.records_on_page', { count: archiveList.runs.length })}</span>
+          <span>
+            {counts
+              ? t('usage_maintenance.records_page_summary', {
+                  defaultValue: `共 ${Object.values(counts).reduce((s, c) => s + c, 0)} 条记录 · 本页 ${archiveList.runs.length} 条`,
+                  total: Object.values(counts).reduce((s, c) => s + c, 0),
+                  count: archiveList.runs.length,
+                })
+              : t('usage_maintenance.records_on_page', { count: archiveList.runs.length })}
+          </span>
         </div>
         <div className={styles.paginationControls}>
           <Button
@@ -513,7 +574,8 @@ export function UsageArchiveHistoryView({
             disabled={!canGoBack || loading}
             onClick={onPreviousPage}
           >
-            {t('common.previous')}
+            <IconChevronLeft size={14} aria-hidden="true" />
+            <span>{t('usage_maintenance.pagination_prev')}</span>
           </Button>
           <Button
             size="sm"
@@ -521,7 +583,8 @@ export function UsageArchiveHistoryView({
             disabled={!archiveList.next_cursor || loading}
             onClick={onNextPage}
           >
-            {t('common.next')}
+            <span>{t('usage_maintenance.pagination_next')}</span>
+            <IconChevronRight size={14} aria-hidden="true" />
           </Button>
         </div>
       </div>
