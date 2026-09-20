@@ -108,6 +108,20 @@
   color: var(--text-secondary);
 }
 
+.checkboxContainer {
+  margin-top: 4px;
+  padding: 12px 16px;
+  border-radius: var(--app-radius-md, 10px);
+  background: color-mix(in srgb, var(--error-color, #dc2626) 6%, var(--surface-subtle));
+  border: 1px solid color-mix(in srgb, var(--error-color, #dc2626) 30%, var(--border-color));
+  font-size: 13px;
+  line-height: 1.5;
+
+  strong {
+    color: var(--error-color, #dc2626);
+  }
+}
+
 @media (max-width: 560px) {
   .details > div {
     grid-template-columns: 1fr;

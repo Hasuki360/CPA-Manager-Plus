@@ -1187,7 +1187,9 @@ describe('UsageMaintenancePage', () => {
     const initialPreviewCalls = mocks.previewUsageArchive.mock.calls.length;
 
     act(() => findButtons(renderer, 'Custom date')[0].props.onClick());
-    const input = renderer.root.findByType('input');
+    const input =
+      renderer.root.findAllByType('input').find((item) => item.props.type === 'datetime-local') ??
+      renderer.root.findByType('input');
     act(() => input.props.onChange({ target: { value: '2999-01-01T00:00' } }));
     act(() => vi.advanceTimersByTime(300));
     await act(async () => {
@@ -2735,5 +2737,73 @@ describe('maintenance workspace navigation and continuous operations', () => {
     expect(mocks.deleteUsageArchive).toHaveBeenCalledTimes(1);
     expect(getText(renderer.root)).toContain('Online detail cleanup complete');
     expect(findButtons(renderer, 'Review cleanup')).toHaveLength(0);
+  });
+
+  it('renders floating mini-progress for active background tasks and clicking it opens the run', async () => {
+    const activeRun = {
+      ...archive('archiving', 'active-bg-run'),
+      event_count: 100,
+      archived_event_count: 45,
+    };
+    const activeMaintenance = maintenance({ active_run: activeRun });
+    const renderer = await renderHistoryPage(activeMaintenance, [activeRun]);
+
+    expect(getText(renderer.root)).toContain('translated:usage_maintenance.run_status_archiving');
+    expect(getText(renderer.root)).toContain('45.0%');
+
+    const floatingBtn = findButtons(renderer, '45.0%')[0];
+    expect(floatingBtn).toBeDefined();
+    act(() => floatingBtn.props.onClick());
+
+    expect(
+      mocks.navigate.mock.calls.some(([to]) => to.search.includes('run=active-bg-run'))
+    ).toBe(true);
+    act(() => renderer.unmount());
+  });
+
+  it('shows smart reclaim recommendation highlight on overview when reclaimable space is significant', async () => {
+    const highReclaimMaintenance = maintenance({
+      storage: {
+        page_size: 4096,
+        page_count: 50000,
+        freelist_count: 20000,
+        reclaimable_bytes: 80 * 1024 * 1024,
+        database_bytes: 200 * 1024 * 1024,
+        wal_bytes: 0,
+        shm_bytes: 0,
+        total_bytes: 200 * 1024 * 1024,
+      },
+    });
+    const renderer = await renderHistoryPage(highReclaimMaintenance, []);
+    expect(getText(renderer.root)).toContain('建议收缩：预计可从');
+    act(() => renderer.unmount());
+  });
+
+  it('supports real-time search filtering in the archive records table', async () => {
+    const run1 = archive('completed', 'run-target-search-alpha');
+    const run2 = archive('completed', 'run-other-beta');
+    const renderer = await renderHistoryPage(maintenance(), [run1, run2]);
+
+    expect(getText(renderer.root)).toContain('#run-targ');
+    expect(getText(renderer.root)).toContain('#run-othe');
+
+    const searchInput = renderer.root
+      .findAllByType('input')
+      .find((input) => input.props.type === 'search');
+    expect(searchInput).toBeDefined();
+
+    act(() => {
+      searchInput!.props.onChange({ target: { value: 'alpha' } });
+    });
+
+    expect(getText(renderer.root)).toContain('#run-targ');
+    expect(getText(renderer.root)).not.toContain('#run-othe');
+
+    act(() => {
+      searchInput!.props.onChange({ target: { value: 'nonexistent-query' } });
+    });
+    expect(getText(renderer.root)).toContain('未找到匹配的任务记录');
+
+    act(() => renderer.unmount());
   });
 });

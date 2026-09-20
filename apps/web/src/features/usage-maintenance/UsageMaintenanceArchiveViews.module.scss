@@ -29,7 +29,10 @@
   flex-direction: column;
   justify-content: space-between;
   gap: 12px;
-  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.2s ease,
+    border-color 0.2s ease;
 
   &:hover {
     transform: translateY(-2px);
@@ -241,11 +244,45 @@
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+  align-items: center;
 
   > div {
-    width: 190px;
+    width: 180px;
     max-width: 100%;
   }
+}
+
+.searchInput {
+  height: 38px;
+  padding: 0 12px;
+  font-size: 13px;
+  border-radius: var(--app-radius-md, 10px);
+  border: 1px solid var(--border-color);
+  background: var(--surface-subtle);
+  color: var(--text-primary);
+  outline: none;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+  min-width: 180px;
+
+  &:focus {
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary-color) 20%, transparent);
+  }
+
+  &::placeholder {
+    color: var(--text-tertiary, var(--text-secondary));
+  }
+}
+
+.emptyTable {
+  text-align: center;
+  padding: 24px 16px !important;
+  color: var(--text-tertiary, var(--text-secondary));
+  font-size: 13px;
+  border-radius: 12px !important;
+  background: var(--surface-subtle) !important;
 }
 
 .tableScroller {
@@ -280,7 +317,9 @@
   }
 
   tbody tr {
-    transition: transform 0.16s ease, box-shadow 0.16s ease;
+    transition:
+      transform 0.16s ease,
+      box-shadow 0.16s ease;
   }
 
   tbody td {
@@ -391,10 +430,46 @@
 }
 
 .identityHash {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
   font-size: 11px;
   font-family: var(--font-mono, monospace);
   color: var(--text-tertiary, var(--text-secondary));
   line-height: 1.2;
+}
+
+.copyIdBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-tertiary, var(--text-secondary));
+  cursor: pointer;
+  line-height: 1;
+  transition:
+    color 0.15s ease,
+    background-color 0.15s ease;
+
+  &:hover {
+    color: var(--primary-color);
+    background: color-mix(in srgb, var(--primary-color) 12%, transparent);
+  }
+}
+
+.reclaimHighlight {
+  margin-top: 6px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--data-green-base, #16a34a) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--data-green-base, #16a34a) 25%, transparent);
+  color: var(--data-green-base, #16a34a);
+  font-size: 11px;
+  line-height: 1.4;
+  font-weight: 500;
 }
 
 .modeChip {
@@ -755,7 +830,11 @@
   i {
     display: block;
     height: 100%;
-    background: linear-gradient(90deg, var(--data-blue-base, #3b82f6), var(--data-cyan-base, #06b6d4));
+    background: linear-gradient(
+      90deg,
+      var(--data-blue-base, #3b82f6),
+      var(--data-cyan-base, #06b6d4)
+    );
     border-radius: $radius-full;
     transition: width 0.3s ease;
   }
@@ -853,6 +932,10 @@
       flex: 1;
       min-width: 0;
       width: auto;
+    }
+
+    .searchInput {
+      width: 100%;
     }
   }
 

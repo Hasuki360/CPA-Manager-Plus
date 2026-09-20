@@ -1,4 +1,5 @@
 import { useTranslation } from 'react-i18next';
+import { SelectionCheckbox } from '@/components/ui/SelectionCheckbox';
 import type { UsageArchiveRunSummary } from '@/services/api/usageService';
 import { formatDateTime } from '@/utils/format';
 import styles from './UsageMaintenanceDeleteConfirmation.module.scss';
@@ -6,9 +7,16 @@ import styles from './UsageMaintenanceDeleteConfirmation.module.scss';
 type Props = {
   run: UsageArchiveRunSummary;
   deletionEnabled: boolean;
+  acknowledged?: boolean;
+  onToggleAcknowledged?: (value: boolean) => void;
 };
 
-export function UsageMaintenanceDeleteConfirmation({ run, deletionEnabled }: Props) {
+export function UsageMaintenanceDeleteConfirmation({
+  run,
+  deletionEnabled,
+  acknowledged,
+  onToggleAcknowledged,
+}: Props) {
   const { t, i18n } = useTranslation();
   const remainingEventCount = Math.max(0, run.event_count - run.deleted_event_count);
   const verified =
@@ -107,6 +115,27 @@ export function UsageMaintenanceDeleteConfirmation({ run, deletionEnabled }: Pro
             'Storage note: deleting raw data frees SQLite pages for reuse, but the database file does not shrink immediately. Releasing that space back to the filesystem requires offline compaction with all Manager Server processes stopped.',
         })}
       </p>
+      {onToggleAcknowledged ? (
+        <div className={styles.checkboxContainer}>
+          <SelectionCheckbox
+            checked={Boolean(acknowledged)}
+            onChange={onToggleAcknowledged}
+            label={
+              <span>
+                <strong>
+                  {t('usage_maintenance.delete_confirm_acknowledgement_strong', {
+                    defaultValue: '我已知晓此操作不可逆：',
+                  })}
+                </strong>
+                {t('usage_maintenance.delete_confirm_acknowledgement_text', {
+                  defaultValue:
+                    '在线明细删除后将无法从管理面板中查询，且 SQLite 物理磁盘文件不会即时收缩（需在离线维护期执行收缩命令释放空间）。',
+                })}
+              </span>
+            }
+          />
+        </div>
+      ) : null}
     </div>
   );
 }

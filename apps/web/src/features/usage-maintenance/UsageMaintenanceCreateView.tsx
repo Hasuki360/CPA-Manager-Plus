@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
+import { IconInfo } from '@/components/ui/icons';
 import type { UsageArchivePreview, UsageMaintenanceStatus } from '@/services/api/usageService';
 import { formatDateTime, formatFileSize } from '@/utils/format';
 import {
@@ -183,28 +184,61 @@ export function UsageMaintenanceCreateView({
             </div>
           ) : null}
           {!previewError && preview && preview.event_count > 0 ? (
-            <dl className={styles.previewGrid}>
-              <div>
-                <dt>
-                  {t('usage_maintenance.preview_events', { defaultValue: 'New events to archive' })}
-                </dt>
-                <dd>{preview.event_count.toLocaleString(i18n.language)}</dd>
-              </div>
-              <div>
-                <dt>
-                  {t('usage_maintenance.preview_source_bytes', {
-                    defaultValue: 'Estimated source size',
+            <>
+              <dl className={styles.previewGrid}>
+                <div>
+                  <dt>
+                    {t('usage_maintenance.preview_events', {
+                      defaultValue: 'New events to archive',
+                    })}
+                  </dt>
+                  <dd>{preview.event_count.toLocaleString(i18n.language)}</dd>
+                </div>
+                <div>
+                  <dt>
+                    {t('usage_maintenance.preview_source_bytes', {
+                      defaultValue: 'Estimated source size',
+                    })}
+                  </dt>
+                  <dd>{formatFileSize(preview.estimated_bytes)}</dd>
+                </div>
+                <div className={styles.range}>
+                  <dt>
+                    {t('usage_maintenance.preview_range', { defaultValue: 'Timestamp range' })}
+                  </dt>
+                  <dd>
+                    {formatTime(preview.min_timestamp_ms)} – {formatTime(preview.max_timestamp_ms)}
+                  </dd>
+                </div>
+              </dl>
+              <div className={styles.spaceExpectationNote}>
+                <IconInfo size={15} aria-hidden="true" />
+                <p>
+                  {t('usage_maintenance.preview_space_expectation', {
+                    defaultValue:
+                      '预计将产生约 {{size}} 可回收空间。注意：SQLite 物理磁盘体积不会即时缩小，需在维护窗口执行离线收缩释放物理空间。',
+                    size: formatFileSize(preview.estimated_bytes),
                   })}
-                </dt>
-                <dd>{formatFileSize(preview.estimated_bytes)}</dd>
+                </p>
               </div>
-              <div className={styles.range}>
-                <dt>{t('usage_maintenance.preview_range', { defaultValue: 'Timestamp range' })}</dt>
-                <dd>
-                  {formatTime(preview.min_timestamp_ms)} – {formatTime(preview.max_timestamp_ms)}
-                </dd>
-              </div>
-            </dl>
+            </>
+          ) : null}
+          {intent === 'cleanup' &&
+          resolvedCutoffTimestamp &&
+          referenceNowMS - resolvedCutoffTimestamp < 14 * 24 * 60 * 60 * 1000 ? (
+            <div className={styles.highRiskWarning} role="alert">
+              <strong>
+                {t('usage_maintenance.cleanup_recent_warning_title', {
+                  defaultValue: '⚠️ 高危操作：直接清理 14 天内的近期用量数据',
+                })}
+              </strong>
+              <p>
+                {t('usage_maintenance.cleanup_recent_warning_desc', {
+                  defaultValue:
+                    '直接清理将永久删除记录且不留存归档副本。如需防止计费对账数据丢失，建议优先选择【先归档后清理】。',
+                })}
+              </p>
+            </div>
           ) : null}
           {!previewLoading && !previewError && preview?.event_count === 0 ? (
             <div className={styles.empty}>

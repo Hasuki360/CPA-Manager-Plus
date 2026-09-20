@@ -21,6 +21,7 @@ import {
   IconDatabaseZap,
   IconHardDrive,
   IconSparkles,
+  IconChevronRight,
 } from '@/components/ui/icons';
 import { SegmentedTabs } from '@/components/ui/SegmentedTabs';
 import {
@@ -47,6 +48,7 @@ import { formatDateTime, formatFileSize } from '@/utils/format';
 import {
   archiveHistoryFilterStatus,
   recommendRetentionDays,
+  resolveProgressPercent,
   resolveRawEventRange,
   resolveRetentionCutoff,
   type ArchiveHistoryFilter,
@@ -344,6 +346,8 @@ type DrawerConfirmation = {
   variant: 'primary' | 'danger';
   width?: number;
   onConfirm: () => void;
+  kind?: 'delete';
+  deleteRun?: UsageArchiveRunSummary;
 };
 
 export function UsageMaintenancePage() {
@@ -354,9 +358,11 @@ export function UsageMaintenancePage() {
   const [navigation, setNavigation] = useState(readUsageMaintenanceNavigation);
   const [drawerConfirmation, setDrawerConfirmation] = useState<DrawerConfirmation | null>(null);
   const drawerConfirmationRef = useRef<DrawerConfirmation | null>(null);
+  const [deleteAcknowledged, setDeleteAcknowledged] = useState(false);
   const setPendingConfirmation = useCallback((value: DrawerConfirmation | null) => {
     drawerConfirmationRef.current = value;
     setDrawerConfirmation(value);
+    setDeleteAcknowledged(false);
   }, []);
   const [transferRefreshToken, setTransferRefreshToken] = useState(0);
   const [transferVisited, setTransferVisited] = useState(navigation.tab === 'transfer');
@@ -1406,6 +1412,8 @@ export function UsageMaintenancePage() {
     };
     openRun(run);
     setPendingConfirmation({
+      kind: 'delete',
+      deleteRun: run,
       title: t('usage_maintenance.delete_confirm_title', {
         defaultValue: 'Delete online raw data?',
       }),
@@ -1788,6 +1796,46 @@ export function UsageMaintenancePage() {
     }
   };
 
+  const activeBackgroundRun =
+    (operationArchive?.run && archiveProgressStatuses.has(operationArchive.run.status)
+      ? operationArchive.run
+      : null) ??
+    (maintenance?.active_run &&
+    (maintenance.active_run.mode === 'retention' ||
+      archiveProgressStatuses.has(maintenance.active_run.status))
+      ? maintenance.active_run
+      : null);
+
+  const isDrawerShowingActiveRun =
+    navigation.panel === 'run' && selectedRunId === activeBackgroundRun?.id;
+  const showFloatingProgress = Boolean(activeBackgroundRun && !isDrawerShowingActiveRun);
+
+  const activeRunIsDeleting =
+    activeBackgroundRun?.status === 'deleting' ||
+    activeBackgroundRun?.resume_status === 'deleting' ||
+    activeBackgroundRun?.status === 'completed';
+
+  const activeRunProgressPercent = activeBackgroundRun
+    ? activeRunIsDeleting
+      ? resolveProgressPercent(
+          activeBackgroundRun.deleted_event_count,
+          activeBackgroundRun.event_count
+        )
+      : activeBackgroundRun.status === 'archiving' ||
+          activeBackgroundRun.resume_status === 'archiving'
+        ? resolveProgressPercent(
+            activeBackgroundRun.archived_event_count,
+            activeBackgroundRun.event_count
+          )
+        : null
+    : null;
+
+  const activeRunProcessedCount = activeBackgroundRun
+    ? activeRunIsDeleting
+      ? activeBackgroundRun.deleted_event_count
+      : activeBackgroundRun.archived_event_count
+    : 0;
+
   return (
     <div className={styles.page} ref={pageRef}>
       <div className={styles.controlsPanel}>
@@ -2010,7 +2058,12 @@ export function UsageMaintenancePage() {
                 </Button>
                 <Button
                   variant={drawerConfirmation.variant}
-                  disabled={working || (drawerConfirmation.variant === 'danger' && deleteDisabled)}
+                  disabled={
+                    working ||
+                    (drawerConfirmation.variant === 'danger' &&
+                      (deleteDisabled ||
+                        (drawerConfirmation.kind === 'delete' && !deleteAcknowledged)))
+                  }
                   onClick={() => {
                     if (!mountedRef.current || drawerConfirmationRef.current !== drawerConfirmation)
                       return;
@@ -2111,7 +2164,16 @@ export function UsageMaintenancePage() {
         }
       >
         {drawerConfirmation ? (
-          drawerConfirmation.message
+          drawerConfirmation.kind === 'delete' && drawerConfirmation.deleteRun ? (
+            <UsageMaintenanceDeleteConfirmation
+              run={drawerConfirmation.deleteRun}
+              deletionEnabled={maintenance?.readiness.archive_delete_enabled === true}
+              acknowledged={deleteAcknowledged}
+              onToggleAcknowledged={setDeleteAcknowledged}
+            />
+          ) : (
+            drawerConfirmation.message
+          )
         ) : (
           <>
             {navigation.panel === 'create' ? (
@@ -2176,6 +2238,38 @@ export function UsageMaintenancePage() {
           </>
         )}
       </Drawer>
+      {showFloatingProgress && activeBackgroundRun ? (
+        <button
+          type="button"
+          className={styles.floatingProgress}
+          onClick={() => openRun(activeBackgroundRun)}
+          title={t('usage_maintenance.view_active_progress', {
+            defaultValue: '点击展开任务进度抽屉',
+          })}
+          aria-label={`${t(`usage_maintenance.run_status_${activeBackgroundRun.status}`, { defaultValue: activeBackgroundRun.status })} - ${t('usage_maintenance.view_active_progress', { defaultValue: '点击展开任务进度抽屉' })}`}
+        >
+          <span className={styles.floatingProgressDot} aria-hidden="true" />
+          <div className={styles.floatingProgressContent}>
+            <span className={styles.floatingProgressTitle}>
+              {t(`usage_maintenance.run_status_${activeBackgroundRun.status}`, {
+                defaultValue: activeBackgroundRun.status,
+              })}
+            </span>
+            {activeRunProgressPercent !== null ? (
+              <span className={styles.floatingProgressPercent}>
+                {activeRunProgressPercent.toFixed(1)}%
+              </span>
+            ) : null}
+            {activeBackgroundRun.event_count > 0 ? (
+              <span className={styles.floatingProgressCount}>
+                ({activeRunProcessedCount.toLocaleString(i18n.language)} /{' '}
+                {activeBackgroundRun.event_count.toLocaleString(i18n.language)})
+              </span>
+            ) : null}
+          </div>
+          <IconChevronRight size={14} className={styles.floatingProgressArrow} aria-hidden="true" />
+        </button>
+      ) : null}
     </div>
   );
 }

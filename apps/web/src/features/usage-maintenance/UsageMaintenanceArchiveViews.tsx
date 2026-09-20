@@ -1,15 +1,19 @@
+import { useState, useMemo, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/Button';
 import { Select } from '@/components/ui/Select';
 import {
   IconCheck,
   IconClock,
+  IconCopy,
   IconInfo,
   IconArchive,
   IconDatabaseZap,
   IconHardDrive,
   IconSparkles,
 } from '@/components/ui/icons';
+import { useNotificationStore } from '@/stores';
+import { copyToClipboard } from '@/utils/clipboard';
 import type {
   UsageArchiveList,
   UsageArchiveRunSummary,
@@ -164,7 +168,9 @@ export function UsageMaintenanceOverviewView({
             <dd className={styles.cardValue}>
               {stale ? '—' : maintenance.raw_deleted_event_count.toLocaleString(i18n.language)}
             </dd>
-            <small className={styles.cardSub}>{t('usage_maintenance.workspace_deleted_hint')}</small>
+            <small className={styles.cardSub}>
+              {t('usage_maintenance.workspace_deleted_hint')}
+            </small>
           </div>
         </div>
         <div className={styles.summaryCard}>
@@ -204,6 +210,24 @@ export function UsageMaintenanceOverviewView({
                 defaultValue: '离线收缩可释放磁盘空间',
               })}
             </small>
+            {!stale &&
+            maintenance.storage.reclaimable_bytes > 50 * 1024 * 1024 &&
+            maintenance.storage.total_bytes > 0 ? (
+              <div className={styles.reclaimHighlight}>
+                <span>
+                  {t('usage_maintenance.reclaim_estimated_benefit', {
+                    defaultValue: `建议收缩：预计可从 ${formatFileSize(maintenance.storage.total_bytes)} 释放至约 ${formatFileSize(Math.max(0, maintenance.storage.total_bytes - maintenance.storage.reclaimable_bytes))}`,
+                    total: formatFileSize(maintenance.storage.total_bytes),
+                    compacted: formatFileSize(
+                      Math.max(
+                        0,
+                        maintenance.storage.total_bytes - maintenance.storage.reclaimable_bytes
+                      )
+                    ),
+                  })}
+                </span>
+              </div>
+            ) : null}
           </div>
         </div>
       </dl>
@@ -251,6 +275,23 @@ type HistoryProps = Actions & {
   onOpenRun: (run: UsageArchiveRunSummary) => void;
 };
 
+const useCopyId = () => {
+  const { t } = useTranslation();
+  const showNotification = useNotificationStore((state) => state.showNotification);
+  return useCallback(
+    async (id: string) => {
+      const copied = await copyToClipboard(id);
+      showNotification(
+        t(copied ? 'notification.link_copied' : 'notification.copy_failed', {
+          defaultValue: copied ? '已复制任务 ID 到剪贴板' : '复制失败',
+        }),
+        copied ? 'success' : 'error'
+      );
+    },
+    [showNotification, t]
+  );
+};
+
 export function UsageArchiveHistoryView({
   archiveList,
   filter,
@@ -268,6 +309,21 @@ export function UsageArchiveHistoryView({
   const formatTime = (value?: number) =>
     value ? formatDateTime(new Date(value), i18n.language) : '—';
   const counts = archiveList.status_counts;
+  const handleCopyId = useCopyId();
+  const [searchQuery, setSearchQuery] = useState('');
+
+  const filteredRuns = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return archiveList.runs;
+    return archiveList.runs.filter((run) => {
+      return (
+        run.id.toLowerCase().includes(q) ||
+        run.mode.toLowerCase().includes(q) ||
+        run.status.toLowerCase().includes(q)
+      );
+    });
+  }, [archiveList.runs, searchQuery]);
+
   return (
     <section className={styles.history} aria-busy={loading}>
       <div className={styles.sectionHeader}>
@@ -304,6 +360,18 @@ export function UsageArchiveHistoryView({
               ),
             }))}
           />
+          <input
+            type="search"
+            className={styles.searchInput}
+            placeholder={t('usage_maintenance.search_runs_placeholder', {
+              defaultValue: '搜索任务 ID / 状态…',
+            })}
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            aria-label={t('usage_maintenance.search_runs_placeholder', {
+              defaultValue: '搜索任务 ID / 状态…',
+            })}
+          />
         </div>
       </div>
       <div className={styles.tableScroller}>
@@ -321,83 +389,111 @@ export function UsageArchiveHistoryView({
             </tr>
           </thead>
           <tbody>
-            {archiveList.runs.map((run) => (
-              <tr key={run.id} data-run-id={run.id}>
-                <td data-label={t('usage_maintenance.created_at')}>
-                  <div className={styles.identityCell}>
-                    <span
-                      className={`${styles.identityIcon} ${run.mode === 'retention' ? styles.iconPurple : styles.iconBlue}`}
-                      aria-hidden="true"
-                    >
-                      <IconArchive size={15} />
-                    </span>
-                    <div className={styles.identityMeta}>
-                      <button
-                        className={styles.recordTitle}
-                        type="button"
-                        onClick={() => onOpenRun(run)}
+            {filteredRuns.length === 0 ? (
+              <tr>
+                <td colSpan={6} className={styles.emptyTable}>
+                  {archiveList.runs.length > 0
+                    ? t('usage_maintenance.no_matching_runs', {
+                        defaultValue: '未找到匹配的任务记录',
+                      })
+                    : t('usage_maintenance.no_archive_records', {
+                        defaultValue: '暂无归档记录',
+                      })}
+                </td>
+              </tr>
+            ) : (
+              filteredRuns.map((run) => (
+                <tr key={run.id} data-run-id={run.id}>
+                  <td data-label={t('usage_maintenance.created_at')}>
+                    <div className={styles.identityCell}>
+                      <span
+                        className={`${styles.identityIcon} ${run.mode === 'retention' ? styles.iconPurple : styles.iconBlue}`}
+                        aria-hidden="true"
                       >
-                        {formatTime(run.created_at_ms)}
-                      </button>
-                      <span className={styles.identityHash} title={run.id}>
-                        #{run.id.slice(0, 8)}
+                        <IconArchive size={15} />
                       </span>
+                      <div className={styles.identityMeta}>
+                        <button
+                          className={styles.recordTitle}
+                          type="button"
+                          onClick={() => onOpenRun(run)}
+                        >
+                          {formatTime(run.created_at_ms)}
+                        </button>
+                        <span className={styles.identityHash} title={run.id}>
+                          #{run.id.slice(0, 8)}
+                          <button
+                            type="button"
+                            className={styles.copyIdBtn}
+                            title={`${t('common.copy')} ID`}
+                            aria-label={`${t('common.copy')} ${run.id}`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void handleCopyId(run.id);
+                            }}
+                          >
+                            <IconCopy size={11} />
+                          </button>
+                        </span>
+                      </div>
                     </div>
-                  </div>
-                </td>
-                <td data-label={t('usage_maintenance.technical_mode')}>
-                  <span
-                    className={`${styles.modeChip} ${run.mode === 'retention' ? styles.modeRetention : styles.modeManual}`}
-                  >
-                    {t(`usage_maintenance.run_mode_${run.mode}`, { defaultValue: run.mode })}
-                  </span>
-                </td>
-                <td data-label={t('usage_maintenance.cutoff')}>
-                  <span className={styles.cutoffText}>{formatTime(run.cutoff_timestamp_ms)}</span>
-                </td>
-                <td data-label={t('usage_maintenance.workspace_record_count')}>
-                  <div className={styles.metricsStack}>
-                    <strong className={styles.numeric}>
-                      {run.event_count.toLocaleString(i18n.language)}
-                    </strong>
-                    <div className={styles.metricTags}>
-                      <span className={styles.metaTag}>
-                        {t('usage_maintenance.archived_count')}{' '}
-                        {run.archived_event_count.toLocaleString(i18n.language)}
+                  </td>
+                  <td data-label={t('usage_maintenance.technical_mode')}>
+                    <span
+                      className={`${styles.modeChip} ${run.mode === 'retention' ? styles.modeRetention : styles.modeManual}`}
+                    >
+                      {t(`usage_maintenance.run_mode_${run.mode}`, { defaultValue: run.mode })}
+                    </span>
+                  </td>
+                  <td data-label={t('usage_maintenance.cutoff')}>
+                    <span className={styles.cutoffText}>{formatTime(run.cutoff_timestamp_ms)}</span>
+                  </td>
+                  <td data-label={t('usage_maintenance.workspace_record_count')}>
+                    <div className={styles.metricsStack}>
+                      <strong className={styles.numeric}>
+                        {run.event_count.toLocaleString(i18n.language)}
+                      </strong>
+                      <div className={styles.metricTags}>
+                        <span className={styles.metaTag}>
+                          {t('usage_maintenance.archived_count')}{' '}
+                          {run.archived_event_count.toLocaleString(i18n.language)}
+                        </span>
+                        {run.deleted_event_count > 0 ? (
+                          <span className={`${styles.metaTag} ${styles.metaTagDanger}`}>
+                            {t('usage_maintenance.deleted_events')}{' '}
+                            {run.deleted_event_count.toLocaleString(i18n.language)}
+                          </span>
+                        ) : null}
+                      </div>
+                    </div>
+                  </td>
+                  <td data-label={t('usage_maintenance.technical_status')}>
+                    <div className={styles.statusStack}>
+                      <span className={styles.pill} data-status={run.status}>
+                        {t(`usage_maintenance.run_status_${run.status}`, {
+                          defaultValue: run.status,
+                        })}
                       </span>
-                      {run.deleted_event_count > 0 ? (
-                        <span className={`${styles.metaTag} ${styles.metaTagDanger}`}>
-                          {t('usage_maintenance.deleted_events')}{' '}
-                          {run.deleted_event_count.toLocaleString(i18n.language)}
+                      {run.status === 'verified' || run.status === 'completed' ? (
+                        <span className={styles.statusSub}>
+                          {t(
+                            run.status === 'verified'
+                              ? 'usage_maintenance.online_retained'
+                              : 'usage_maintenance.archive_retained'
+                          )}
                         </span>
                       ) : null}
                     </div>
-                  </div>
-                </td>
-                <td data-label={t('usage_maintenance.technical_status')}>
-                  <div className={styles.statusStack}>
-                    <span className={styles.pill} data-status={run.status}>
-                      {t(`usage_maintenance.run_status_${run.status}`, { defaultValue: run.status })}
-                    </span>
-                    {run.status === 'verified' || run.status === 'completed' ? (
-                      <span className={styles.statusSub}>
-                        {t(
-                          run.status === 'verified'
-                            ? 'usage_maintenance.online_retained'
-                            : 'usage_maintenance.archive_retained'
-                        )}
-                      </span>
-                    ) : null}
-                  </div>
-                </td>
-                <td className={styles.recordActions}>
-                  <Button size="sm" variant="ghost" onClick={() => onOpenRun(run)}>
-                    {t('usage_maintenance.details')}
-                  </Button>
-                  <UsageArchiveRunActions run={run} compact {...actions} />
-                </td>
-              </tr>
-            ))}
+                  </td>
+                  <td className={styles.recordActions}>
+                    <Button size="sm" variant="ghost" onClick={() => onOpenRun(run)}>
+                      {t('usage_maintenance.details')}
+                    </Button>
+                    <UsageArchiveRunActions run={run} compact {...actions} />
+                  </td>
+                </tr>
+              ))
+            )}
           </tbody>
         </table>
       </div>
@@ -446,6 +542,7 @@ export function UsageArchiveRunView({
   intent?: MaintenanceIntent;
 }) {
   const { t, i18n } = useTranslation();
+  const handleCopyId = useCopyId();
   const run = archive.run;
   const formatTime = (value?: number) =>
     value ? formatDateTime(new Date(value), i18n.language) : '—';
@@ -571,7 +668,18 @@ export function UsageArchiveRunView({
         <dl className={styles.keyValues}>
           <div>
             <dt>{t('usage_maintenance.technical_run_id')}</dt>
-            <dd className={styles.mono}>{run.id}</dd>
+            <dd className={styles.mono}>
+              <span>{run.id}</span>
+              <button
+                type="button"
+                className={styles.copyIdBtn}
+                title={`${t('common.copy')} ID`}
+                aria-label={`${t('common.copy')} ${run.id}`}
+                onClick={() => void handleCopyId(run.id)}
+              >
+                <IconCopy size={12} />
+              </button>
+            </dd>
           </div>
           <div>
             <dt>{t('usage_maintenance.technical_mode')}</dt>
