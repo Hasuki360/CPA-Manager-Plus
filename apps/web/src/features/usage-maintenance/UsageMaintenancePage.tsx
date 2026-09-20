@@ -101,6 +101,12 @@ const formatArchiveActionError = (
         'This published archive cannot be abandoned in its current state. Continue the existing archive workflow or leave the archive in place.',
     });
   }
+  if (code === 'request_failed' || (error as { status?: number })?.status === 500) {
+    return t('usage_maintenance.error_server_internal', {
+      defaultValue:
+        'Server internal error (HTTP 500). Database or storage operation failed, please check server logs.',
+    });
+  }
   return error instanceof Error ? error.message : String(error);
 };
 
@@ -480,6 +486,7 @@ export function UsageMaintenancePage() {
   const [operationArchive, setOperationArchive] = useState<UsageArchiveStatus | null>(null);
   const activeOperationRunIdRef = useRef<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [runActionError, setRunActionError] = useState<string | null>(null);
   const [unsupported, setUnsupported] = useState(false);
   const [postDeleteNoticeVisible, setPostDeleteNoticeVisible] = useState(false);
   const [postDeleteRefreshFailed, setPostDeleteRefreshFailed] = useState(false);
@@ -1244,6 +1251,7 @@ export function UsageMaintenancePage() {
     confirmation?: ConfirmationToken
   ) => {
     if (confirmation && !confirmationIsCurrent(confirmation)) return;
+    setRunActionError(null);
     invalidatePreview(false);
     const expectedResumeStage = action === 'resume' ? resumeExpectedStage(run) : null;
     if (action === 'resume' && !expectedResumeStage) {
@@ -1355,7 +1363,9 @@ export function UsageMaintenancePage() {
       }
     } catch (cause) {
       if (operationIsCurrent(operation)) {
-        showNotification(formatArchiveActionError(cause, t), 'error');
+        const errorText = formatArchiveActionError(cause, t);
+        setRunActionError(errorText);
+        showNotification(errorText, 'error');
         await load({ background: true });
         if (operationIsCurrent(operation)) {
           setPreviewRefreshToken((value) => value + 1);
@@ -1531,6 +1541,7 @@ export function UsageMaintenancePage() {
 
   const openRun = (run: UsageArchiveRunSummary) => {
     setPendingConfirmation(null);
+    setRunActionError(null);
     setSelectedArchive((current) => (current?.run.id === run.id ? current : null));
     setSelectedArchiveRefreshToken((value) => value + 1);
     setError(null);
@@ -1637,6 +1648,7 @@ export function UsageMaintenancePage() {
     actionTitle: archiveActionTitle,
     actionLabel: (run: UsageArchiveRunSummary, action: ArchiveRunAction) =>
       actionLabel(run, action),
+    actionError: runActionError || error,
   };
   const currentRunWorking = working && activeOperationRunIdRef.current === selectedRunId;
   const currentArchive =
@@ -1804,9 +1816,7 @@ export function UsageMaintenancePage() {
     (operationArchive?.run && archiveProgressStatuses.has(operationArchive.run.status)
       ? operationArchive.run
       : null) ??
-    (maintenance?.active_run &&
-    (maintenance.active_run.mode === 'retention' ||
-      archiveProgressStatuses.has(maintenance.active_run.status))
+    (maintenance?.active_run && archiveProgressStatuses.has(maintenance.active_run.status)
       ? maintenance.active_run
       : null);
 

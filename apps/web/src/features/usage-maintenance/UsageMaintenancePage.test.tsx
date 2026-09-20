@@ -939,7 +939,7 @@ describe('UsageMaintenancePage', () => {
     expect(mocks.verifyUsageArchive).not.toHaveBeenCalled();
     expect(mocks.deleteUsageArchive).not.toHaveBeenCalled();
     expect(mocks.showNotification).toHaveBeenCalledWith('archive write failed', 'error');
-    expect(getText(renderer.root)).toContain('Needs attention');
+    expect(getText(renderer.root)).toContain('Task Interrupted');
     expect(renderer.root.findAllByProps({ 'data-run-id': 'resume-failed-run' })).toHaveLength(1);
     act(() => renderer.unmount());
   });
@@ -990,7 +990,7 @@ describe('UsageMaintenancePage', () => {
     expect(mocks.verifyUsageArchive).toHaveBeenCalledTimes(1);
     expect(mocks.deleteUsageArchive).not.toHaveBeenCalled();
     expect(mocks.showNotification).toHaveBeenCalledWith('archive verification failed', 'error');
-    expect(getText(renderer.root)).toContain('Needs attention');
+    expect(getText(renderer.root)).toContain('Task Interrupted');
     expect(renderer.root.findAllByProps({ 'data-run-id': 'verify-failed-run' })).toHaveLength(1);
     act(() => renderer.unmount());
   });
@@ -1543,7 +1543,7 @@ describe('UsageMaintenancePage', () => {
     await act(async () => {
       await createConfirmation.onConfirm();
     });
-    expect(getText(renderer.root)).toContain('Needs attention');
+    expect(getText(renderer.root)).toContain('Task Interrupted');
 
     mocks.listUsageArchives.mockResolvedValue({ runs: [failedRun] });
     await act(async () => {
@@ -1560,13 +1560,13 @@ describe('UsageMaintenancePage', () => {
       await Promise.resolve();
     });
 
-    expect(getText(renderer.root)).not.toContain('Needs attention');
+    expect(getText(renderer.root)).not.toContain('Task Interrupted');
     await act(async () => {
       findButtons(renderer, 'New archive')[0].props.onClick();
       await Promise.resolve();
       await Promise.resolve();
     });
-    expect(getText(renderer.root)).not.toContain('Needs attention');
+    expect(getText(renderer.root)).not.toContain('Task Interrupted');
     act(() => renderer.unmount());
   });
 

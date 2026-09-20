@@ -362,6 +362,13 @@
     "archive_prepare_verifying": "Verifying archive",
     "archive_prepare_complete": "Archive verified",
     "archive_prepare_attention": "Needs attention",
+    "run_failed_title": "Task Interrupted",
+    "run_failed_alert_title": "Task Stopped Due to Error",
+    "run_failed_alert_desc": "An error occurred during execution and the task was interrupted. You can retry the operation; if retries continue to fail, the database or storage may have encountered an unrecoverable error. Review technical details below or abandon the task.",
+    "progress_status_interrupted": "Interrupted",
+    "delete_confirm_retry_note": "The previous deletion was interrupted. Confirming will attempt to resume deleting the remaining rows.",
+    "error_server_internal": "Server internal error (HTTP 500). The database or storage operation failed; check server logs.",
+    "error_server_unavailable": "Usage maintenance service is temporarily unavailable or database encountered an error. Check server status and logs.",
     "archive_prepare_confirm_title": "Archive and verify this data?",
     "archive_prepare_confirm_message": "The archive will be prepared and verified. Online details remain available until you separately confirm cleanup.",
     "archive_prepare_confirm_button": "Archive and verify",
@@ -708,7 +715,7 @@
     "workspace_new": "New operation",
     "workspace_ready_cleanup": "Archive verified. Review cleanup next.",
     "workspace_archive_done": "Archive complete. Online details are still available.",
-    "workspace_current": "Current operation",
+    "workspace_current": "Task record details",
     "workspace_record_count": "Events",
     "workspace_delete_progress": "Cleanup progress",
     "workspace_archive_progress": "Archive progress",
@@ -716,7 +723,9 @@
     "workspace_recalculate": "The server recalculates eligible data when the operation starts. This estimate does not include existing archives or promise a disk-space saving.",
     "workspace_cleanup_refresh_failed": "Cleanup succeeded. Current storage statistics are unavailable; refresh to read them again.",
     "workspace_organize": "Organize data",
-    "workspace_transfer": "Import / export"
+    "workspace_transfer": "Import / export",
+    "delete_guarantees_title": "Safety Guarantees & Preserved Data",
+    "delete_limitations_title": "Impact & Operational Limitations"
   },
   "account_actions": {
     "eyebrow": "Account issues",

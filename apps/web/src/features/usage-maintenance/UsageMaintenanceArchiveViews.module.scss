@@ -202,6 +202,19 @@
     color: var(--text-secondary);
     line-height: 1.6;
   }
+
+  &[data-failed='true'] {
+    border-color: color-mix(in srgb, var(--color-danger, #ef4444) 35%, var(--border-color));
+    background: color-mix(in srgb, var(--color-danger, #ef4444) 6%, var(--glass-bg, #fff));
+
+    > svg {
+      color: var(--color-danger, #ef4444);
+    }
+
+    strong {
+      color: var(--color-danger, #ef4444);
+    }
+  }
 }
 
 /* 归档历史表格区域 */
@@ -818,6 +831,15 @@
     color: var(--text-secondary);
     margin: 0;
   }
+
+  &[data-status='failed'] {
+    border-color: color-mix(in srgb, var(--danger-color, #ef4444) 30%, transparent);
+    background: color-mix(in srgb, var(--danger-color, #ef4444) 5%, var(--surface-subtle));
+
+    h2 {
+      color: var(--danger-color, #ef4444);
+    }
+  }
 }
 
 .stepper {
@@ -883,6 +905,59 @@
       box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary-color) 20%, transparent);
     }
   }
+
+  li[data-failed='true'] {
+    color: var(--danger-color, #ef4444);
+    font-weight: 700;
+
+    span {
+      background: color-mix(in srgb, var(--danger-color, #ef4444) 15%, transparent);
+      border-color: var(--danger-color, #ef4444);
+      color: var(--danger-color, #ef4444);
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger-color, #ef4444) 20%, transparent);
+    }
+  }
+}
+
+.failedAlert {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 16px;
+  background: color-mix(in srgb, var(--danger-color, #ef4444) 8%, var(--surface-subtle));
+  border: 1px solid color-mix(in srgb, var(--danger-color, #ef4444) 30%, transparent);
+  border-radius: var(--app-radius-md, 12px);
+}
+
+.failedAlertHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.failedAlertIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--danger-color, #ef4444) 15%, transparent);
+  color: var(--danger-color, #ef4444);
+  flex-shrink: 0;
+}
+
+.failedAlertTitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--danger-color, #ef4444);
+}
+
+.failedAlertDesc {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-primary);
 }
 
 .runCounts {
@@ -918,6 +993,20 @@
 
 .progress {
   font-size: 12px;
+
+  &[data-failed='true'] {
+    > div:first-child strong {
+      color: var(--danger-color, #ef4444);
+    }
+
+    .progressTrack i {
+      background: linear-gradient(
+        90deg,
+        var(--danger-color, #ef4444),
+        var(--warning-color, #f59e0b)
+      );
+    }
+  }
 
   > div:first-child {
     display: flex;

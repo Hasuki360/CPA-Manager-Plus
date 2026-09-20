@@ -360,6 +360,13 @@
     "archive_prepare_verifying": "正在驗證封存",
     "archive_prepare_complete": "封存已驗證",
     "archive_prepare_attention": "需要處理",
+    "run_failed_title": "任務處理異常中斷",
+    "run_failed_alert_title": "任務執行遇到異常已停止",
+    "run_failed_alert_desc": "任務在推進過程中遭遇錯誤已中斷。可嘗試點擊「繼續處理」重試；若多次重試依然失敗，說明底層資料庫或儲存環境可能存在異常，請檢視下方技術詳情或放棄該任務。",
+    "progress_status_interrupted": "異常中斷",
+    "delete_confirm_retry_note": "上一次清理異常中斷，確認後將嘗試繼續清理剩餘未刪除的資料。",
+    "error_server_internal": "伺服端內部異常（HTTP 500），資料庫或儲存執行失敗，請檢視伺服器日誌。",
+    "error_server_unavailable": "用量維護服務暫時不可用或資料庫異常，請檢視伺服器狀態與日誌。",
     "archive_prepare_confirm_title": "要封存並驗證這批資料嗎？",
     "archive_prepare_confirm_message": "接下來將產生並校驗歸檔。在單獨確認清理前，線上明細仍保留。",
     "archive_prepare_confirm_button": "封存並驗證",
@@ -706,7 +713,7 @@
     "workspace_new": "開始新的整理",
     "workspace_ready_cleanup": "歸檔已校驗，可以確認清理",
     "workspace_archive_done": "歸檔完成，線上明細仍保留",
-    "workspace_current": "目前處理",
+    "workspace_current": "任務記錄詳情",
     "workspace_record_count": "明細數量",
     "workspace_delete_progress": "清理進度",
     "workspace_archive_progress": "歸檔進度",
@@ -714,7 +721,9 @@
     "workspace_recalculate": "開始時伺服器會重新計算可歸檔資料。此預估不包含已有歸檔，也不代表可釋放的磁碟空間。",
     "workspace_cleanup_refresh_failed": "清理已成功，暫時無法取得最新儲存統計。可重新整理統計，無需再次清理。",
     "workspace_organize": "資料整理",
-    "workspace_transfer": "匯入 / 匯出"
+    "workspace_transfer": "匯入 / 匯出",
+    "delete_guarantees_title": "安全保障與保留項",
+    "delete_limitations_title": "影響與受限說明"
   },
   "account_actions": {
     "eyebrow": "帳號異常",

@@ -360,6 +360,13 @@
     "archive_prepare_verifying": "正在校验归档",
     "archive_prepare_complete": "归档已校验",
     "archive_prepare_attention": "需要处理",
+    "run_failed_title": "任务处理异常中断",
+    "run_failed_alert_title": "任务执行遇到异常已停止",
+    "run_failed_alert_desc": "任务在推进过程中遭遇错误已中断。可尝试点击“继续处理”重试；若多次重试依然失败，说明底层数据库或存储环境可能存在异常，请查看下方技术详情或放弃该任务。",
+    "progress_status_interrupted": "异常中断",
+    "delete_confirm_retry_note": "上一次清理异常中断，确认后将尝试继续清理剩余未删除的数据。",
+    "error_server_internal": "服务端内部异常（HTTP 500），数据库或存储执行失败，请检查服务日志。",
+    "error_server_unavailable": "用量维护服务暂时不可用或数据库异常，请检查服务状态与日志。",
     "archive_prepare_confirm_title": "归档并校验这批数据？",
     "archive_prepare_confirm_message": "接下来将生成并校验归档。在单独确认清理前，在线明细仍保留。",
     "archive_prepare_confirm_button": "归档并校验",
@@ -706,7 +713,7 @@
     "workspace_new": "开始新的整理",
     "workspace_ready_cleanup": "归档已校验，可以确认清理",
     "workspace_archive_done": "归档完成，在线明细仍保留",
-    "workspace_current": "当前处理",
+    "workspace_current": "任务记录详情",
     "workspace_record_count": "明细数量",
     "workspace_delete_progress": "清理进度",
     "workspace_archive_progress": "归档进度",
@@ -714,7 +721,9 @@
     "workspace_recalculate": "开始时服务端会重新计算可归档数据。此预估不包含已有归档，也不代表可释放的磁盘空间。",
     "workspace_cleanup_refresh_failed": "清理已成功，暂时无法获取最新存储统计。可刷新统计，无需再次清理。",
     "workspace_organize": "数据整理",
-    "workspace_transfer": "导入 / 导出"
+    "workspace_transfer": "导入 / 导出",
+    "delete_guarantees_title": "安全保障与保留项",
+    "delete_limitations_title": "影响与受限说明"
   },
   "account_actions": {
     "eyebrow": "账号异常",

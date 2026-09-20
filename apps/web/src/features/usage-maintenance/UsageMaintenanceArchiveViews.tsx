@@ -16,6 +16,7 @@ import {
   IconChevronLeft,
   IconChevronRight,
   IconCircleHelp,
+  IconTriangleAlert,
 } from '@/components/ui/icons';
 import { useNotificationStore } from '@/stores';
 import { copyToClipboard } from '@/utils/clipboard';
@@ -56,6 +57,7 @@ type Actions = {
   actionDisabled: (run: UsageArchiveRunSummary, action: ArchiveRunAction) => boolean;
   actionTitle: (run: UsageArchiveRunSummary, action: ArchiveRunAction) => string | undefined;
   actionLabel: (run: UsageArchiveRunSummary, action: ArchiveRunAction) => string;
+  actionError?: string | null;
 };
 
 export function UsageArchiveRunActions({
@@ -239,18 +241,31 @@ export function UsageMaintenanceOverviewView({
       {active ? (
         <section
           className={styles.continuation}
+          data-failed={active.status === 'failed' || active.has_error}
           aria-label={t('usage_maintenance.workspace_continue')}
         >
-          <IconClock size={18} />
+          {active.status === 'failed' || active.has_error ? (
+            <IconTriangleAlert size={18} />
+          ) : (
+            <IconClock size={18} />
+          )}
           <div>
-            <strong>{t('usage_maintenance.pending_records', { count: pending.length })}</strong>
+            <strong>
+              {active.status === 'failed' || active.has_error
+                ? t('usage_maintenance.run_failed_title', { defaultValue: 'Task Interrupted' })
+                : t('usage_maintenance.pending_records', { count: pending.length })}
+            </strong>
             <p>
               {t(`usage_maintenance.run_status_${active.status}`, { defaultValue: active.status })}
               {' · '}
               {formatDateTime(new Date(active.created_at_ms), i18n.language)}
             </p>
           </div>
-          <Button variant="secondary" size="sm" onClick={() => onOpenRun(active)}>
+          <Button
+            variant={active.status === 'failed' || active.has_error ? 'danger' : 'secondary'}
+            size="sm"
+            onClick={() => onOpenRun(active)}
+          >
             {t('usage_maintenance.workspace_continue_record')}
           </Button>
         </section>
@@ -644,38 +659,77 @@ export function UsageArchiveRunView({
                   ? 'usage_maintenance.workspace_ready_cleanup'
                   : 'usage_maintenance.workspace_archive_done'
               )
-            : run.status === 'completed'
+              : run.status === 'completed'
               ? t('usage_maintenance.cleanup_complete_title')
               : run.status === 'failed'
-                ? t('usage_maintenance.archive_prepare_attention')
+                ? t('usage_maintenance.run_failed_title', {
+                    defaultValue: 'Task Interrupted',
+                  })
                 : t('usage_maintenance.workspace_current')}
         </h2>
         <p>{formatTime(run.created_at_ms)}</p>
       </section>
       <ol className={styles.stepper} aria-label={t('usage_maintenance.run_steps_label')}>
-        {steps.map((step, index) => (
-          <li
-            key={step}
-            data-complete={stepOrder > index + 1}
-            aria-current={
-              stepOrder === index + 1 && run.status !== 'failed' && run.status !== 'cancelled'
-                ? 'step'
-                : undefined
-            }
-          >
-            <span>{stepOrder > index + 1 ? <IconCheck size={14} /> : index + 1}</span>
-            {t(`usage_maintenance.guided_step_${step}`)}
-          </li>
-        ))}
+        {steps.map((step, index) => {
+          const isCurrent = stepOrder === index + 1;
+          const isFailed = isCurrent && (run.status === 'failed' || run.has_error);
+          return (
+            <li
+              key={step}
+              data-complete={stepOrder > index + 1}
+              data-failed={isFailed}
+              aria-current={
+                isCurrent && !isFailed && run.status !== 'cancelled' ? 'step' : undefined
+              }
+            >
+              <span>
+                {stepOrder > index + 1 ? (
+                  <IconCheck size={14} />
+                ) : isFailed ? (
+                  <IconTriangleAlert size={14} />
+                ) : (
+                  index + 1
+                )}
+              </span>
+              {t(`usage_maintenance.guided_step_${step}`)}
+            </li>
+          );
+        })}
       </ol>
+      {run.status === 'failed' || run.has_error || actions.actionError ? (
+        <div className={styles.failedAlert} role="alert">
+          <div className={styles.failedAlertHeader}>
+            <div className={styles.failedAlertIcon}>
+              <IconTriangleAlert size={16} />
+            </div>
+            <strong className={styles.failedAlertTitle}>
+              {t('usage_maintenance.run_failed_alert_title', {
+                defaultValue: 'Task Stopped Due to Error',
+              })}
+            </strong>
+          </div>
+          <p className={styles.failedAlertDesc}>
+            {actions.actionError ||
+              t('usage_maintenance.run_failed_alert_desc', {
+                defaultValue:
+                  'The task encountered an error and was interrupted. You can click "Continue processing" to retry. If it repeatedly fails, the underlying database or storage may have issues. Check technical details below or abandon the task.',
+              })}
+          </p>
+        </div>
+      ) : null}
       {progress !== null ? (
-        <div className={styles.progress}>
+        <div className={styles.progress} data-failed={run.status === 'failed' || run.has_error}>
           <div>
-            {t(
-              deleting
-                ? 'usage_maintenance.workspace_delete_progress'
-                : 'usage_maintenance.workspace_archive_progress'
-            )}
+            <span>
+              {t(
+                deleting
+                  ? 'usage_maintenance.workspace_delete_progress'
+                  : 'usage_maintenance.workspace_archive_progress'
+              )}
+              {run.status === 'failed' || run.has_error
+                ? ` (${t('usage_maintenance.progress_status_interrupted', { defaultValue: 'Interrupted' })})`
+                : ''}
+            </span>
             <strong>{progress.toFixed(1)}%</strong>
           </div>
           <div
