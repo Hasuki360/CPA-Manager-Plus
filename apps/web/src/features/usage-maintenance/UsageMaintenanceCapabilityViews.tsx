@@ -41,6 +41,35 @@ export function UsageMaintenanceAdvancedView({
           <strong>{size(storage.total_bytes)}</strong>
           <small>{t('usage_maintenance.sqlite_total_hint')}</small>
         </div>
+        {!stale && storage.total_bytes > 0 ? (
+          <div className={styles.storageBar} aria-hidden="true">
+            <div
+              className={styles.barDatabase}
+              style={{
+                width: `${Math.max(2, Math.min(100, (storage.database_bytes / storage.total_bytes) * 100))}%`,
+              }}
+              title={`Database: ${formatFileSize(storage.database_bytes)}`}
+            />
+            {storage.wal_bytes > 0 ? (
+              <div
+                className={styles.barWal}
+                style={{
+                  width: `${Math.max(1, Math.min(100, (storage.wal_bytes / storage.total_bytes) * 100))}%`,
+                }}
+                title={`WAL: ${formatFileSize(storage.wal_bytes)}`}
+              />
+            ) : null}
+            {storage.shm_bytes > 0 ? (
+              <div
+                className={styles.barShm}
+                style={{
+                  width: `${Math.max(1, Math.min(100, (storage.shm_bytes / storage.total_bytes) * 100))}%`,
+                }}
+                title={`SHM: ${formatFileSize(storage.shm_bytes)}`}
+              />
+            ) : null}
+          </div>
+        ) : null}
         <dl className={styles.storageGrid}>
           <div>
             <dt>{t('usage_maintenance.database')}</dt>

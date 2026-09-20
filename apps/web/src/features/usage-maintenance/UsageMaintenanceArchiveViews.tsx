@@ -1,7 +1,15 @@
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/Button';
 import { Select } from '@/components/ui/Select';
-import { IconCheck, IconClock, IconInfo } from '@/components/ui/icons';
+import {
+  IconCheck,
+  IconClock,
+  IconInfo,
+  IconArchive,
+  IconDatabaseZap,
+  IconHardDrive,
+  IconSparkles,
+} from '@/components/ui/icons';
 import type {
   UsageArchiveList,
   UsageArchiveRunSummary,
@@ -116,9 +124,12 @@ export function UsageMaintenanceOverviewView({
   return (
     <div className={styles.view}>
       <dl className={styles.summary}>
-        <div>
-          <dt>
-            {t('usage_maintenance.raw_events')}
+        <div className={styles.summaryCard}>
+          <div className={styles.cardHeader}>
+            <div className={`${styles.iconWrap} ${styles.iconBlue}`} aria-hidden="true">
+              <IconDatabaseZap size={18} />
+            </div>
+            <dt className={styles.cardTitle}>{t('usage_maintenance.raw_events')}</dt>
             <button
               type="button"
               className={styles.infoButton}
@@ -128,36 +139,72 @@ export function UsageMaintenanceOverviewView({
             >
               <IconInfo size={14} />
             </button>
-          </dt>
-          <dd>{stale ? '—' : maintenance.raw_event_count.toLocaleString(i18n.language)}</dd>
-          <small>
-            {t('usage_maintenance.workspace_archived_subset', {
-              count: stale
-                ? '—'
-                : (maintenance.raw_archived_event_count?.toLocaleString(i18n.language) ?? '—'),
-            })}
-          </small>
+          </div>
+          <div className={styles.cardBody}>
+            <dd className={styles.cardValue}>
+              {stale ? '—' : maintenance.raw_event_count.toLocaleString(i18n.language)}
+            </dd>
+            <small className={styles.cardSub}>
+              {t('usage_maintenance.workspace_archived_subset', {
+                count: stale
+                  ? '—'
+                  : (maintenance.raw_archived_event_count?.toLocaleString(i18n.language) ?? '—'),
+              })}
+            </small>
+          </div>
         </div>
-        <div>
-          <dt>{t('usage_maintenance.deleted_events')}</dt>
-          <dd>{stale ? '—' : maintenance.raw_deleted_event_count.toLocaleString(i18n.language)}</dd>
-          <small>{t('usage_maintenance.workspace_deleted_hint')}</small>
+        <div className={styles.summaryCard}>
+          <div className={styles.cardHeader}>
+            <div className={`${styles.iconWrap} ${styles.iconPurple}`} aria-hidden="true">
+              <IconArchive size={18} />
+            </div>
+            <dt className={styles.cardTitle}>{t('usage_maintenance.deleted_events')}</dt>
+          </div>
+          <div className={styles.cardBody}>
+            <dd className={styles.cardValue}>
+              {stale ? '—' : maintenance.raw_deleted_event_count.toLocaleString(i18n.language)}
+            </dd>
+            <small className={styles.cardSub}>{t('usage_maintenance.workspace_deleted_hint')}</small>
+          </div>
         </div>
-        <div>
-          <dt>{t('usage_maintenance.sqlite_total')}</dt>
-          <dd>{stale ? '—' : formatFileSize(maintenance.storage.total_bytes)}</dd>
-          <small>{t('usage_maintenance.sqlite_total_hint')}</small>
+        <div className={styles.summaryCard}>
+          <div className={styles.cardHeader}>
+            <div className={`${styles.iconWrap} ${styles.iconCyan}`} aria-hidden="true">
+              <IconHardDrive size={18} />
+            </div>
+            <dt className={styles.cardTitle}>{t('usage_maintenance.sqlite_total')}</dt>
+          </div>
+          <div className={styles.cardBody}>
+            <dd className={styles.cardValue}>
+              {stale ? '—' : formatFileSize(maintenance.storage.total_bytes)}
+            </dd>
+            <small className={styles.cardSub}>{t('usage_maintenance.sqlite_total_hint')}</small>
+          </div>
         </div>
-        <div>
-          <dt>{t('usage_maintenance.reclaimable')}</dt>
-          <dd>{stale ? '—' : formatFileSize(maintenance.storage.reclaimable_bytes)}</dd>
-          <button
-            type="button"
-            className={styles.textButton}
-            onClick={() => onNavigate('advanced')}
-          >
-            {t('usage_maintenance.offline_reclaim')}
-          </button>
+        <div className={styles.summaryCard}>
+          <div className={styles.cardHeader}>
+            <div className={`${styles.iconWrap} ${styles.iconGreen}`} aria-hidden="true">
+              <IconSparkles size={18} />
+            </div>
+            <dt className={styles.cardTitle}>{t('usage_maintenance.reclaimable')}</dt>
+            <button
+              type="button"
+              className={styles.actionChip}
+              onClick={() => onNavigate('advanced')}
+            >
+              {t('usage_maintenance.offline_reclaim')}
+            </button>
+          </div>
+          <div className={styles.cardBody}>
+            <dd className={styles.cardValue}>
+              {stale ? '—' : formatFileSize(maintenance.storage.reclaimable_bytes)}
+            </dd>
+            <small className={styles.cardSub}>
+              {t('usage_maintenance.advanced_sqlite_note_short', {
+                defaultValue: '离线收缩可释放磁盘空间',
+              })}
+            </small>
+          </div>
         </div>
       </dl>
       {active ? (
@@ -224,7 +271,10 @@ export function UsageArchiveHistoryView({
   return (
     <section className={styles.history} aria-busy={loading}>
       <div className={styles.sectionHeader}>
-        <h2>{t('usage_maintenance.archive_records')}</h2>
+        <h2>
+          <IconArchive size={18} aria-hidden="true" />
+          <span>{t('usage_maintenance.archive_records')}</span>
+        </h2>
         <div className={styles.filters}>
           <Select
             value={filter}
@@ -256,95 +306,128 @@ export function UsageArchiveHistoryView({
           />
         </div>
       </div>
-      <table className={styles.recordTable}>
-        <thead>
-          <tr>
-            <th>{t('usage_maintenance.created_at')}</th>
-            <th>{t('usage_maintenance.technical_mode')}</th>
-            <th>{t('usage_maintenance.cutoff')}</th>
-            <th>{t('usage_maintenance.workspace_record_count')}</th>
-            <th>{t('usage_maintenance.technical_status')}</th>
-            <th>
-              <span className={styles.srOnly}>{t('usage_maintenance.record_actions')}</span>
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {archiveList.runs.map((run) => (
-            <tr key={run.id} data-run-id={run.id}>
-              <td data-label={t('usage_maintenance.created_at')}>
-                <button className={styles.recordTitle} type="button" onClick={() => onOpenRun(run)}>
-                  {formatTime(run.created_at_ms)}
-                </button>
-              </td>
-              <td data-label={t('usage_maintenance.technical_mode')}>
-                {t(`usage_maintenance.run_mode_${run.mode}`, { defaultValue: run.mode })}
-              </td>
-              <td data-label={t('usage_maintenance.cutoff')}>
-                {formatTime(run.cutoff_timestamp_ms)}
-              </td>
-              <td data-label={t('usage_maintenance.workspace_record_count')}>
-                <strong className={styles.numeric}>
-                  {run.event_count.toLocaleString(i18n.language)}
-                </strong>
-                <small>
-                  {t('usage_maintenance.archived_count')}{' '}
-                  {run.archived_event_count.toLocaleString(i18n.language)}
-                </small>
-                {run.deleted_event_count > 0 ? (
-                  <small>
-                    {t('usage_maintenance.deleted_events')}{' '}
-                    {run.deleted_event_count.toLocaleString(i18n.language)}
-                  </small>
-                ) : null}
-              </td>
-              <td data-label={t('usage_maintenance.technical_status')}>
-                <span className={styles.pill} data-status={run.status}>
-                  {t(`usage_maintenance.run_status_${run.status}`, { defaultValue: run.status })}
-                </span>
-                {run.status === 'verified' || run.status === 'completed' ? (
-                  <small>
-                    {t(
-                      run.status === 'verified'
-                        ? 'usage_maintenance.online_retained'
-                        : 'usage_maintenance.archive_retained'
-                    )}
-                  </small>
-                ) : null}
-              </td>
-              <td className={styles.recordActions}>
-                <Button size="sm" variant="ghost" onClick={() => onOpenRun(run)}>
-                  {t('usage_maintenance.details')}
-                </Button>
-                <UsageArchiveRunActions run={run} compact {...actions} />
-              </td>
+      <div className={styles.tableScroller}>
+        <table className={styles.recordTable}>
+          <thead>
+            <tr>
+              <th>{t('usage_maintenance.created_at')}</th>
+              <th>{t('usage_maintenance.technical_mode')}</th>
+              <th>{t('usage_maintenance.cutoff')}</th>
+              <th>{t('usage_maintenance.workspace_record_count')}</th>
+              <th>{t('usage_maintenance.technical_status')}</th>
+              <th>
+                <span className={styles.srOnly}>{t('usage_maintenance.record_actions')}</span>
+              </th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {archiveList.runs.map((run) => (
+              <tr key={run.id} data-run-id={run.id}>
+                <td data-label={t('usage_maintenance.created_at')}>
+                  <div className={styles.identityCell}>
+                    <span
+                      className={`${styles.identityIcon} ${run.mode === 'retention' ? styles.iconPurple : styles.iconBlue}`}
+                      aria-hidden="true"
+                    >
+                      <IconArchive size={15} />
+                    </span>
+                    <div className={styles.identityMeta}>
+                      <button
+                        className={styles.recordTitle}
+                        type="button"
+                        onClick={() => onOpenRun(run)}
+                      >
+                        {formatTime(run.created_at_ms)}
+                      </button>
+                      <span className={styles.identityHash} title={run.id}>
+                        #{run.id.slice(0, 8)}
+                      </span>
+                    </div>
+                  </div>
+                </td>
+                <td data-label={t('usage_maintenance.technical_mode')}>
+                  <span
+                    className={`${styles.modeChip} ${run.mode === 'retention' ? styles.modeRetention : styles.modeManual}`}
+                  >
+                    {t(`usage_maintenance.run_mode_${run.mode}`, { defaultValue: run.mode })}
+                  </span>
+                </td>
+                <td data-label={t('usage_maintenance.cutoff')}>
+                  <span className={styles.cutoffText}>{formatTime(run.cutoff_timestamp_ms)}</span>
+                </td>
+                <td data-label={t('usage_maintenance.workspace_record_count')}>
+                  <div className={styles.metricsStack}>
+                    <strong className={styles.numeric}>
+                      {run.event_count.toLocaleString(i18n.language)}
+                    </strong>
+                    <div className={styles.metricTags}>
+                      <span className={styles.metaTag}>
+                        {t('usage_maintenance.archived_count')}{' '}
+                        {run.archived_event_count.toLocaleString(i18n.language)}
+                      </span>
+                      {run.deleted_event_count > 0 ? (
+                        <span className={`${styles.metaTag} ${styles.metaTagDanger}`}>
+                          {t('usage_maintenance.deleted_events')}{' '}
+                          {run.deleted_event_count.toLocaleString(i18n.language)}
+                        </span>
+                      ) : null}
+                    </div>
+                  </div>
+                </td>
+                <td data-label={t('usage_maintenance.technical_status')}>
+                  <div className={styles.statusStack}>
+                    <span className={styles.pill} data-status={run.status}>
+                      {t(`usage_maintenance.run_status_${run.status}`, { defaultValue: run.status })}
+                    </span>
+                    {run.status === 'verified' || run.status === 'completed' ? (
+                      <span className={styles.statusSub}>
+                        {t(
+                          run.status === 'verified'
+                            ? 'usage_maintenance.online_retained'
+                            : 'usage_maintenance.archive_retained'
+                        )}
+                      </span>
+                    ) : null}
+                  </div>
+                </td>
+                <td className={styles.recordActions}>
+                  <Button size="sm" variant="ghost" onClick={() => onOpenRun(run)}>
+                    {t('usage_maintenance.details')}
+                  </Button>
+                  <UsageArchiveRunActions run={run} compact {...actions} />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
       {archiveList.runs.length === 0 ? (
         <p className={styles.empty}>
           {loading ? t('common.loading') : t('usage_maintenance.no_runs')}
         </p>
       ) : null}
       <div className={styles.pagination}>
-        <span>{t('usage_maintenance.records_on_page', { count: archiveList.runs.length })}</span>
-        <Button
-          size="sm"
-          variant="secondary"
-          disabled={!canGoBack || loading}
-          onClick={onPreviousPage}
-        >
-          {t('common.previous')}
-        </Button>
-        <Button
-          size="sm"
-          variant="secondary"
-          disabled={!archiveList.next_cursor || loading}
-          onClick={onNextPage}
-        >
-          {t('common.next')}
-        </Button>
+        <div className={styles.paginationInfo}>
+          <span>{t('usage_maintenance.records_on_page', { count: archiveList.runs.length })}</span>
+        </div>
+        <div className={styles.paginationControls}>
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={!canGoBack || loading}
+            onClick={onPreviousPage}
+          >
+            {t('common.previous')}
+          </Button>
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={!archiveList.next_cursor || loading}
+            onClick={onNextPage}
+          >
+            {t('common.next')}
+          </Button>
+        </div>
       </div>
     </section>
   );

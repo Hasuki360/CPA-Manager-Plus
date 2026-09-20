@@ -12,7 +12,12 @@ import {
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/Button';
 import { Drawer } from '@/components/ui/Drawer';
-import { IconArrowUpFromLine, IconDownload, IconRefreshCw } from '@/components/ui/icons';
+import {
+  IconArrowUpFromLine,
+  IconDownload,
+  IconFileText,
+  IconRefreshCw,
+} from '@/components/ui/icons';
 import {
   UsageImportProgressActions,
   UsageImportProgressView,
@@ -725,83 +730,94 @@ export function UsageMaintenanceTransferView({
               : '—'}
           </span>
         </div>
-        <table className={styles.sessionTable}>
-          <thead>
-            <tr>
-              <th>{t('usage_maintenance.import_filename')}</th>
-              <th>{t('usage_maintenance.upload_progress')}</th>
-              <th>{t('usage_maintenance.transfer_last_result')}</th>
-              <th>{t('usage_maintenance.technical_status')}</th>
-              <th>
-                <span className={styles.srOnly}>{t('usage_maintenance.record_actions')}</span>
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {sessions.map((session) => (
-              <tr key={session.id} data-session-id={session.id}>
-                <td data-label={t('usage_maintenance.import_filename')}>
-                  <button
-                    type="button"
-                    className={styles.filename}
-                    onClick={() => onOpenPanel('import-session', session.id)}
-                  >
-                    {session.filename}
-                  </button>
-                  <small>{formatDateTime(new Date(session.updated_at_ms), i18n.language)}</small>
-                </td>
-                <td data-label={t('usage_maintenance.upload_progress')}>
-                  <span>{progressPercent(session)}%</span>
-                  <div
-                    className={styles.miniProgress}
-                    role="progressbar"
-                    aria-label={t('usage_maintenance.upload_progress')}
-                    aria-valuemin={0}
-                    aria-valuemax={100}
-                    aria-valuenow={progressPercent(session)}
-                  >
-                    <i style={{ width: `${progressPercent(session)}%` }} />
-                  </div>
-                  <small>
-                    {formatFileSize(session.received_bytes)} / {formatFileSize(session.size_bytes)}
-                  </small>
-                </td>
-                <td data-label={t('usage_maintenance.transfer_last_result')}>
-                  <span>{resultSummary(session.result, t)}</span>
-                </td>
-                <td data-label={t('usage_maintenance.technical_status')}>
-                  <span className={`${styles.pill} ${statusTone(session.status, session.result)}`}>
-                    {displayStatus(session)}
-                  </span>
-                </td>
-                <td className={styles.rowActions}>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => onOpenPanel('import-session', session.id)}
-                  >
-                    {t('usage_maintenance.details')}
-                  </Button>
-                  {sessionHasAction(session) ? (
+        <div className={styles.tableScroller}>
+          <table className={styles.sessionTable}>
+            <thead>
+              <tr>
+                <th>{t('usage_maintenance.import_filename')}</th>
+                <th>{t('usage_maintenance.upload_progress')}</th>
+                <th>{t('usage_maintenance.transfer_last_result')}</th>
+                <th>{t('usage_maintenance.technical_status')}</th>
+                <th>
+                  <span className={styles.srOnly}>{t('usage_maintenance.record_actions')}</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {sessions.map((session) => (
+                <tr key={session.id} data-session-id={session.id}>
+                  <td data-label={t('usage_maintenance.import_filename')}>
+                    <div className={styles.identityCell}>
+                      <span className={styles.fileIcon} aria-hidden="true">
+                        <IconFileText size={15} />
+                      </span>
+                      <div className={styles.identityMeta}>
+                        <button
+                          type="button"
+                          className={styles.filename}
+                          onClick={() => onOpenPanel('import-session', session.id)}
+                        >
+                          {session.filename}
+                        </button>
+                        <small>
+                          {formatDateTime(new Date(session.updated_at_ms), i18n.language)}
+                        </small>
+                      </div>
+                    </div>
+                  </td>
+                  <td data-label={t('usage_maintenance.upload_progress')}>
+                    <span>{progressPercent(session)}%</span>
+                    <div
+                      className={styles.miniProgress}
+                      role="progressbar"
+                      aria-label={t('usage_maintenance.upload_progress')}
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={progressPercent(session)}
+                    >
+                      <i style={{ width: `${progressPercent(session)}%` }} />
+                    </div>
+                    <small>
+                      {formatFileSize(session.received_bytes)} / {formatFileSize(session.size_bytes)}
+                    </small>
+                  </td>
+                  <td data-label={t('usage_maintenance.transfer_last_result')}>
+                    <span>{resultSummary(session.result, t)}</span>
+                  </td>
+                  <td data-label={t('usage_maintenance.technical_status')}>
+                    <span className={`${styles.pill} ${statusTone(session.status, session.result)}`}>
+                      {displayStatus(session)}
+                    </span>
+                  </td>
+                  <td className={styles.rowActions}>
                     <Button
                       size="sm"
                       variant="ghost"
-                      disabled={
-                        cancelPending ||
-                        (operationBusy &&
-                          activeTask?.progress.sessionId !== session.id &&
-                          session.status !== 'processing')
-                      }
-                      onClick={() => handleSessionAction(session)}
+                      onClick={() => onOpenPanel('import-session', session.id)}
                     >
-                      {sessionActionLabel(session)}
+                      {t('usage_maintenance.details')}
                     </Button>
-                  ) : null}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+                    {sessionHasAction(session) ? (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={
+                          cancelPending ||
+                          (operationBusy &&
+                            activeTask?.progress.sessionId !== session.id &&
+                            session.status !== 'processing')
+                        }
+                        onClick={() => handleSessionAction(session)}
+                      >
+                        {sessionActionLabel(session)}
+                      </Button>
+                    ) : null}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
         {sessions.length === 0 && loading ? (
           <div className={styles.empty}>{t('common.loading')}</div>
         ) : null}

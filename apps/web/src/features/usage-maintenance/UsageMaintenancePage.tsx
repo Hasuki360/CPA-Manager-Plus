@@ -17,6 +17,10 @@ import {
   IconRefreshCw,
   IconArrowUpFromLine,
   IconDownload,
+  IconArchive,
+  IconDatabaseZap,
+  IconHardDrive,
+  IconSparkles,
 } from '@/components/ui/icons';
 import { SegmentedTabs } from '@/components/ui/SegmentedTabs';
 import {
@@ -1686,6 +1690,104 @@ export function UsageMaintenancePage() {
       </div>
     );
 
+  const renderDrawerTitle = () => {
+    if (drawerConfirmation) return drawerConfirmation.title;
+    switch (navigation.panel) {
+      case 'create':
+        return (
+          <div className={styles.drawerHeaderTitle}>
+            <span className={`${styles.drawerHeaderIcon} ${styles.iconBlue}`} aria-hidden="true">
+              <IconPlus size={18} />
+            </span>
+            <div className={styles.drawerHeaderContent}>
+              <strong className={styles.drawerTitleText}>
+                {t('usage_maintenance.new_archive')}
+              </strong>
+              <span className={styles.drawerSubtitleText}>
+                {t('usage_maintenance.archive_retention_hint', {
+                  defaultValue: '按保留期扫描并安全归档历史用量明细',
+                })}
+              </span>
+            </div>
+          </div>
+        );
+      case 'run':
+        return (
+          <div className={styles.drawerHeaderTitle}>
+            <span className={`${styles.drawerHeaderIcon} ${styles.iconPurple}`} aria-hidden="true">
+              <IconArchive size={18} />
+            </span>
+            <div className={styles.drawerHeaderContent}>
+              <strong className={styles.drawerTitleText}>
+                {t('usage_maintenance.run_detail_title')}
+              </strong>
+              {currentArchive?.run.id ? (
+                <span className={styles.drawerSubtitleMono}>
+                  ID: {currentArchive.run.id.slice(0, 12)}
+                </span>
+              ) : null}
+            </div>
+          </div>
+        );
+      case 'overview':
+        return (
+          <div className={styles.drawerHeaderTitle}>
+            <span className={`${styles.drawerHeaderIcon} ${styles.iconBlue}`} aria-hidden="true">
+              <IconDatabaseZap size={18} />
+            </span>
+            <div className={styles.drawerHeaderContent}>
+              <strong className={styles.drawerTitleText}>
+                {t('usage_maintenance.online_range_title')}
+              </strong>
+              <span className={styles.drawerSubtitleText}>
+                {t('usage_maintenance.online_range_subtitle', {
+                  defaultValue: '当前在线原始事件时间跨度与覆盖范围',
+                })}
+              </span>
+            </div>
+          </div>
+        );
+      case 'advanced':
+        return (
+          <div className={styles.drawerHeaderTitle}>
+            <span className={`${styles.drawerHeaderIcon} ${styles.iconCyan}`} aria-hidden="true">
+              <IconHardDrive size={18} />
+            </span>
+            <div className={styles.drawerHeaderContent}>
+              <strong className={styles.drawerTitleText}>
+                {t('usage_maintenance.storage_recovery')}
+              </strong>
+              <span className={styles.drawerSubtitleText}>
+                {t('usage_maintenance.advanced_compact_hint', {
+                  defaultValue: '物理文件存储分布与离线收缩 (VACUUM)',
+                })}
+              </span>
+            </div>
+          </div>
+        );
+      case 'diagnostics':
+        return (
+          <div className={styles.drawerHeaderTitle}>
+            <span className={`${styles.drawerHeaderIcon} ${styles.iconGreen}`} aria-hidden="true">
+              <IconSparkles size={18} />
+            </span>
+            <div className={styles.drawerHeaderContent}>
+              <strong className={styles.drawerTitleText}>
+                {t('usage_maintenance.diagnostics_title')}
+              </strong>
+              <span className={styles.drawerSubtitleText}>
+                {t('usage_maintenance.diagnostics_hint', {
+                  defaultValue: '服务就绪状态、后台锁与覆盖率诊断',
+                })}
+              </span>
+            </div>
+          </div>
+        );
+      default:
+        return null;
+    }
+  };
+
   return (
     <div className={styles.page} ref={pageRef}>
       <div className={styles.controlsPanel}>
@@ -1898,18 +2000,7 @@ export function UsageMaintenancePage() {
         width="min(600px, 100vw)"
         className={styles.drawer}
         bodyRef={setDrawerBodyRef}
-        title={
-          drawerConfirmation?.title ??
-          (navigation.panel === 'create'
-            ? t('usage_maintenance.new_archive')
-            : navigation.panel === 'run'
-              ? t('usage_maintenance.run_detail_title')
-              : navigation.panel === 'overview'
-                ? t('usage_maintenance.online_range_title')
-                : navigation.panel === 'advanced'
-                  ? t('usage_maintenance.storage_recovery')
-                  : t('usage_maintenance.diagnostics_title'))
-        }
+        title={renderDrawerTitle()}
         footer={
           <div className={styles.drawerActions}>
             {drawerConfirmation ? (
