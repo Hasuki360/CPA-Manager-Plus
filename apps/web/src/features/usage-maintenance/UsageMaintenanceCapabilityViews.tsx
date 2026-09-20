@@ -1,13 +1,34 @@
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/Button';
 import { IconCheck, IconInfo, IconCopy } from '@/components/ui/icons';
+import { SegmentedTabs } from '@/components/ui/SegmentedTabs';
 import type { UsageMaintenanceStatus } from '@/services/api/usageService';
+import { useNotificationStore } from '@/stores';
 import { formatDateTime, formatFileSize } from '@/utils/format';
 import { resolveProgressPercent } from './usageMaintenanceModel';
 import styles from './UsageMaintenanceCapabilityViews.module.scss';
 
-export const COMPACT_USAGE_COMMAND =
+export const COMPACT_BINARY_COMMAND =
   'cpa-manager-plus compact-usage --db-path /path/to/usage.sqlite';
+
+export const COMPACT_USAGE_COMMAND = COMPACT_BINARY_COMMAND;
+
+export const COMPACT_DOCKER_COMPOSE_COMMAND =
+  'docker compose stop cpa-manager-plus && \\\n  docker compose run --rm --no-deps cpa-manager-plus compact-usage --db-path /data/usage.sqlite && \\\n  docker compose start cpa-manager-plus';
+
+export const COMPACT_DOCKER_RUN_COMMAND =
+  'docker stop cpa-manager-plus && \\\n  docker run --rm -v cpa-manager-plus-data:/data seakee/cpa-manager-plus:latest compact-usage --db-path /data/usage.sqlite && \\\n  docker start cpa-manager-plus';
+
+export const BACKUP_FILES = [
+  'usage.sqlite',
+  'usage.sqlite-wal',
+  'usage.sqlite-shm',
+  'data.key',
+  'usage-archives/',
+] as const;
+
+export type CompactDeploymentType = 'docker-compose' | 'docker-run' | 'binary';
 
 type SharedProps = { maintenance: UsageMaintenanceStatus };
 
@@ -23,11 +44,44 @@ export function UsageMaintenanceAdvancedView({
   onCopyCommand,
 }: SharedProps & {
   stale?: boolean;
-  onCopyCommand: () => void;
+  onCopyCommand: (command?: string) => void;
 }) {
   const { t, i18n } = useTranslation();
+  const { showNotification } = useNotificationStore();
+  const [deploymentType, setDeploymentType] = useState<CompactDeploymentType>('docker-compose');
+  const [copiedFiles, setCopiedFiles] = useState(false);
   const storage = maintenance.storage;
   const size = (bytes: number) => (stale ? '—' : formatFileSize(bytes));
+
+  const reclaimPercent =
+    !stale && storage.total_bytes > 0 && storage.reclaimable_bytes > 0
+      ? Math.min(100, Math.round((storage.reclaimable_bytes / storage.total_bytes) * 100))
+      : 0;
+
+  const currentCommand =
+    deploymentType === 'docker-compose'
+      ? COMPACT_DOCKER_COMPOSE_COMMAND
+      : deploymentType === 'docker-run'
+        ? COMPACT_DOCKER_RUN_COMMAND
+        : COMPACT_BINARY_COMMAND;
+
+  const handleCopyFiles = async () => {
+    try {
+      if (!navigator.clipboard?.writeText) return;
+      await navigator.clipboard.writeText(BACKUP_FILES.join(' '));
+      setCopiedFiles(true);
+      showNotification(
+        t('usage_maintenance.advanced_copied_file_list', {
+          defaultValue: 'Backup file names copied.',
+        }),
+        'success'
+      );
+      setTimeout(() => setCopiedFiles(false), 2000);
+    } catch {
+      // ignore
+    }
+  };
+
   return (
     <div className={styles.view}>
       {stale ? (
@@ -71,60 +125,225 @@ export function UsageMaintenanceAdvancedView({
           </div>
         ) : null}
         <dl className={styles.storageGrid}>
-          <div>
-            <dt>{t('usage_maintenance.database')}</dt>
+          <div className={styles.storageGridItem}>
+            <dt>
+              <span className={`${styles.legendDot} ${styles.dotDatabase}`} />
+              {t('usage_maintenance.database')}
+            </dt>
             <dd>{size(storage.database_bytes)}</dd>
           </div>
-          <div>
-            <dt>WAL</dt>
+          <div className={styles.storageGridItem}>
+            <dt>
+              <span className={`${styles.legendDot} ${styles.dotWal}`} />
+              WAL
+            </dt>
             <dd>{size(storage.wal_bytes)}</dd>
           </div>
-          <div>
-            <dt>SHM</dt>
+          <div className={styles.storageGridItem}>
+            <dt>
+              <span className={`${styles.legendDot} ${styles.dotShm}`} />
+              SHM
+            </dt>
             <dd>{size(storage.shm_bytes)}</dd>
           </div>
         </dl>
         <div className={styles.reclaimable}>
-          <span>{t('usage_maintenance.reclaimable')}</span>
-          <strong>{size(storage.reclaimable_bytes)}</strong>
+          <div className={styles.reclaimableInfo}>
+            <span className={styles.reclaimableTitle}>{t('usage_maintenance.reclaimable')}</span>
+            {reclaimPercent > 0 ? (
+              <span className={styles.reclaimableBadge}>
+                {t('usage_maintenance.advanced_reclaim_potential', {
+                  percent: reclaimPercent,
+                  defaultValue: `~${reclaimPercent}% reclaimable`,
+                })}
+              </span>
+            ) : null}
+          </div>
+          <strong className={styles.reclaimableSize}>{size(storage.reclaimable_bytes)}</strong>
         </div>
-        <p className={styles.muted}>{t('usage_maintenance.advanced_sqlite_note')}</p>
+        <div className={styles.sqliteNoteCallout}>
+          <IconInfo size={14} className={styles.calloutIcon} />
+          <span>{t('usage_maintenance.advanced_sqlite_note')}</span>
+        </div>
       </section>
+
       <section className={styles.section}>
         <h2>{t('usage_maintenance.advanced_compact_title')}</h2>
-        <ol className={styles.instructions}>
-          <li>{t('usage_maintenance.advanced_stop_all')}</li>
-          <li>
-            {t('usage_maintenance.advanced_backup_set')}
+        <p className={styles.sectionSubtitle}>
+          {t('usage_maintenance.advanced_compact_subtitle', {
+            defaultValue:
+              'Stop the service and run offline compaction to release physical disk space from deleted events.',
+          })}
+        </p>
+
+        <SegmentedTabs
+          idBase="compact-deployment"
+          items={[
+            {
+              id: 'docker-compose',
+              label: t('usage_maintenance.advanced_tab_docker_compose', {
+                defaultValue: 'Docker Compose',
+              }),
+            },
+            {
+              id: 'docker-run',
+              label: t('usage_maintenance.advanced_tab_docker_run', {
+                defaultValue: 'Docker Run',
+              }),
+            },
+            {
+              id: 'binary',
+              label: t('usage_maintenance.advanced_tab_binary', {
+                defaultValue: 'Native Binary',
+              }),
+            },
+          ]}
+          activeTab={deploymentType}
+          onChange={setDeploymentType}
+          ariaLabel={t('usage_maintenance.advanced_deployment_type', {
+            defaultValue: 'Deployment method',
+          })}
+          className={styles.compactTabs}
+        />
+
+        <div className={styles.stepFlow}>
+          <div className={styles.stepCard}>
+            <div className={styles.stepHeader}>
+              <div className={styles.stepTitleWrapper}>
+                <span className={styles.stepIndex}>1</span>
+                <div className={styles.stepTitleMeta}>
+                  <h3 className={styles.stepTitle}>
+                    {t('usage_maintenance.advanced_step_backup_title', {
+                      defaultValue: 'Step 1: Back up database key files (Recommended)',
+                    })}
+                  </h3>
+                  <span className={styles.stepDesc}>
+                    {t('usage_maintenance.advanced_step_backup_desc', {
+                      defaultValue:
+                        'Compaction is an exclusive write operation. Back up your volume or the following key files before proceeding.',
+                    })}
+                  </span>
+                </div>
+              </div>
+              <Button
+                variant="secondary"
+                size="sm"
+                className={styles.copyFileListBtn}
+                onClick={handleCopyFiles}
+                title={t('usage_maintenance.advanced_copy_file_list', {
+                  defaultValue: 'Copy file names',
+                })}
+              >
+                {copiedFiles ? <IconCheck size={13} /> : <IconCopy size={13} />}
+                <span>
+                  {copiedFiles
+                    ? t('common.copied', { defaultValue: 'Copied' })
+                    : t('usage_maintenance.advanced_copy_file_list', {
+                        defaultValue: 'Copy file names',
+                      })}
+                </span>
+              </Button>
+            </div>
             <div className={styles.backupFiles}>
-              {[
-                'usage.sqlite',
-                'usage.sqlite-wal',
-                'usage.sqlite-shm',
-                'data.key',
-                'usage-archives/',
-              ].map((item) => (
-                <code key={item}>{item}</code>
+              {BACKUP_FILES.map((item) => (
+                <code key={item} className={styles.fileBadge}>
+                  {item}
+                </code>
               ))}
             </div>
-          </li>
-          <li>{t('usage_maintenance.advanced_command_label')}</li>
-        </ol>
-        <pre className={styles.codeBox}>
-          <code>{COMPACT_USAGE_COMMAND}</code>
-        </pre>
-        <Button variant="secondary" size="sm" onClick={onCopyCommand}>
-          <IconCopy size={15} />
-          {t('usage_maintenance.advanced_copy_command')}
-        </Button>
-        <p className={styles.muted}>{t('usage_maintenance.advanced_command_note')}</p>
+          </div>
+
+          <div className={styles.stepCard}>
+            <div className={styles.stepHeader}>
+              <div className={styles.stepTitleWrapper}>
+                <span className={styles.stepIndex}>2</span>
+                <div className={styles.stepTitleMeta}>
+                  <h3 className={styles.stepTitle}>
+                    {t('usage_maintenance.advanced_step_compact_title', {
+                      defaultValue: 'Step 2: Run offline compaction & restart',
+                    })}
+                  </h3>
+                  <span className={styles.stepDesc}>
+                    {deploymentType === 'binary'
+                      ? t('usage_maintenance.advanced_stop_binary_hint', {
+                          defaultValue:
+                            'Ensure all cpa-manager-plus processes are stopped to release the exclusive database lock.',
+                        })
+                      : t('usage_maintenance.advanced_stop_docker_hint', {
+                          defaultValue:
+                            'The command automatically stops the container, runs one-off compaction, and restarts it.',
+                        })}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div className={styles.terminalCard}>
+              <div className={styles.terminalHeader}>
+                <div className={styles.terminalWindowControls}>
+                  <span className={`${styles.windowDot} ${styles.dotRed}`} />
+                  <span className={`${styles.windowDot} ${styles.dotYellow}`} />
+                  <span className={`${styles.windowDot} ${styles.dotGreen}`} />
+                  <span className={styles.terminalBadge}>bash</span>
+                </div>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className={styles.copyCommandBtn}
+                  onClick={() => onCopyCommand(currentCommand)}
+                >
+                  <IconCopy size={14} />
+                  {t('usage_maintenance.advanced_copy_command', {
+                    defaultValue: 'Copy command',
+                  })}
+                </Button>
+              </div>
+
+              <pre className={styles.codeBox}>
+                <code>{currentCommand}</code>
+              </pre>
+
+              <div className={styles.terminalFooter}>
+                <div className={styles.envHint}>
+                  <IconInfo size={14} className={styles.envHintIcon} />
+                  <span>
+                    {deploymentType === 'docker-compose'
+                      ? t('usage_maintenance.advanced_note_docker_compose', {
+                          defaultValue:
+                            'Run in the directory containing your docker-compose.manager.yml or compose file.',
+                        })
+                      : deploymentType === 'docker-run'
+                        ? t('usage_maintenance.advanced_note_docker_run', {
+                            defaultValue:
+                              'Uses default volume cpa-manager-plus-data; replace -v with your host data path if customized.',
+                          })
+                        : t('usage_maintenance.advanced_note_binary', {
+                            defaultValue:
+                              'Replace --db-path with the actual usage.sqlite absolute path; ensure all processes are stopped.',
+                          })}
+                  </span>
+                </div>
+                <p className={styles.terminalDisclaimer}>
+                  {t('usage_maintenance.advanced_command_note', {
+                    defaultValue:
+                      'The command is copied for an operator to run offline; the browser never executes it.',
+                  })}
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
       </section>
-      <section className={styles.section}>
+
+      <section className={`${styles.section} ${styles.retentionCard}`}>
         <h2>{t('usage_maintenance.advanced_retention_title')}</h2>
-        <p>{t('usage_maintenance.advanced_retention_note')}</p>
+        <p className={styles.retentionNote}>{t('usage_maintenance.advanced_retention_note')}</p>
       </section>
-      <details className={styles.technical}>
-        <summary>{t('usage_maintenance.advanced_capabilities_title')}</summary>
+
+      <details className={`${styles.technical} ${styles.capabilitiesCard}`}>
+        <summary className={styles.capabilitiesSummary}>
+          {t('usage_maintenance.advanced_capabilities_title')}
+        </summary>
         <dl className={styles.keyValues}>
           <div>
             <dt>{t('usage_maintenance.advanced_service')}</dt>

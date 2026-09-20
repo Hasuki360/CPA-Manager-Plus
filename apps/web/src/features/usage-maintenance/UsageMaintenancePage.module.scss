@@ -156,6 +156,12 @@
     font-weight: 600;
     color: var(--text-primary);
   }
+
+  dl > div:first-child dd {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--primary-color);
+  }
 }
 
 .drawerActions {
@@ -187,7 +193,7 @@
 .drawerHeaderIcon {
   width: 32px;
   height: 32px;
-  border-radius: var(--um-radius-sm);
+  border-radius: var(--app-radius-sm, 8px);
   display: flex;
   align-items: center;
   justify-content: center;

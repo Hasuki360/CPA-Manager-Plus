@@ -67,7 +67,7 @@ import { UsageMaintenanceCreateView, type GuidedArchiveStage } from './UsageMain
 import { UsageMaintenanceDeleteConfirmation } from './UsageMaintenanceDeleteConfirmation';
 import { UsageMaintenanceTransferView } from './UsageMaintenanceTransferView';
 import {
-  COMPACT_USAGE_COMMAND,
+  COMPACT_DOCKER_COMPOSE_COMMAND,
   UsageMaintenanceAdvancedView,
   UsageMaintenanceDiagnosticsView,
 } from './UsageMaintenanceCapabilityViews';
@@ -1505,25 +1505,29 @@ export function UsageMaintenancePage() {
     }
   };
 
-  const copyCompactCommand = useCallback(async () => {
-    try {
-      if (!navigator.clipboard?.writeText) throw new Error('clipboard unavailable');
-      await navigator.clipboard.writeText(COMPACT_USAGE_COMMAND);
-      showNotification(
-        t('usage_maintenance.advanced_copy_success', {
-          defaultValue: 'Offline compact command copied.',
-        }),
-        'success'
-      );
-    } catch {
-      showNotification(
-        t('usage_maintenance.advanced_copy_failed', {
-          defaultValue: 'The command could not be copied. Select it manually from the code block.',
-        }),
-        'warning'
-      );
-    }
-  }, [showNotification, t]);
+  const copyCompactCommand = useCallback(
+    async (customCommand?: string) => {
+      try {
+        if (!navigator.clipboard?.writeText) throw new Error('clipboard unavailable');
+        await navigator.clipboard.writeText(customCommand || COMPACT_DOCKER_COMPOSE_COMMAND);
+        showNotification(
+          t('usage_maintenance.advanced_copy_success', {
+            defaultValue: 'Offline compact command copied.',
+          }),
+          'success'
+        );
+      } catch {
+        showNotification(
+          t('usage_maintenance.advanced_copy_failed', {
+            defaultValue:
+              'The command could not be copied. Select it manually from the code block.',
+          }),
+          'warning'
+        );
+      }
+    },
+    [showNotification, t]
+  );
 
   const openRun = (run: UsageArchiveRunSummary) => {
     setPendingConfirmation(null);
@@ -2086,6 +2090,13 @@ export function UsageMaintenancePage() {
                 ) : null}
                 <Button
                   onClick={confirmCreate}
+                  title={
+                    !preview || preview.event_count <= 0
+                      ? t('usage_maintenance.create_button_no_data_tooltip', {
+                          defaultValue: '当前时间范围暂无待处理明细，请调整时间范围',
+                        })
+                      : undefined
+                  }
                   disabled={
                     working ||
                     !preview ||
@@ -2224,7 +2235,7 @@ export function UsageMaintenancePage() {
               <UsageMaintenanceAdvancedView
                 maintenance={maintenance}
                 stale={postDeleteRefreshFailed}
-                onCopyCommand={() => void copyCompactCommand()}
+                onCopyCommand={(command) => void copyCompactCommand(command)}
               />
             ) : null}
             {navigation.panel === 'diagnostics' ? (

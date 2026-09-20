@@ -10,7 +10,11 @@ import type {
 import en from '@/i18n/locales/en.json';
 import { Drawer } from '@/components/ui/Drawer';
 import { UsageMaintenancePage } from './UsageMaintenancePage';
-import { COMPACT_USAGE_COMMAND } from './UsageMaintenanceCapabilityViews';
+import {
+  COMPACT_DOCKER_COMPOSE_COMMAND,
+  COMPACT_DOCKER_RUN_COMMAND,
+  COMPACT_USAGE_COMMAND,
+} from './UsageMaintenanceCapabilityViews';
 
 const { mocks } = vi.hoisted(() => {
   (
@@ -2543,11 +2547,31 @@ describe('UsageMaintenancePage', () => {
       findButtons(renderer, 'Copy command')[0].props.onClick();
       await Promise.resolve();
     });
-    expect(writeTextMock).toHaveBeenCalledWith(COMPACT_USAGE_COMMAND);
+    expect(writeTextMock).toHaveBeenCalledWith(COMPACT_DOCKER_COMPOSE_COMMAND);
     expect(mocks.showNotification).toHaveBeenCalledWith(
       'Offline compact command copied.',
       'success'
     );
+
+    // Switch to Docker Run tab and copy
+    await act(async () => {
+      findButtons(renderer, 'Docker Run')[0].props.onClick();
+    });
+    await act(async () => {
+      findButtons(renderer, 'Copy command')[0].props.onClick();
+      await Promise.resolve();
+    });
+    expect(writeTextMock).toHaveBeenCalledWith(COMPACT_DOCKER_RUN_COMMAND);
+
+    // Switch to Native Binary tab and copy
+    await act(async () => {
+      findButtons(renderer, 'Native Binary')[0].props.onClick();
+    });
+    await act(async () => {
+      findButtons(renderer, 'Copy command')[0].props.onClick();
+      await Promise.resolve();
+    });
+    expect(writeTextMock).toHaveBeenCalledWith(COMPACT_USAGE_COMMAND);
 
     // 2. Open advanced maintenance button
     await act(async () => {

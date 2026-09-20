@@ -83,7 +83,7 @@
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
-  padding: 14px 0;
+  padding: 14px 0 10px;
   margin: 0;
 
   > div {
@@ -94,6 +94,8 @@
   }
 
   dt {
+    display: flex;
+    align-items: center;
     font-size: 12px;
     color: var(--text-secondary);
     font-weight: 500;
@@ -109,6 +111,27 @@
   }
 }
 
+.legendDot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-inline-end: 6px;
+  flex-shrink: 0;
+}
+
+.dotDatabase {
+  background: var(--data-blue-base, #3b82f6);
+}
+
+.dotWal {
+  background: var(--data-amber-base, #f59e0b);
+}
+
+.dotShm {
+  background: var(--data-slate-base, #64748b);
+}
+
 .reclaimable {
   display: flex;
   justify-content: space-between;
@@ -118,18 +141,56 @@
   border-radius: var(--app-radius-md, 10px);
   background: color-mix(in srgb, var(--data-green-base, #22c55e) 8%, var(--surface-subtle));
   border: 1px solid color-mix(in srgb, var(--data-green-base, #22c55e) 25%, transparent);
+  margin-bottom: 10px;
+}
 
-  span {
-    font-weight: 600;
-    color: var(--data-green-base, #16a34a);
-  }
+.reclaimableInfo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
 
-  strong {
-    white-space: nowrap;
-    font-variant-numeric: tabular-nums;
-    font-size: 16px;
-    font-weight: 700;
-    color: var(--data-green-base, #16a34a);
+.reclaimableTitle {
+  font-weight: 600;
+  color: var(--data-green-base, #16a34a);
+}
+
+.reclaimableBadge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  font-size: 11.5px;
+  font-weight: 600;
+  border-radius: $radius-full;
+  background: color-mix(in srgb, var(--data-green-base, #22c55e) 15%, transparent);
+  color: var(--data-green-base, #16a34a);
+}
+
+.reclaimableSize {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--data-green-base, #16a34a);
+}
+
+.sqliteNoteCallout {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--surface-subtle);
+  border: 1px solid var(--border-color);
+  border-radius: var(--app-radius-md, 8px);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+
+  .calloutIcon {
+    flex-shrink: 0;
+    margin-top: 2px;
+    color: var(--text-secondary);
   }
 }
 
@@ -139,13 +200,92 @@
   line-height: 1.8;
 }
 
-.instructions {
-  padding-inline-start: 20px;
-  margin: 0;
+.sectionSubtitle {
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  margin: -4px 0 14px;
+}
 
-  li {
-    margin: 12px 0;
+.compactTabs {
+  margin-bottom: 14px;
+}
+
+.stepFlow {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 6px;
+}
+
+.stepCard {
+  background: var(--surface-subtle);
+  border: 1px solid var(--border-color);
+  border-radius: var(--app-radius-md, 12px);
+  padding: 14px 16px;
+  transition: border-color $transition-fast;
+
+  &:hover {
+    border-color: var(--border-hover, var(--border-color));
   }
+}
+
+.stepHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.stepTitleWrapper {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.stepIndex {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--primary-color) 14%, var(--surface-subtle));
+  color: var(--primary-color);
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.stepTitleMeta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.stepTitle {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+  line-height: 1.5;
+}
+
+.stepDesc {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.copyFileListBtn {
+  flex-shrink: 0;
+  font-size: 12px;
+  gap: 5px;
+  height: 28px;
+  padding: 0 10px;
 }
 
 .backupFiles {
@@ -153,39 +293,160 @@
   flex-wrap: wrap;
   gap: 6px;
   margin-top: 10px;
+  padding-inline-start: 32px;
 
-  code {
+  .fileBadge {
     padding: 3px 8px;
-    background: var(--surface-subtle);
+    background: var(--bg-primary, #ffffff);
     border: 1px solid var(--border-color);
     border-radius: 6px;
     font-size: 11.5px;
     font-family: ui-monospace, monospace;
+    color: var(--text-primary);
   }
 }
 
-.codeBox {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  margin: 12px 0;
-  padding: 14px 16px;
-  font-size: 12.5px;
-  font-family: ui-monospace, monospace;
-  background: var(--surface-subtle);
+.terminalCard {
+  margin-top: 12px;
+  margin-inline-start: 32px;
+  background: var(--bg-primary, #ffffff);
   border: 1px solid var(--border-color);
   border-radius: var(--app-radius-md, 10px);
-  color: var(--text-primary);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
 }
 
-.technical {
-  min-width: 0;
-  font-size: 12px;
+.terminalHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: var(--surface-subtle);
+  border-bottom: 1px solid var(--border-color);
+  gap: 10px;
+}
 
-  summary {
+.terminalWindowControls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.windowDot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+}
+
+.dotRed {
+  background: #ff5f56;
+}
+
+.dotYellow {
+  background: #ffbd2e;
+}
+
+.dotGreen {
+  background: #27c93f;
+}
+
+.terminalBadge {
+  font-size: 11px;
+  font-family: ui-monospace, monospace;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-inline-start: 4px;
+}
+
+.copyCommandBtn {
+  font-size: 12px;
+  gap: 5px;
+  height: 28px;
+  padding: 0 10px;
+}
+
+.codeBox {
+  margin: 0;
+  padding: 12px 14px;
+  font-size: 12px;
+  line-height: 1.6;
+  font-family: ui-monospace, monospace;
+  background: transparent;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: normal;
+  overflow-wrap: normal;
+  overflow-x: auto;
+}
+
+.terminalFooter {
+  padding: 10px 12px;
+  background: var(--surface-subtle);
+  border-top: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.envHint {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+
+  .envHintIcon {
+    flex-shrink: 0;
+    margin-top: 2px;
+    color: var(--primary-color);
+  }
+}
+
+.terminalDisclaimer {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--text-tertiary, var(--text-secondary));
+  line-height: 1.5;
+}
+
+.retentionCard {
+  background: var(--surface-subtle);
+  border: 1px solid var(--border-color);
+  border-radius: var(--app-radius-md, 12px);
+  padding: 14px 16px;
+
+  h2 {
+    margin: 0 0 6px;
+    font-size: 14px;
+  }
+
+  .retentionNote {
+    margin: 0;
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.6;
+  }
+}
+
+.capabilitiesCard {
+  border: 1px solid var(--border-color);
+  border-radius: var(--app-radius-md, 12px);
+  padding: 12px 14px;
+  background: var(--surface-subtle);
+
+  .capabilitiesSummary {
     cursor: pointer;
     font-size: 13px;
     font-weight: 600;
     color: var(--text-primary);
+    outline: none;
+    user-select: none;
+    transition: color $transition-fast;
+
+    &:hover {
+      color: var(--primary-color);
+    }
   }
 
   h3 {

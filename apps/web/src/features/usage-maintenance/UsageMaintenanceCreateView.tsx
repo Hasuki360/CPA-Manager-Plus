@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
-import { IconInfo } from '@/components/ui/icons';
+import { IconInfo, IconRefreshCw, IconTriangleAlert } from '@/components/ui/icons';
 import type { UsageArchivePreview, UsageMaintenanceStatus } from '@/services/api/usageService';
 import { formatDateTime, formatFileSize } from '@/utils/format';
 import {
@@ -154,10 +154,12 @@ export function UsageMaintenanceCreateView({
               onChange={(event) => onUpdateCustomCutoff(event.target.value)}
             />
           ) : null}
-          <p className={styles.cutoff}>
-            {t('usage_maintenance.cutoff', { defaultValue: 'Archive events before' })}
-            <strong>{formatTime(resolvedCutoffTimestamp)}</strong>
-          </p>
+          <div className={styles.cutoffBar}>
+            <span className={styles.cutoffLabel}>
+              {t('usage_maintenance.cutoff', { defaultValue: 'Archive events before' })}
+            </span>
+            <strong className={styles.cutoffTime}>{formatTime(resolvedCutoffTimestamp)}</strong>
+          </div>
           <p className={styles.hint}>
             {t('usage_maintenance.workspace_once', {
               defaultValue:
@@ -167,12 +169,33 @@ export function UsageMaintenanceCreateView({
         </section>
 
         <section className={styles.card} aria-live="polite" aria-busy={previewLoading}>
-          <h2>{t('usage_maintenance.preview', { defaultValue: 'Impact preview' })}</h2>
+          <div className={styles.sectionHeader}>
+            <h2>{t('usage_maintenance.preview', { defaultValue: 'Impact preview' })}</h2>
+            {previewLoading ? (
+              <div className={styles.calculatingBadge}>
+                <IconRefreshCw size={13} className={styles.spinIcon} />
+                <span>{t('usage_maintenance.preview_loading', { defaultValue: 'Calculating…' })}</span>
+              </div>
+            ) : null}
+          </div>
+
           {previewLoading ? (
-            <p className={styles.hint}>
-              {t('usage_maintenance.preview_loading', { defaultValue: 'Calculating…' })}
-            </p>
+            <div className={styles.skeletonGrid} aria-label={t('usage_maintenance.preview_loading', { defaultValue: 'Calculating…' })}>
+              <div className={styles.skeletonCard}>
+                <div className={styles.skeletonLine} style={{ width: '45%' }} />
+                <div className={styles.skeletonNumber} />
+              </div>
+              <div className={styles.skeletonCard}>
+                <div className={styles.skeletonLine} style={{ width: '55%' }} />
+                <div className={styles.skeletonNumber} />
+              </div>
+              <div className={`${styles.skeletonCard} ${styles.range}`}>
+                <div className={styles.skeletonLine} style={{ width: '35%' }} />
+                <div className={styles.skeletonLine} style={{ width: '70%', height: '14px', marginTop: '6px' }} />
+              </div>
+            </div>
           ) : null}
+
           {previewError ? (
             <div className={styles.warning} role="alert">
               <p>{previewError}</p>
@@ -183,7 +206,8 @@ export function UsageMaintenanceCreateView({
               ) : null}
             </div>
           ) : null}
-          {!previewError && preview && preview.event_count > 0 ? (
+
+          {!previewLoading && !previewError && preview && preview.event_count > 0 ? (
             <>
               <dl className={styles.previewGrid}>
                 <div>
@@ -223,25 +247,33 @@ export function UsageMaintenanceCreateView({
               </div>
             </>
           ) : null}
+
           {intent === 'cleanup' &&
           resolvedCutoffTimestamp &&
           referenceNowMS - resolvedCutoffTimestamp < 14 * 24 * 60 * 60 * 1000 ? (
             <div className={styles.highRiskWarning} role="alert">
-              <strong>
-                {t('usage_maintenance.cleanup_recent_warning_title', {
-                  defaultValue: '⚠️ 高危操作：直接清理 14 天内的近期用量数据',
-                })}
-              </strong>
+              <div className={styles.highRiskWarningHeader}>
+                <IconTriangleAlert size={16} aria-hidden="true" />
+                <strong>
+                  {t('usage_maintenance.cleanup_recent_warning_title', {
+                    defaultValue: '注意：所选范围包含 14 天内的近期用量数据',
+                  })}
+                </strong>
+              </div>
               <p>
                 {t('usage_maintenance.cleanup_recent_warning_desc', {
                   defaultValue:
-                    '直接清理将永久删除记录且不留存归档副本。如需防止计费对账数据丢失，建议优先选择【先归档后清理】。',
+                    '当前选中的清理范围距今不足 14 天。在完成归档校验并确认清理后，近期的单次请求明细将无法在线直接查询（归档副本已完整留存，永久聚合对账指标不受影响）。如需保留近期单次调用明细以便实时排查，建议选择更长的保留天数。',
                 })}
               </p>
             </div>
           ) : null}
+
           {!previewLoading && !previewError && preview?.event_count === 0 ? (
             <div className={styles.empty}>
+              <div className={styles.emptyIconWrap}>
+                <IconInfo size={20} aria-hidden="true" />
+              </div>
               <strong>
                 {t('usage_maintenance.preview_empty_title', {
                   defaultValue: 'No new events to archive in this range',
@@ -259,71 +291,83 @@ export function UsageMaintenanceCreateView({
                         })
                       : t('usage_maintenance.preview_empty_recent')}
               </p>
-              <Button size="sm" variant="secondary" onClick={onHistory}>
+              <div className={styles.emptyActions}>
+                <Button size="sm" variant="secondary" onClick={onHistory}>
+                  {t('usage_maintenance.workspace_existing', {
+                    defaultValue: 'View existing archives',
+                  })}
+                </Button>
+                {canRecommend ? (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => onSelectRetention(recommendedRetentionDays)}
+                    disabled={working}
+                  >
+                    {t('usage_maintenance.use_recommended_retention', {
+                      defaultValue: 'Older than {{days}} days',
+                      days: recommendedRetentionDays,
+                    })}
+                  </Button>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+
+          {disabledReason && !previewError ? (
+            <p className={styles.warning}>{disabledReason}</p>
+          ) : null}
+
+          {hasArchived && (!preview || preview.event_count > 0) ? (
+            <div className={styles.historyLinkContainer}>
+              <Button variant="ghost" size="sm" onClick={onHistory}>
                 {t('usage_maintenance.workspace_existing', {
                   defaultValue: 'View existing archives',
                 })}
               </Button>
-              {canRecommend ? (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => onSelectRetention(recommendedRetentionDays)}
-                  disabled={working}
-                >
-                  {t('usage_maintenance.use_recommended_retention', {
-                    defaultValue: 'Older than {{days}} days',
-                    days: recommendedRetentionDays,
-                  })}
-                </Button>
-              ) : null}
             </div>
           ) : null}
-          {disabledReason && !previewError ? (
-            <p className={styles.warning}>{disabledReason}</p>
-          ) : null}
-          <p className={styles.hint}>
-            {t('usage_maintenance.preview_excludes_existing', {
-              defaultValue:
-                'This preview counts only data not already archived. Existing archives are handled separately, one record at a time.',
-            })}
-          </p>
-          {hasArchived ? (
-            <Button variant="ghost" size="sm" onClick={onHistory}>
-              {t('usage_maintenance.workspace_existing', {
-                defaultValue: 'View existing archives',
-              })}
-            </Button>
-          ) : null}
-          <p className={styles.hint}>
-            {t('usage_maintenance.preview_source_bytes_hint', {
-              defaultValue:
-                'Source-row estimate, not archive size or disk space that will be released.',
-            })}
-          </p>
-          <p className={styles.hint}>
-            {intent === 'cleanup'
-              ? t('usage_maintenance.workspace_cleanup_hint', {
-                  defaultValue:
-                    'After verification, review this archive and confirm cleanup separately. Archived data remains online until you confirm.',
-                })
-              : t('usage_maintenance.archive_prepare_no_delete', {
-                  defaultValue:
-                    'Archiving keeps online details available. You can clean them up later from this record.',
-                })}
-          </p>
+
+          <div className={styles.intentFlowBanner}>
+            <p>
+              {intent === 'cleanup'
+                ? t('usage_maintenance.workspace_cleanup_hint', {
+                    defaultValue:
+                      'After verification, review this archive and confirm cleanup separately. Archived data remains online until you confirm.',
+                  })
+                : t('usage_maintenance.archive_prepare_no_delete', {
+                    defaultValue:
+                      'Archiving keeps online details available. You can clean them up later from this record.',
+                  })}
+            </p>
+          </div>
+
           <details className={styles.details}>
             <summary>
               {t('usage_maintenance.workspace_impact', {
                 defaultValue: 'What changes after cleanup?',
               })}
             </summary>
-            <p>
-              {t('usage_maintenance.workspace_impact_hint', {
-                defaultValue:
-                  'Cleanup removes online details for this archive. The server checks statistics coverage first; detailed queries and future recalculation are limited afterward. Back up the database, key and archives before cleanup. The SQLite file shrinks only after offline compaction.',
-              })}
-            </p>
+            <div className={styles.detailsContent}>
+              <p>
+                {t('usage_maintenance.workspace_impact_hint', {
+                  defaultValue:
+                    'Cleanup removes online details for this archive. The server checks statistics coverage first; detailed queries and future recalculation are limited afterward. Back up the database, key and archives before cleanup. The SQLite file shrinks only after offline compaction.',
+                })}
+              </p>
+              <p>
+                {t('usage_maintenance.preview_excludes_existing', {
+                  defaultValue:
+                    'This preview counts only data not already archived. Existing archives are handled separately, one record at a time.',
+                })}
+              </p>
+              <p>
+                {t('usage_maintenance.preview_source_bytes_hint', {
+                  defaultValue:
+                    'Source-row estimate, not archive size or disk space that will be released.',
+                })}
+              </p>
+            </div>
           </details>
         </section>
       </div>
