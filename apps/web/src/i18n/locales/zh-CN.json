@@ -773,7 +773,18 @@
     "health_check_error_missing_credential": "缺少 API 密钥或 auth-index",
     "health_check_error_empty_models": "未返回模型列表",
     "health_check_error_vertex_standard_models": "未发现可用的标准模型发现接口{{reason}}",
-    "health_check_error_provider_missing": "提供商配置已不存在"
+    "health_check_error_provider_missing": "提供商配置已不存在",
+    "meta_add_modal_title": "添加 Muse (Meta) API 配置",
+    "meta_edit_modal_title": "编辑 Muse (Meta) API 配置",
+    "meta_key_required": "请输入 Meta API Key",
+    "meta_dca_not_accepted": "Meta API Provider 不支持 DCA 凭证格式，请通过账号管理添加 Meta OAuth 凭证",
+    "meta_test_hint": "向 Meta /v1/models 发送测试请求，验证 API Key 可用性。",
+    "meta_test_running": "正在测试 Muse (Meta) 连通性...",
+    "meta_test_no_models": "未返回可用的模型列表",
+    "meta_test_success": "Muse (Meta) 连通性测试成功",
+    "meta_test_failed": "Muse (Meta) 连通性测试失败",
+    "meta_delete_title": "删除 Muse (Meta) 配置",
+    "meta_delete_confirm": "确定要删除这个 Muse (Meta) 配置吗？"
   },
   "auth_files": {
     "title": "认证文件管理",
@@ -1052,7 +1063,8 @@
     "quota_cooldown_source_provider": "受支持供应商的额度请求事件",
     "quota_cooldown_badge_title_codex": "真实 Codex 请求返回了明确的额度耗尽信号。CPAMP 已临时停用此凭证，并计划在服务端报告的重置时间 {{recoverAt}} 自动恢复。停用时间：{{disabledAt}}。这是事件驱动的凭证自动化运维，不是主动巡检。",
     "quota_cooldown_badge_title_xai": "真实 xAI 请求返回了免费额度耗尽信号。用量证据：{{usage}}。CPAMP 已临时停用此凭证，并计划在 {{recoverAt}} 自动恢复（{{recoveryKind}}）。停用时间：{{disabledAt}}。这是事件驱动的凭证自动化运维，不是主动巡检。",
-    "quota_cooldown_badge_title_provider": "受支持供应商的真实请求触发了额度冷却。CPAMP 已临时停用此凭证，并计划在 {{recoverAt}} 自动恢复。停用时间：{{disabledAt}}，所有者：{{owner}}。这是事件驱动的凭证自动化运维，不是主动巡检。"
+    "quota_cooldown_badge_title_provider": "受支持供应商的真实请求触发了额度冷却。CPAMP 已临时停用此凭证，并计划在 {{recoverAt}} 自动恢复。停用时间：{{disabledAt}}，所有者：{{owner}}。这是事件驱动的凭证自动化运维，不是主动巡检。",
+    "filter_meta": "Muse (Meta)"
   },
   "antigravity_quota": {
     "title": "Antigravity 额度",
@@ -1189,7 +1201,14 @@
     "plan_team": "Team",
     "plan_free": "Free",
     "plan_pro": "Pro 20x",
-    "plan_prolite": "Pro 5x"
+    "plan_prolite": "Pro 5x",
+    "reset_credit_expiry_remaining_days": "剩余 {{days}} 天",
+    "reset_credit_expiry_remaining_days_other": "剩余 {{days}} 天",
+    "reset_credit_expiry_remaining_hours": "剩余 {{hours}} 小时",
+    "reset_credit_expiry_remaining_hours_other": "剩余 {{hours}} 小时",
+    "reset_credit_expiry_remaining_minutes": "剩余 {{minutes}} 分钟",
+    "reset_credit_expiry_remaining_minutes_other": "剩余 {{minutes}} 分钟",
+    "reset_credit_expiry_remaining_less_than_minute": "剩余 <1 分钟"
   },
   "kimi_quota": {
     "title": "Kimi 额度",
@@ -1512,7 +1531,21 @@
     "iflow_cookie_result_expired": "到期时间",
     "iflow_cookie_result_path": "保存路径",
     "iflow_cookie_result_type": "类型",
-    "remote_access_disabled": "远程访问不支持此登录方式，请从本地 (localhost) 访问"
+    "remote_access_disabled": "远程访问不支持此登录方式，请从本地 (localhost) 访问",
+    "meta_oauth_title": "Muse (Meta) OAuth",
+    "meta_oauth_button": "使用 Muse 登录",
+    "meta_oauth_hint": "打开授权链接，如有提示请输入设备码。授权完成后将自动获取并保存认证文件。",
+    "meta_oauth_url_label": "授权链接:",
+    "meta_open_link": "打开链接",
+    "meta_copy_link": "复制链接",
+    "meta_oauth_status_waiting": "等待认证中...",
+    "meta_oauth_status_success": "认证成功！",
+    "meta_oauth_status_error": "认证失败:",
+    "meta_oauth_start_error": "启动 Muse OAuth 失败:",
+    "meta_oauth_polling_error": "检查认证状态失败:",
+    "device_code_label": "设备码:",
+    "device_code_copy": "复制设备码",
+    "device_code_copied": "已复制设备码"
   },
   "model_prices": {
     "eyebrow": "模型价格",
@@ -3836,7 +3869,11 @@
     "claude_api_key": "Claude API密钥",
     "commercial_mode_restart_required": "商业模式开关已变更，请重启服务后生效",
     "copy_failed": "复制失败",
-    "link_copied": "已复制"
+    "link_copied": "已复制",
+    "meta_config_added": "Muse (Meta) 配置添加成功",
+    "meta_config_updated": "Muse (Meta) 配置更新成功",
+    "meta_config_deleted": "Muse (Meta) 配置删除成功",
+    "meta_base_url_required": "请填写 Meta Base URL"
   },
   "language": {
     "switch": "语言",
@@ -4010,5 +4047,22 @@
     "env_locked_hint": "该开关由服务启动环境锁定，请修改环境变量并重启。",
     "env_locked_reason": "由环境变量 {{envKey}} 锁定。修改该变量并重启服务后才能更改此开关。",
     "gating_note": "关闭某项策略只会影响之后发现的新问题；已经排队或正在处理的任务会继续完成。"
+  },
+  "meta_quota": {
+    "title": "Meta 额度",
+    "window": "当前窗口",
+    "weekly": "周额度",
+    "missing_identity": "Meta 凭据缺少文件名或 auth_index",
+    "missing_auth_index": "Meta 凭据缺少 auth_index",
+    "missing_file": "Meta 凭据文件不存在或无效",
+    "invalid_auth_file": "Meta 凭据文件格式无效",
+    "missing_dca_token": "Meta 凭据文件中缺少或存在无效的 DCA 令牌",
+    "download_failed": "下载 Meta 凭据文件失败",
+    "stale_request": "由于凭据或连接变更，Meta 额度请求已取消",
+    "request_failed": "请求 Meta 额度失败",
+    "invalid_response": "Meta 额度接口返回无效响应",
+    "idle": "点击此处刷新额度",
+    "loading": "正在加载额度...",
+    "refresh_button": "刷新额度"
   }
 }

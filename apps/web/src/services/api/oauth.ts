@@ -9,12 +9,14 @@ export type BuiltInOAuthProvider =
   | 'anthropic'
   | 'antigravity'
   | 'kimi'
-  | 'xai';
+  | 'xai'
+  | 'meta';
 export type OAuthProvider = BuiltInOAuthProvider | (string & {});
 
 export interface OAuthStartResponse {
   url: string;
   state?: string;
+  user_code?: string;
 }
 
 export interface OAuthCallbackResponse {

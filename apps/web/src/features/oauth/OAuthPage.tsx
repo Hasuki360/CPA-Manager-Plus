@@ -28,10 +28,12 @@ import iconKimiDark from '@/assets/icons/kimi-dark.svg';
 import iconVertex from '@/assets/icons/vertex.svg';
 import iconGrok from '@/assets/icons/grok.svg';
 import iconGrokDark from '@/assets/icons/grok-dark.svg';
+import iconMeta from '@/assets/icons/meta.svg';
 
 interface ProviderState {
   url?: string;
   state?: string;
+  userCode?: string;
   status?: 'idle' | 'waiting' | 'success' | 'error';
   error?: string;
   polling?: boolean;
@@ -127,6 +129,13 @@ const BUILT_IN_PROVIDERS: BuiltInProviderDefinition[] = [
     hintKey: 'auth_login.xai_oauth_hint',
     urlLabelKey: 'auth_login.xai_oauth_url_label',
     icon: { light: iconGrok, dark: iconGrokDark },
+  },
+  {
+    id: 'meta',
+    titleKey: 'auth_login.meta_oauth_title',
+    hintKey: 'auth_login.meta_oauth_hint',
+    urlLabelKey: 'auth_login.meta_oauth_url_label',
+    icon: iconMeta,
   },
 ];
 
@@ -461,6 +470,7 @@ export function OAuthPage() {
       updateProviderState(provider, {
         url: res.url,
         state: res.state,
+        userCode: res.user_code,
         status: 'waiting',
         polling: true,
       });
@@ -475,7 +485,18 @@ export function OAuthPage() {
     }
   };
 
-  const copyLink = async (url?: string) => {
+  const copyCode = async (code?: string) => {
+    if (!code) return;
+    const copied = await copyToClipboard(code);
+    showNotification(
+      t(copied ? 'auth_login.device_code_copied' : 'notification.copy_failed', {
+        defaultValue: copied ? t('notification.link_copied') : t('notification.copy_failed'),
+      }),
+      copied ? 'success' : 'error'
+    );
+  };
+
+  const copyLink = async (url: string) => {
     if (!url) return;
     const copied = await copyToClipboard(url);
     showNotification(
@@ -640,6 +661,27 @@ export function OAuthPage() {
               <div className={styles.authUrlBox}>
                 <div className={styles.authUrlLabel}>{provider.urlLabel}</div>
                 <div className={styles.authUrlValue}>{state.url}</div>
+                {state.userCode && (
+                  <div className={styles.deviceCodeSection}>
+                    <div className={styles.authUrlLabel}>{t('auth_login.device_code_label')}</div>
+                    <div className={styles.deviceCodeRow}>
+                      <span
+                        className={styles.deviceCodeValue}
+                        aria-label={t('auth_login.device_code_label')}
+                      >
+                        {state.userCode}
+                      </span>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => copyCode(state.userCode)}
+                        aria-label={t('auth_login.device_code_copy')}
+                      >
+                        {t('auth_login.device_code_copy')}
+                      </Button>
+                    </div>
+                  </div>
+                )}
                 <div className={styles.authUrlActions}>
                   <Button variant="secondary" size="sm" onClick={() => copyLink(state.url!)}>
                     {getProviderActionText(provider.id, 'copy_link')}
