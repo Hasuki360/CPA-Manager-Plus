@@ -478,3 +478,64 @@ func fileSize(t *testing.T, path string) int64 {
 	}
 	return info.Size()
 }
+
+func TestCompactUsageWithProgressStagesInOrder(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "usage.sqlite")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("open fixture: %v", err)
+	}
+	payload := strings.Repeat("x", 16*1024)
+	for index := 1; index <= 50; index++ {
+		if _, err := db.Exec(`insert into usage_events (
+			event_hash, timestamp_ms, timestamp, model, input_tokens, output_tokens,
+			total_tokens, raw_json, created_at_ms
+		) values (?, ?, ?, 'gpt-test', 10, 5, 15, ?, ?)`,
+			fmt.Sprintf("progress-event-%03d", index),
+			int64(index),
+			"1970-01-01T00:00:00Z",
+			payload,
+			int64(index),
+		); err != nil {
+			t.Fatalf("insert fixture event %d: %v", index, err)
+		}
+	}
+	if _, err := db.Exec(`delete from usage_events where id <= 30`); err != nil {
+		t.Fatalf("fragment fixture: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close fixture: %v", err)
+	}
+
+	var stages []CompactStage
+	result, err := CompactUsageWithProgress(context.Background(), path, func(s CompactStage) {
+		stages = append(stages, s)
+	})
+	if err != nil {
+		t.Fatalf("CompactUsageWithProgress() error = %v", err)
+	}
+	if !result.IntegrityVerified {
+		t.Fatal("integrity was not verified")
+	}
+	if result.Summary.UsageEventCount != 20 {
+		t.Fatalf("summary count = %d, want 20", result.Summary.UsageEventCount)
+	}
+
+	wantStages := []CompactStage{
+		CompactStagePrepare,
+		CompactStagePreflight,
+		CompactStageBaseline,
+		CompactStageCheckpoint,
+		CompactStageVacuum,
+		CompactStageVerify,
+		CompactStageFinalize,
+	}
+	if len(stages) != len(wantStages) {
+		t.Fatalf("stages count = %d, want %d: %#v", len(stages), len(wantStages), stages)
+	}
+	for i, want := range wantStages {
+		if stages[i] != want {
+			t.Fatalf("stage[%d] = %q, want %q; all stages: %#v", i, stages[i], want, stages)
+		}
+	}
+}

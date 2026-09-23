@@ -59,11 +59,43 @@ type CompactResult struct {
 	IntegrityVerified bool            `json:"integrity_verified"`
 }
 
+type CompactStage string
+
+const (
+	CompactStagePrepare    CompactStage = "prepare"
+	CompactStagePreflight  CompactStage = "preflight"
+	CompactStageBaseline   CompactStage = "baseline"
+	CompactStageCheckpoint CompactStage = "checkpoint"
+	CompactStageVacuum     CompactStage = "vacuum"
+	CompactStageVerify     CompactStage = "verify"
+	CompactStageFinalize   CompactStage = "finalize"
+)
+
+type CompactProgressFunc func(CompactStage)
+
+func reportCompactProgress(progress CompactProgressFunc, stage CompactStage) {
+	if progress != nil {
+		progress(stage)
+	}
+}
+
 // CompactUsage performs the offline physical compaction step only. The caller
 // must hold the process-level database lock for the resolved path for the full
 // call. CompactUsage never archives or deletes logical usage records and never
 // removes WAL, SHM, or archive files itself.
 func CompactUsage(ctx context.Context, path string) (CompactResult, error) {
+	return CompactUsageWithProgress(ctx, path, nil)
+}
+
+// CompactUsageWithProgress performs physical compaction and reports lifecycle
+// stages to progress if non-nil.
+func CompactUsageWithProgress(
+	ctx context.Context,
+	path string,
+	progress CompactProgressFunc,
+) (CompactResult, error) {
+	reportCompactProgress(progress, CompactStagePrepare)
+
 	dbPath, err := ResolveMaintenancePath(path)
 	if err != nil {
 		return CompactResult{}, err
@@ -120,6 +152,8 @@ func CompactUsage(ctx context.Context, path string) (CompactResult, error) {
 	}
 	defer rollback()
 
+	reportCompactProgress(progress, CompactStagePreflight)
+
 	if err := validateCPAMPDatabase(ctx, conn); err != nil {
 		return CompactResult{}, err
 	}
@@ -133,6 +167,8 @@ func CompactUsage(ctx context.Context, path string) (CompactResult, error) {
 		return CompactResult{}, err
 	}
 
+	reportCompactProgress(progress, CompactStageBaseline)
+
 	before, err := readPageStats(ctx, conn, "")
 	if err != nil {
 		return CompactResult{}, err
@@ -144,13 +180,21 @@ func CompactUsage(ctx context.Context, path string) (CompactResult, error) {
 	}
 	rollback()
 
+	reportCompactProgress(progress, CompactStageCheckpoint)
+
 	preCheckpoint, err := truncateCheckpoint(ctx, conn)
 	if err != nil {
 		return CompactResult{}, err
 	}
+
+	reportCompactProgress(progress, CompactStageVacuum)
+
 	if _, err := conn.ExecContext(ctx, `vacuum`); err != nil {
 		return CompactResult{}, classifyMaintenanceError("VACUUM usage database", err)
 	}
+
+	reportCompactProgress(progress, CompactStageVerify)
+
 	postCheckpoint, err := truncateCheckpoint(ctx, conn)
 	if err != nil {
 		return CompactResult{}, err
@@ -172,6 +216,9 @@ func CompactUsage(ctx context.Context, path string) (CompactResult, error) {
 	if beforeSummary != afterSummary {
 		return CompactResult{}, fmt.Errorf("%w: logical usage summary changed during compaction", ErrMaintenanceIntegrity)
 	}
+
+	reportCompactProgress(progress, CompactStageFinalize)
+
 	if err := conn.Close(); err != nil {
 		connOpen = false
 		return CompactResult{}, classifyMaintenanceError("close dedicated SQLite connection", err)

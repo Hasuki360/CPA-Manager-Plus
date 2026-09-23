@@ -125,7 +125,7 @@ docker compose run --rm --no-deps cpa-manager-plus \
 docker compose up -d cpa-manager-plus
 ```
 
-执行命令前必须停止所有连接该数据库的 Manager Server。进程级数据库锁会拒绝仍在运行的 Manager Server，SQLite 独占访问会拒绝冲突事务。任何维护锁或处于 `archiving`/`verifying`/`deleting` 的活动阶段也会阻断压缩；静态的 `previewed`、`archived`、`verified` 和 `failed` run 可以压缩。尚未完成的派生数据迁移 checkpoint 会被原样保留，服务重启后继续执行；`compact-usage` 不会推进、重置或重写这些 checkpoint。若维护锁属于可恢复的活动或 `failed` run，应先启动 Manager Server 并继续该 run；若锁仍关联非活动或终态 run，应保留备份和日志并停止压缩以进一步诊断，不得手工删除锁或 WAL。保留完整备份，并保守预留至少相当于当前数据库文件大小的临时可用空间。压缩后启动服务并检查 `/health`、`/status`、Dashboard、Usage Analytics 和用量维护页面；按上节方法解压一个归档样本并重新导入源数据库时应继续幂等跳过，而导入空的隔离恢复实例时应成功新增。
+执行命令前必须停止所有连接该数据库的 Manager Server。进程级数据库锁会拒绝仍在运行的 Manager Server，SQLite 独占访问会拒绝冲突事务。任何维护锁或处于 `archiving`/`verifying`/`deleting` 的活动阶段也会阻断压缩；静态的 `previewed`、`archived`、`verified` 和 `failed` run 可以压缩。尚未完成的派生数据迁移 checkpoint 会被原样保留，服务重启后继续执行；`compact-usage` 不会推进、重置或重写这些 checkpoint。若维护锁属于可恢复的活动或 `failed` run，应先启动 Manager Server 并继续该 run；若锁仍关联非活动或终态 run，应保留备份和日志并停止压缩以进一步诊断，不得手工删除锁或 WAL。保留完整备份。VACUUM 会重建数据库文件，执行前应保守预留最多约当前 usage.sqlite 大小 2 倍的可用磁盘空间，避免压缩过程中因临时空间不足失败。执行期间，compact-usage 会把当前阶段以及长耗时阶段的周期性运行状态输出到 stderr；最终 CompactResult JSON 仍只输出到 stdout，因此可以安全重定向 stdout 保存机器可读结果。压缩后启动服务并检查 `/health`、`/status`、Dashboard、Usage Analytics 和用量维护页面；按上节方法解压一个归档样本并重新导入源数据库时应继续幂等跳过，而导入空的隔离恢复实例时应成功新增。
 
 ## 不保留请求历史，只迁移 Manager 配置
 
