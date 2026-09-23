@@ -102,7 +102,7 @@ export function UsageMaintenanceAdvancedView({
               style={{
                 width: `${Math.max(2, Math.min(100, (storage.database_bytes / storage.total_bytes) * 100))}%`,
               }}
-              title={`Database: ${formatFileSize(storage.database_bytes)}`}
+              title={`${t('usage_maintenance.database')}: ${formatFileSize(storage.database_bytes)}`}
             />
             {storage.wal_bytes > 0 ? (
               <div
@@ -383,7 +383,7 @@ export function UsageMaintenanceAdvancedView({
         <dl className={styles.keyValues}>
           {(['page_size', 'page_count', 'freelist_count'] as const).map((key) => (
             <div key={key}>
-              <dt>{key}</dt>
+              <dt>{t(`usage_maintenance.storage_${key}`, { defaultValue: key })}</dt>
               <dd>{stale ? '—' : storage[key].toLocaleString(i18n.language)}</dd>
             </div>
           ))}
@@ -498,7 +498,13 @@ export function UsageMaintenanceDiagnosticsView({
           </div>
           <div>
             <dt>{t('usage_maintenance.maintenance_lock')}</dt>
-            <dd>{maintenance.active_lock?.operation ?? t('usage_maintenance.lock_idle')}</dd>
+            <dd>
+              {maintenance.active_lock
+                ? t(`usage_maintenance.operation_${maintenance.active_lock.operation}`, {
+                    defaultValue: maintenance.active_lock.operation,
+                  })
+                : t('usage_maintenance.lock_idle')}
+            </dd>
           </div>
           {maintenance.active_lock ? (
             <div>

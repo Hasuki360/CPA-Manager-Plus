@@ -121,7 +121,9 @@
     "model_alias_placeholder": "Псевдоним модели (необязательно)",
     "invalid_provider_index": "Неверный индекс провайдера.",
     "unsaved_changes_title": "Несохранённые изменения",
-    "unsaved_changes_message": "У вас есть несохранённые изменения. Если вы уйдёте, они будут потеряны. Выйти?"
+    "unsaved_changes_message": "У вас есть несохранённые изменения. Если вы уйдёте, они будут потеряны. Выйти?",
+    "clear": "Очистить",
+    "copied": "Скопировано"
   },
   "title": {
     "main": "CPA Manager Plus",
@@ -729,7 +731,29 @@
     "workspace_organize": "Обработка данных",
     "workspace_transfer": "Импорт / экспорт",
     "delete_guarantees_title": "Сохраняемые данные и гарантии",
-    "delete_limitations_title": "Ограничения и последствия"
+    "delete_limitations_title": "Ограничения и последствия",
+    "archive_retention_hint": "Сканирование и безопасное архивирование истории использования по политике хранения",
+    "online_range_subtitle": "Временной диапазон и охват текущих исходных онлайн-событий",
+    "advanced_compact_hint": "Физическое распределение файлов и автономное сжатие (VACUUM)",
+    "diagnostics_hint": "Готовность службы, фоновые блокировки и диагностика охвата",
+    "view_active_progress": "Нажмите, чтобы открыть панель прогресса активной задачи",
+    "cancel_published": "Опубликованный архив не может быть отменен в текущем состоянии. Продолжите процесс архивирования или оставьте архив на месте.",
+    "preview_space_expectation": "Ожидается около {{size}} высвобождаемого пространства. Примечание: физический размер файла SQLite не уменьшится мгновенно; требуется автономное сжатие во время обслуживания.",
+    "archive_prepare_verified": "Архив проверен",
+    "archive_prepare_idle": "Начать архивацию",
+    "advanced_sqlite_note_short": "Автономное сжатие освобождает дисковое пространство",
+    "reclaim_estimated_benefit": "Рекомендуется сжатие: ожидается уменьшение с {{total}} до ~{{compacted}}",
+    "search_runs_placeholder": "Поиск ID задачи / статуса…",
+    "no_matching_runs": "Совпадающих записей задач не найдено",
+    "no_archive_records": "Пока нет записей архивов",
+    "delete_confirm_acknowledgement_strong": "Я понимаю, что эта операция необратима:",
+    "delete_confirm_acknowledgement_text": "После удаления подробные онлайн-записи станут недоступны в панели, а физические файлы SQLite не уменьшатся сразу (для освобождения места необходимо выполнить сжатие офлайн).",
+    "run_id_copied": "ID задачи скопирован в буфер обмена",
+    "operation_archive": "Архивация",
+    "operation_delete": "Очистка записей",
+    "storage_page_size": "Размер страницы (Page Size)",
+    "storage_page_count": "Всего страниц (Page Count)",
+    "storage_freelist_count": "Свободные страницы (Freelist Count)"
   },
   "account_actions": {
     "eyebrow": "Проблемы аккаунтов",

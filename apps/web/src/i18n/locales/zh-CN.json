@@ -121,7 +121,9 @@
     "model_alias_placeholder": "模型别名 (可选)",
     "invalid_provider_index": "无效的提供商索引。",
     "unsaved_changes_title": "未保存的更改",
-    "unsaved_changes_message": "你有未保存的更改，离开后将丢失这些更改。确定要离开吗？"
+    "unsaved_changes_message": "你有未保存的更改，离开后将丢失这些更改。确定要离开吗？",
+    "clear": "清空",
+    "copied": "已复制"
   },
   "title": {
     "main": "CPA Manager Plus",
@@ -723,7 +725,29 @@
     "workspace_organize": "数据整理",
     "workspace_transfer": "导入 / 导出",
     "delete_guarantees_title": "安全保障与保留项",
-    "delete_limitations_title": "影响与受限说明"
+    "delete_limitations_title": "影响与受限说明",
+    "archive_retention_hint": "按保留期扫描并安全归档历史用量明细",
+    "online_range_subtitle": "当前在线原始事件时间跨度与覆盖范围",
+    "advanced_compact_hint": "物理文件存储分布与离线收缩 (VACUUM)",
+    "diagnostics_hint": "服务就绪状态、后台锁与覆盖率诊断",
+    "view_active_progress": "点击展开任务进度抽屉",
+    "cancel_published": "已发布的归档无法在当前状态下放弃；请继续既有归档流程或保留现有归档。",
+    "preview_space_expectation": "预计将产生约 {{size}} 可回收空间。注意：SQLite 物理磁盘体积不会即时缩小，需在维护窗口执行离线收缩释放物理空间。",
+    "archive_prepare_verified": "归档已校验",
+    "archive_prepare_idle": "开始归档",
+    "advanced_sqlite_note_short": "离线收缩可释放磁盘空间",
+    "reclaim_estimated_benefit": "建议收缩：预计可从 {{total}} 释放至约 {{compacted}}",
+    "search_runs_placeholder": "搜索任务 ID / 状态…",
+    "no_matching_runs": "未找到匹配的任务记录",
+    "no_archive_records": "暂无归档记录",
+    "delete_confirm_acknowledgement_strong": "我已知晓此操作不可逆：",
+    "delete_confirm_acknowledgement_text": "在线明细删除后将无法从管理面板中查询，且 SQLite 物理磁盘文件不会即时收缩（需在离线维护期执行收缩命令释放空间）。",
+    "run_id_copied": "已复制任务 ID 到剪贴板",
+    "operation_archive": "归档",
+    "operation_delete": "清理在线明细",
+    "storage_page_size": "页面大小 (Page Size)",
+    "storage_page_count": "页面总数 (Page Count)",
+    "storage_freelist_count": "空闲页数 (Freelist Count)"
   },
   "account_actions": {
     "eyebrow": "账号异常",

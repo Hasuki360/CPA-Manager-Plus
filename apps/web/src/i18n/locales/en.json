@@ -121,7 +121,9 @@
     "model_alias_placeholder": "Model alias (optional)",
     "invalid_provider_index": "Invalid provider index.",
     "unsaved_changes_title": "Unsaved changes",
-    "unsaved_changes_message": "You have unsaved changes. Leaving now will discard them. Do you want to leave?"
+    "unsaved_changes_message": "You have unsaved changes. Leaving now will discard them. Do you want to leave?",
+    "clear": "Clear",
+    "copied": "Copied"
   },
   "title": {
     "main": "CPA Manager Plus",
@@ -725,7 +727,29 @@
     "workspace_organize": "Organize data",
     "workspace_transfer": "Import / export",
     "delete_guarantees_title": "Safety Guarantees & Preserved Data",
-    "delete_limitations_title": "Impact & Operational Limitations"
+    "delete_limitations_title": "Impact & Operational Limitations",
+    "archive_retention_hint": "Scan and safely archive historical usage events based on retention policy",
+    "online_range_subtitle": "Time span and coverage range of current online raw events",
+    "advanced_compact_hint": "Physical storage layout and offline compaction (VACUUM)",
+    "diagnostics_hint": "Service readiness, background locks, and coverage diagnostics",
+    "view_active_progress": "Click to expand active task progress drawer",
+    "cancel_published": "This published archive cannot be abandoned in its current state. Continue the existing archive workflow or leave the archive in place.",
+    "preview_space_expectation": "Estimated ~{{size}} reclaimable space. Note: SQLite physical disk size will not shrink immediately; offline compaction during maintenance is required to release disk space.",
+    "archive_prepare_verified": "Archive Verified",
+    "archive_prepare_idle": "Start Archive",
+    "advanced_sqlite_note_short": "Offline compaction reclaims disk space",
+    "reclaim_estimated_benefit": "Compaction recommended: expected to shrink from {{total}} to ~{{compacted}}",
+    "search_runs_placeholder": "Search task ID / status…",
+    "no_matching_runs": "No matching task records found",
+    "no_archive_records": "No archive records yet",
+    "delete_confirm_acknowledgement_strong": "I understand this operation is irreversible:",
+    "delete_confirm_acknowledgement_text": "Online raw events will no longer be queryable from the panel after deletion, and SQLite physical disk files will not shrink immediately (compaction must be run offline to release space).",
+    "run_id_copied": "Task ID copied to clipboard",
+    "operation_archive": "Archive",
+    "operation_delete": "Clean up raw events",
+    "storage_page_size": "Page Size",
+    "storage_page_count": "Page Count",
+    "storage_freelist_count": "Freelist Pages"
   },
   "account_actions": {
     "eyebrow": "Account issues",

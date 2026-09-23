@@ -223,7 +223,7 @@ export function UsageMaintenanceOverviewView({
               <div className={styles.reclaimHighlight}>
                 <span>
                   {t('usage_maintenance.reclaim_estimated_benefit', {
-                    defaultValue: `建议收缩：预计可从 ${formatFileSize(maintenance.storage.total_bytes)} 释放至约 ${formatFileSize(Math.max(0, maintenance.storage.total_bytes - maintenance.storage.reclaimable_bytes))}`,
+                    defaultValue: 'Compaction recommended: expected to shrink from {{total}} to ~{{compacted}}',
                     total: formatFileSize(maintenance.storage.total_bytes),
                     compacted: formatFileSize(
                       Math.max(
@@ -302,9 +302,9 @@ const useCopyId = () => {
     async (id: string) => {
       const copied = await copyToClipboard(id);
       showNotification(
-        t(copied ? 'notification.link_copied' : 'notification.copy_failed', {
-          defaultValue: copied ? '已复制任务 ID 到剪贴板' : '复制失败',
-        }),
+        copied
+          ? t('usage_maintenance.run_id_copied', { defaultValue: 'Task ID copied to clipboard' })
+          : t('notification.copy_failed', { defaultValue: 'Copy failed' }),
         copied ? 'success' : 'error'
       );
     },
@@ -830,7 +830,10 @@ export function UsageArchiveRunView({
             <div>
               <dt>{t('usage_maintenance.lock_title')}</dt>
               <dd>
-                {maintenance.active_lock.operation} · {maintenance.active_lock.run_id}
+                {t(`usage_maintenance.operation_${maintenance.active_lock.operation}`, {
+                  defaultValue: maintenance.active_lock.operation,
+                })}{' '}
+                · {maintenance.active_lock.run_id}
               </dd>
             </div>
           ) : null}

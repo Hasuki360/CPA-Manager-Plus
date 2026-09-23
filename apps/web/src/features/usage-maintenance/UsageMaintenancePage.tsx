@@ -2118,7 +2118,9 @@ export function UsageMaintenancePage() {
                   }
                 >
                   {working
-                    ? t(`usage_maintenance.archive_prepare_${guidedArchiveStage}`)
+                    ? t(`usage_maintenance.archive_prepare_${guidedArchiveStage}`, {
+                        defaultValue: guidedArchiveStage,
+                      })
                     : t('common.next')}
                 </Button>
               </>

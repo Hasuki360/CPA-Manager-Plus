@@ -121,7 +121,9 @@
     "model_alias_placeholder": "模型別名（選填）",
     "invalid_provider_index": "無效的供應商索引。",
     "unsaved_changes_title": "未儲存的變更",
-    "unsaved_changes_message": "你有未儲存的變更，離開後將遺失這些變更。確定要離開嗎？"
+    "unsaved_changes_message": "你有未儲存的變更，離開後將遺失這些變更。確定要離開嗎？",
+    "clear": "清空",
+    "copied": "已複製"
   },
   "title": {
     "main": "CPA Manager Plus",
@@ -723,7 +725,29 @@
     "workspace_organize": "資料整理",
     "workspace_transfer": "匯入 / 匯出",
     "delete_guarantees_title": "安全保障與保留項",
-    "delete_limitations_title": "影響與受限說明"
+    "delete_limitations_title": "影響與受限說明",
+    "archive_retention_hint": "按保留期掃描並安全封存歷史用量明細",
+    "online_range_subtitle": "目前線上原始事件時間跨度與涵蓋範圍",
+    "advanced_compact_hint": "實體檔案儲存分布與離線收縮 (VACUUM)",
+    "diagnostics_hint": "服務就緒狀態、背景鎖與涵蓋率診斷",
+    "view_active_progress": "點擊展開工作進度抽屜",
+    "cancel_published": "已發布的封存無法在目前狀態下放棄；請繼續現有封存流程或保留現有封存。",
+    "preview_space_expectation": "預計將產生約 {{size}} 可回收空間。注意：SQLite 實體磁碟容量不會即時縮小，需在維護時段執行離線收縮釋放實體空間。",
+    "archive_prepare_verified": "封存已校驗",
+    "archive_prepare_idle": "開始封存",
+    "advanced_sqlite_note_short": "離線收縮可釋放磁碟空間",
+    "reclaim_estimated_benefit": "建議收縮：預計可從 {{total}} 釋放至約 {{compacted}}",
+    "search_runs_placeholder": "搜尋工作 ID / 狀態…",
+    "no_matching_runs": "未找到相符的工作記錄",
+    "no_archive_records": "暫無封存記錄",
+    "delete_confirm_acknowledgement_strong": "我已知悉此操作不可逆：",
+    "delete_confirm_acknowledgement_text": "線上明細刪除後將無法從管理面板查詢，且 SQLite 實體磁碟檔案不會即時縮小（需在離線維護期執行收縮命令釋放空間）。",
+    "run_id_copied": "已複製工作 ID 到剪貼簿",
+    "operation_archive": "封存",
+    "operation_delete": "清理線上明細",
+    "storage_page_size": "分頁大小 (Page Size)",
+    "storage_page_count": "分頁總數 (Page Count)",
+    "storage_freelist_count": "閒置分頁數 (Freelist Count)"
   },
   "account_actions": {
     "eyebrow": "帳號異常",
