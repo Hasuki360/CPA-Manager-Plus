@@ -224,8 +224,9 @@
   i {
     display: block;
     height: 100%;
-    background: linear-gradient(90deg, var(--data-blue-base, #3b82f6), var(--data-cyan-base, #06b6d4));
+    background: var(--primary-color);
     border-radius: $radius-full;
+    transition: width 0.3s ease;
   }
 }
 
