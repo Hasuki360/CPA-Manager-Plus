@@ -41,6 +41,7 @@ import type {
   CredentialScopedQuotaState,
   DevinQuotaState,
   KimiQuotaState,
+  MetaQuotaState,
   XaiQuotaState,
 } from '@/types';
 import type { ModelInfo } from '@/utils/models';
@@ -67,6 +68,7 @@ export type DemoQuotaStoreState = {
   codexQuota: Record<string, CodexQuotaState>;
   devinQuota: Record<string, DevinQuotaState>;
   kimiQuota: Record<string, KimiQuotaState>;
+  metaQuota: Record<string, MetaQuotaState>;
   xaiQuota: Record<string, XaiQuotaState>;
 };
 
@@ -766,6 +768,17 @@ const initialRawConfig: Record<string, unknown> = {
       weight: 2,
       websockets: true,
       models: [{ name: 'grok-4.5', alias: 'Grok Team' }],
+    },
+  ],
+  'meta-api-key': [
+    {
+      'api-key': 'meta-demo-team-key',
+      'auth-index': 'meta-api-team-01',
+      prefix: 'meta-team',
+      'base-url': 'https://api.meta.ai/v1',
+      priority: 15,
+      weight: 3,
+      models: [{ name: 'llama-3.3-70b-instruct', alias: 'Meta Llama 3.3' }],
     },
   ],
   'claude-api-key': [
@@ -6186,6 +6199,7 @@ export const getDemoUsageServiceStatus = (): UsageServiceStatus => ({
 const getDemoQuotaStoreStateByFileName = (
   baseNow = getDemoEvidenceEpochMs()
 ): DemoQuotaStoreState => ({
+  metaQuota: {},
   codexQuota: {
     'codex-team-01.json': {
       status: 'success',
@@ -6884,6 +6898,7 @@ export const getDemoQuotaStoreState = (baseNow = getDemoEvidenceEpochMs()): Demo
     codexQuota: scopeDemoQuotaRecord(raw.codexQuota, filesByName),
     devinQuota: scopeDemoQuotaRecord(raw.devinQuota, filesByName),
     kimiQuota: scopeDemoQuotaRecord(raw.kimiQuota, filesByName),
+    metaQuota: scopeDemoQuotaRecord(raw.metaQuota, filesByName),
     xaiQuota: scopeDemoQuotaRecord(raw.xaiQuota, filesByName),
   };
 };
