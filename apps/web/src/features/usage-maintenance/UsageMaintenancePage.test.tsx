@@ -2799,7 +2799,7 @@ describe('maintenance workspace navigation and continuous operations', () => {
       },
     });
     const renderer = await renderHistoryPage(highReclaimMaintenance, []);
-    expect(getText(renderer.root)).toContain('建议收缩：预计可从');
+    expect(getText(renderer.root)).toContain('Compaction recommended: expected to shrink from');
     act(() => renderer.unmount());
   });
 
