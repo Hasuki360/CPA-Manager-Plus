@@ -4049,6 +4049,93 @@ func TestAnalyticsWithoutRawDeletionRetainsProjectionOptimization(t *testing.T) 
 	}
 }
 
+func TestAnalyticsArchivedDrilldownPreviewUsesRawEvents(t *testing.T) {
+	db := newMonitoringTestStore(t)
+	ctx := context.Background()
+	fromMS := time.Date(2026, time.August, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
+	toMS := fromMS + 2*time.Hour.Milliseconds()
+
+	// In preview range [fromMS, fromMS + 1h):
+	// 1 event archived and deleted, 1 retained raw event
+	// Outside preview range:
+	// 1 event in [fromMS + 1h, toMS)
+	events := []usage.Event{
+		monitoringEvent("archived-1", fromMS+10*time.Minute.Milliseconds(), "gpt-a", "auth-1", "src-1", false, 10, 2, 0, 0, 12, nil),
+		monitoringEvent("retained-1", fromMS+40*time.Minute.Milliseconds(), "gpt-b", "auth-2", "src-2", false, 20, 3, 0, 0, 23, nil),
+		monitoringEvent("main-event", fromMS+90*time.Minute.Milliseconds(), "gpt-a", "auth-1", "src-1", false, 30, 4, 0, 0, 34, nil),
+	}
+	for i := range events {
+		events[i].AccountSnapshot = "user@example.com"
+		events[i].AuthFileSnapshot = "user.json"
+	}
+	if _, err := db.InsertEvents(ctx, events); err != nil {
+		t.Fatalf("insert events: %v", err)
+	}
+
+	catchUpMonitoringArchiveDeleteReadiness(t, ctx, db)
+	// Archive through fromMS + 30m: archives and deletes archived-1 (at 10m), but keeps retained-1 (at 40m)
+	archiveMonitoringEventsThrough(t, ctx, db, fromMS+30*time.Minute.Milliseconds())
+
+	resp, err := New(db, true).Analytics(ctx, Request{
+		FromMS: fromMS,
+		ToMS:   toMS,
+		Include: Include{
+			Summary:        true,
+			SummaryProfile: "compact",
+			DrilldownPreview: &DrilldownPreview{
+				FromMS: fromMS,
+				ToMS:   fromMS + time.Hour.Milliseconds(),
+				Limit:  10,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("analytics: %v", err)
+	}
+
+	if resp.DrilldownPreview == nil {
+		t.Fatalf("drilldown preview is nil")
+	}
+	// Preview range had 1 archived+deleted event and 1 retained raw event.
+	// Verify DrilldownPreview.Items only contains retained raw event, not the archived projection row.
+	if len(resp.DrilldownPreview.Items) != 1 {
+		t.Fatalf("drilldown preview items len = %d, want 1, items: %#v", len(resp.DrilldownPreview.Items), resp.DrilldownPreview.Items)
+	}
+	if resp.DrilldownPreview.Items[0].EventHash != testCanonicalHash("retained-1") {
+		t.Fatalf("drilldown preview items[0] hash = %s, want retained-1", resp.DrilldownPreview.Items[0].EventHash)
+	}
+	if resp.DrilldownPreview.TotalCount != 1 {
+		t.Fatalf("drilldown preview total count = %d, want 1", resp.DrilldownPreview.TotalCount)
+	}
+
+	// Filtered preview scenario: filter by model "gpt-b" (retained)
+	respFiltered, err := New(db, true).Analytics(ctx, Request{
+		FromMS: fromMS,
+		ToMS:   toMS,
+		Filters: Filters{
+			Models: []string{"gpt-b"},
+		},
+		Include: Include{
+			Summary:        true,
+			SummaryProfile: "compact",
+			DrilldownPreview: &DrilldownPreview{
+				FromMS: fromMS,
+				ToMS:   fromMS + time.Hour.Milliseconds(),
+				Limit:  10,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("filtered analytics: %v", err)
+	}
+	if respFiltered.DrilldownPreview == nil || len(respFiltered.DrilldownPreview.Items) != 1 {
+		t.Fatalf("filtered drilldown preview = %#v, want 1 item", respFiltered.DrilldownPreview)
+	}
+	if respFiltered.DrilldownPreview.Items[0].EventHash != testCanonicalHash("retained-1") {
+		t.Fatalf("filtered drilldown items[0] hash = %s, want retained-1", respFiltered.DrilldownPreview.Items[0].EventHash)
+	}
+}
+
 func archiveMonitoringEventsThrough(t *testing.T, ctx context.Context, db *store.Store, cutoffTimestampMS int64) {
 	t.Helper()
 	archiveService := usageservice.New(db, usageservice.WithArchive(usageservice.ArchiveConfig{

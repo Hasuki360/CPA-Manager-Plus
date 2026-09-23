@@ -949,6 +949,7 @@ func (s *Service) analytics(ctx context.Context, req Request) (Response, error) 
 		comparisonRawCoverage = &coverage
 	}
 	auxiliaryRawCoverage := make([]analyticsAuxiliaryCoverage, 0, 2)
+	var drilldownRawCoverage *store.UsageArchiveRawCoverage
 	if req.Include.Summary && !compactSummary {
 		rollingFromMS := nowMS - recentWindowMS
 		if rollingFromMS > 0 {
@@ -967,6 +968,7 @@ func (s *Service) analytics(ctx context.Context, req Request) (Response, error) 
 		if coverageErr != nil {
 			return Response{}, coverageErr
 		}
+		drilldownRawCoverage = &coverage
 		auxiliaryRawCoverage = append(auxiliaryRawCoverage, analyticsAuxiliaryCoverage{
 			Scope:    "drilldown_preview",
 			Coverage: coverage,
@@ -1505,7 +1507,27 @@ func (s *Service) analytics(ctx context.Context, req Request) (Response, error) 
 			if limit > maxDrilldownLimit {
 				limit = maxDrilldownLimit
 			}
-			page, err := s.eventsPage(ctx, previewFilter, 0, 0, limit)
+			var (
+				page store.EventsPage
+				err  error
+			)
+			if drilldownRawCoverage != nil && drilldownRawCoverage.RawDeletedEventCount > 0 {
+				page, err = s.store.EventsPageWithFilter(
+					ctx,
+					previewFilter,
+					0,
+					0,
+					limit,
+				)
+			} else {
+				page, err = s.eventsPage(
+					ctx,
+					previewFilter,
+					0,
+					0,
+					limit,
+				)
+			}
 			if err != nil {
 				return Response{}, err
 			}
