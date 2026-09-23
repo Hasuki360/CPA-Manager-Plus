@@ -1018,6 +1018,9 @@ func Migrate(db *sql.DB) error {
 			return err
 		}
 	}
+	if err := ensureUsageArchiveDeletedCoverageDaily(db); err != nil {
+		return err
+	}
 	if err := ensureUsageAccountModelRollupPrimaryKeys(db); err != nil {
 		return err
 	}
@@ -1073,6 +1076,40 @@ func Migrate(db *sql.DB) error {
 		return err
 	}
 	return ensureModelPriceColumns(db)
+}
+
+// Create and backfill the deleted-raw summary atomically. Existing databases
+// pay for the indexed GROUP BY once; an interrupted migration retries safely.
+func ensureUsageArchiveDeletedCoverageDaily(db *sql.DB) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var exists int
+	if err := tx.QueryRow(`select count(*) from sqlite_master
+		where type = 'table' and name = 'usage_archive_deleted_coverage_daily'`).Scan(&exists); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`create table if not exists usage_archive_deleted_coverage_daily (
+		utc_day integer primary key,
+		deleted_event_count integer not null,
+		min_timestamp_ms integer not null,
+		max_timestamp_ms integer not null
+	)`); err != nil {
+		return err
+	}
+	if exists == 0 {
+		if _, err := tx.Exec(`insert into usage_archive_deleted_coverage_daily (
+			utc_day, deleted_event_count, min_timestamp_ms, max_timestamp_ms
+		) select timestamp_ms / 86400000, count(*), min(timestamp_ms), max(timestamp_ms)
+		from usage_archive_event_refs
+		where raw_deleted_at_ms is not null
+		group by timestamp_ms / 86400000`); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func ensureLegacyQuotaSnapshotMigrationState(db *sql.DB) error {

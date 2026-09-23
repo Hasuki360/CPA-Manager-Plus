@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/model"
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/usageprojection"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usage"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usageidentity"
 )
@@ -62,12 +63,14 @@ type CatchUpResult struct {
 }
 
 type HourlyFilter struct {
-	FromMS          int64
-	ToMS            int64
-	Models          []string
-	IncludeFailed   bool
-	FailedOnly      bool
-	CollapseBuckets bool
+	FromMS           int64
+	ToMS             int64
+	Models           []string
+	IncludeFailed    bool
+	FailedOnly       bool
+	CollapseBuckets  bool
+	LeftEdgeDeleted  bool
+	RightEdgeDeleted bool
 }
 
 type HourlyRow struct {
@@ -795,12 +798,26 @@ func (r *repository) LoadHourlyRowsTx(ctx context.Context, tx *sql.Tx, filter Ho
 		}
 	}
 	if filter.FromMS < fullStartMS {
-		if err := mergeRawHourlyRows(ctx, tx, filter, filter.FromMS, min(fullStartMS, filter.ToMS), 0, false, grouped); err != nil {
+		fromMS, toMS := filter.FromMS, min(fullStartMS, filter.ToMS)
+		var err error
+		if filter.LeftEdgeDeleted {
+			err = mergeRetainedEdgeHourlyRows(ctx, tx, filter, fromMS, toMS, grouped)
+		} else {
+			err = mergeRawHourlyRows(ctx, tx, filter, fromMS, toMS, 0, false, grouped)
+		}
+		if err != nil {
 			return nil, State{}, false, err
 		}
 	}
 	if fullEndMS < filter.ToMS {
-		if err := mergeRawHourlyRows(ctx, tx, filter, max(fullEndMS, filter.FromMS), filter.ToMS, 0, false, grouped); err != nil {
+		fromMS, toMS := max(fullEndMS, filter.FromMS), filter.ToMS
+		var err error
+		if filter.RightEdgeDeleted {
+			err = mergeRetainedEdgeHourlyRows(ctx, tx, filter, fromMS, toMS, grouped)
+		} else {
+			err = mergeRawHourlyRows(ctx, tx, filter, fromMS, toMS, 0, false, grouped)
+		}
+		if err != nil {
 			return nil, State{}, false, err
 		}
 	}
@@ -851,6 +868,15 @@ func mergeRawHourlyRows(
 	grouped map[hourlyKey]*HourlyRow,
 ) error {
 	query, args := rawHourlyStatement(filter, fromMS, toMS, afterID, useAfterID)
+	return mergeHourlyEventRows(ctx, tx, query, args, grouped)
+}
+
+func mergeRetainedEdgeHourlyRows(ctx context.Context, tx *sql.Tx, filter HourlyFilter, fromMS, toMS int64, grouped map[hourlyKey]*HourlyRow) error {
+	query, args := hourlyStatementFromEvents(filter, fromMS, toMS, 0, false, usageprojection.RetainedEdgeSource(fromMS, toMS))
+	return mergeHourlyEventRows(ctx, tx, query, args, grouped)
+}
+
+func mergeHourlyEventRows(ctx context.Context, tx *sql.Tx, query string, args []any, grouped map[hourlyKey]*HourlyRow) error {
 	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return err

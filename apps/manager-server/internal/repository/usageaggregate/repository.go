@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/usageprojection"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usage"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usageidentity"
 )
@@ -77,12 +78,14 @@ type CatchUpResult struct {
 }
 
 type Filter struct {
-	FromMS          int64
-	ToMS            int64
-	Models          []string
-	IncludeFailed   bool
-	FailedOnly      bool
-	CollapseBuckets bool
+	FromMS           int64
+	ToMS             int64
+	Models           []string
+	IncludeFailed    bool
+	FailedOnly       bool
+	CollapseBuckets  bool
+	LeftEdgeDeleted  bool
+	RightEdgeDeleted bool
 }
 
 type Row struct {
@@ -375,12 +378,26 @@ func (r *repository) LoadRowsTx(ctx context.Context, tx *sql.Tx, filter Filter) 
 		return nil, State{}, false, err
 	}
 	if filter.FromMS < fullStartMS {
-		if err := mergeRawRows(ctx, tx, filter, filter.FromMS, min(fullStartMS, filter.ToMS), 0, "", false, false, grouped); err != nil {
+		fromMS, toMS := filter.FromMS, min(fullStartMS, filter.ToMS)
+		var err error
+		if filter.LeftEdgeDeleted {
+			err = mergeRetainedEdgeRows(ctx, tx, filter, fromMS, toMS, grouped)
+		} else {
+			err = mergeRawRows(ctx, tx, filter, fromMS, toMS, 0, "", false, false, grouped)
+		}
+		if err != nil {
 			return nil, State{}, false, err
 		}
 	}
 	if fullEndMS < filter.ToMS {
-		if err := mergeRawRows(ctx, tx, filter, max(fullEndMS, filter.FromMS), filter.ToMS, 0, "", false, false, grouped); err != nil {
+		fromMS, toMS := max(fullEndMS, filter.FromMS), filter.ToMS
+		var err error
+		if filter.RightEdgeDeleted {
+			err = mergeRetainedEdgeRows(ctx, tx, filter, fromMS, toMS, grouped)
+		} else {
+			err = mergeRawRows(ctx, tx, filter, fromMS, toMS, 0, "", false, false, grouped)
+		}
+		if err != nil {
 			return nil, State{}, false, err
 		}
 	}
@@ -650,6 +667,15 @@ func mergeStoredRows(ctx context.Context, tx *sql.Tx, filter Filter, fromMS, toM
 
 func mergeRawRows(ctx context.Context, tx *sql.Tx, filter Filter, fromMS, toMS, afterID int64, structureRevision string, excludeAggregated bool, preferEventIDScan bool, grouped map[rowKey]*Row) error {
 	query, args := rawRowsStatement(filter, fromMS, toMS, afterID, structureRevision, excludeAggregated, preferEventIDScan)
+	return mergeEventRows(ctx, tx, query, args, grouped)
+}
+
+func mergeRetainedEdgeRows(ctx context.Context, tx *sql.Tx, filter Filter, fromMS, toMS int64, grouped map[rowKey]*Row) error {
+	query, args := rawRowsStatementFromSource(filter, fromMS, toMS, 0, "", false, false, usageprojection.RetainedEdgeSource(fromMS, toMS))
+	return mergeEventRows(ctx, tx, query, args, grouped)
+}
+
+func mergeEventRows(ctx context.Context, tx *sql.Tx, query string, args []any, grouped map[rowKey]*Row) error {
 	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return err
@@ -659,8 +685,12 @@ func mergeRawRows(ctx context.Context, tx *sql.Tx, filter Filter, fromMS, toMS, 
 }
 
 func rawRowsStatement(filter Filter, fromMS, toMS, afterID int64, structureRevision string, excludeAggregated bool, preferEventIDScan bool) (string, []any) {
+	return rawRowsStatementFromSource(filter, fromMS, toMS, afterID, structureRevision, excludeAggregated, preferEventIDScan, "usage_events")
+}
+
+func rawRowsStatementFromSource(filter Filter, fromMS, toMS, afterID int64, structureRevision string, excludeAggregated bool, preferEventIDScan bool, source string) (string, []any) {
 	conditions, args := rawConditions(filter, fromMS, toMS, afterID, structureRevision, excludeAggregated)
-	tableExpr := "usage_events"
+	tableExpr := source
 	if afterID > 0 && preferEventIDScan {
 		tableExpr = "usage_events not indexed"
 	}

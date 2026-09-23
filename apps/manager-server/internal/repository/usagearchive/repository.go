@@ -21,6 +21,7 @@ import (
 const (
 	SchemaVersion     = usage.ArchiveSchemaVersion
 	FormatGzipJSONLV1 = "gzip-jsonl-v1"
+	utcDayMS          = int64(24 * 60 * 60 * 1000)
 
 	StatusPreviewed = "previewed"
 	StatusArchiving = "archiving"
@@ -574,12 +575,29 @@ func (r *Repository) RawCoverage(ctx context.Context, fromTimestampMS, toTimesta
 		return RawCoverage{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	fullFromDay := (fromTimestampMS + utcDayMS - 1) / utcDayMS
+	fullToDay := toTimestampMS / utcDayMS
+	leftEnd, rightStart := toTimestampMS, toTimestampMS
+	if fullFromDay < fullToDay {
+		leftEnd = fullFromDay * utcDayMS
+		rightStart = fullToDay * utcDayMS
+	}
 	if err := tx.QueryRowContext(ctx, `select
-		count(*),
-		coalesce(min(timestamp_ms), 0),
-		coalesce(max(timestamp_ms), 0)
-	from usage_archive_event_refs
-	where timestamp_ms >= ? and timestamp_ms < ? and raw_deleted_at_ms is not null`, fromTimestampMS, toTimestampMS).Scan(
+		coalesce(sum(event_count), 0),
+		coalesce(min(case when event_count > 0 then min_ms end), 0),
+		coalesce(max(case when event_count > 0 then max_ms end), 0)
+	from (
+		select deleted_event_count as event_count, min_timestamp_ms as min_ms, max_timestamp_ms as max_ms
+		from usage_archive_deleted_coverage_daily where utc_day >= ? and utc_day < ?
+		union all
+		select count(*), min(timestamp_ms), max(timestamp_ms)
+		from usage_archive_event_refs
+		where timestamp_ms >= ? and timestamp_ms < ? and raw_deleted_at_ms is not null
+		union all
+		select count(*), min(timestamp_ms), max(timestamp_ms)
+		from usage_archive_event_refs
+		where timestamp_ms >= ? and timestamp_ms < ? and raw_deleted_at_ms is not null
+	)`, fullFromDay, fullToDay, fromTimestampMS, leftEnd, rightStart, toTimestampMS).Scan(
 		&coverage.RawDeletedEventCount,
 		&coverage.MinDeletedTimestampMS,
 		&coverage.MaxDeletedTimestampMS,
@@ -596,6 +614,20 @@ func (r *Repository) RawCoverage(ctx context.Context, fromTimestampMS, toTimesta
 		return RawCoverage{}, err
 	}
 	return coverage, nil
+}
+
+// HasDeletedRaw is used only for partial-hour routing after the enclosing
+// request has already established that deleted raw exists somewhere in range.
+func (r *Repository) HasDeletedRaw(ctx context.Context, fromTimestampMS, toTimestampMS int64) (bool, error) {
+	if fromTimestampMS >= toTimestampMS {
+		return false, nil
+	}
+	var exists bool
+	err := r.db.QueryRowContext(ctx, `select exists (
+		select 1 from usage_archive_event_refs
+		where timestamp_ms >= ? and timestamp_ms < ? and raw_deleted_at_ms is not null
+	)`, fromTimestampMS, toTimestampMS).Scan(&exists)
+	return exists, err
 }
 
 func (r *Repository) RawEventCount(ctx context.Context, fromTimestampMS, toTimestampMS int64) (int64, error) {
@@ -1153,7 +1185,7 @@ func (r *Repository) DeleteBatch(ctx context.Context, runID string, limit int, n
 	if err != nil {
 		return DeleteBatchResult{}, err
 	}
-	rows, err := tx.QueryContext(ctx, `select e.id, archived.event_hash
+	rows, err := tx.QueryContext(ctx, `select e.id, archived.event_hash, e.timestamp_ms
 	from usage_events e
 	join usage_archive_event_refs archived
 		on archived.raw_event_id = e.id and archived.event_hash = e.event_hash
@@ -1176,13 +1208,14 @@ func (r *Repository) DeleteBatch(ctx context.Context, runID string, limit int, n
 		return DeleteBatchResult{}, err
 	}
 	type deleteCandidate struct {
-		ID        int64
-		EventHash string
+		ID          int64
+		EventHash   string
+		TimestampMS int64
 	}
 	candidates := make([]deleteCandidate, 0, min(limit, 1024))
 	for rows.Next() {
 		var candidate deleteCandidate
-		if err := rows.Scan(&candidate.ID, &candidate.EventHash); err != nil {
+		if err := rows.Scan(&candidate.ID, &candidate.EventHash, &candidate.TimestampMS); err != nil {
 			_ = rows.Close()
 			return DeleteBatchResult{}, err
 		}
@@ -1195,6 +1228,8 @@ func (r *Repository) DeleteBatch(ctx context.Context, runID string, limit int, n
 	if err := rows.Close(); err != nil {
 		return DeleteBatchResult{}, err
 	}
+	type dailyDeleted struct{ count, minMS, maxMS int64 }
+	daily := make(map[int64]dailyDeleted)
 	for _, candidate := range candidates {
 		result, err := tx.ExecContext(ctx, `delete from usage_events
 			where id = ? and event_hash = ?`, candidate.ID, candidate.EventHash)
@@ -1243,6 +1278,28 @@ func (r *Repository) DeleteBatch(ctx context.Context, runID string, limit int, n
 		}
 		if updatedRef != 1 {
 			return DeleteBatchResult{}, fmt.Errorf("%w: archive event reference %d disappeared during delete", ErrCoverageIncomplete, candidate.ID)
+		}
+		day := candidate.TimestampMS / utcDayMS
+		entry := daily[day]
+		if entry.count == 0 || candidate.TimestampMS < entry.minMS {
+			entry.minMS = candidate.TimestampMS
+		}
+		if entry.count == 0 || candidate.TimestampMS > entry.maxMS {
+			entry.maxMS = candidate.TimestampMS
+		}
+		entry.count++
+		daily[day] = entry
+	}
+	for day, entry := range daily {
+		if _, err := tx.ExecContext(ctx, `insert into usage_archive_deleted_coverage_daily (
+			utc_day, deleted_event_count, min_timestamp_ms, max_timestamp_ms
+		) values (?, ?, ?, ?)
+		on conflict(utc_day) do update set
+			deleted_event_count = deleted_event_count + excluded.deleted_event_count,
+			min_timestamp_ms = min(min_timestamp_ms, excluded.min_timestamp_ms),
+			max_timestamp_ms = max(max_timestamp_ms, excluded.max_timestamp_ms)`,
+			day, entry.count, entry.minMS, entry.maxMS); err != nil {
+			return DeleteBatchResult{}, err
 		}
 	}
 	lastID := run.LastDeletedEventID

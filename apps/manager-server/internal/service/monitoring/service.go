@@ -1023,16 +1023,20 @@ func (s *Service) analytics(ctx context.Context, req Request) (Response, error) 
 	needsHourlyTimeline := req.Include.Timeline || req.Include.AnomalyPoints
 	hourlyTimelineRepresentable := rollupEligible && needsHourlyTimeline && s.hourlyReader.CanRepresentAnalyticsTimeline(req.FromMS, req.ToMS, granularity, location)
 	needsHourlyCore := needsHourlyAggregates || hourlyTimelineRepresentable
-	preferProjectionForArchivedEdges := rawCoverage.RawDeletedEventCount > 0 && !utcHourAlignedRange(req.FromMS, req.ToMS)
 	var hourlySnapshot usagehourly.Snapshot
 	hourlySnapshotAvailable := false
-	if rollupEligible && needsHourlyCore && !preferProjectionForArchivedEdges {
+	if rollupEligible && needsHourlyCore {
+		edges, edgeErr := s.deletedHourlyEdges(ctx, req.FromMS, req.ToMS, rawCoverage.RawDeletedEventCount > 0)
+		if edgeErr != nil {
+			return Response{}, edgeErr
+		}
 		hourlySnapshot, hourlySnapshotAvailable = s.hourlyReader.LoadAnalytics(
 			ctx,
 			filter,
 			granularity,
 			location,
 			hourlyTimelineRepresentable,
+			edges,
 		)
 		if hourlySnapshot.ReadError != nil {
 			return Response{}, hourlySnapshot.ReadError
@@ -1311,16 +1315,19 @@ func (s *Service) analytics(ctx context.Context, req Request) (Response, error) 
 				var prevModelStats []store.ModelStat
 				var prevSnapshot usagehourly.Snapshot
 				prevSnapshotAvailable := false
-				preferProjectionForComparisonEdges := comparisonRawCoverage != nil &&
-					comparisonRawCoverage.RawDeletedEventCount > 0 &&
-					!utcHourAlignedRange(comparisonFromMS, comparisonToMS)
-				if rollupEligible && !preferProjectionForComparisonEdges {
+				if rollupEligible {
+					edges, edgeErr := s.deletedHourlyEdges(ctx, comparisonFromMS, comparisonToMS,
+						comparisonRawCoverage != nil && comparisonRawCoverage.RawDeletedEventCount > 0)
+					if edgeErr != nil {
+						return Response{}, edgeErr
+					}
 					prevSnapshot, prevSnapshotAvailable = s.hourlyReader.LoadAnalytics(
 						ctx,
 						prevFilter,
 						granularity,
 						location,
 						false,
+						edges,
 					)
 					if prevSnapshot.ReadError != nil {
 						return Response{}, prevSnapshot.ReadError
@@ -1712,9 +1719,28 @@ func summaryComparisonRange(req Request) (int64, int64, bool) {
 	return previousFromMS, req.FromMS, true
 }
 
-func utcHourAlignedRange(fromMS, toMS int64) bool {
+func (s *Service) deletedHourlyEdges(ctx context.Context, fromMS, toMS int64, hasDeletedRaw bool) (usagehourly.DeletedEdges, error) {
+	edges := usagehourly.DeletedEdges{}
+	if !hasDeletedRaw {
+		return edges, nil
+	}
 	const hourMS = int64(time.Hour / time.Millisecond)
-	return fromMS%hourMS == 0 && toMS%hourMS == 0
+	fullStartMS := (fromMS + hourMS - 1) / hourMS * hourMS
+	fullEndMS := toMS / hourMS * hourMS
+	if fullStartMS >= fullEndMS {
+		return edges, nil
+	}
+	var err error
+	if fromMS < fullStartMS {
+		edges.Left, err = s.store.UsageArchives.HasDeletedRaw(ctx, fromMS, fullStartMS)
+		if err != nil {
+			return edges, err
+		}
+	}
+	if fullEndMS < toMS {
+		edges.Right, err = s.store.UsageArchives.HasDeletedRaw(ctx, fullEndMS, toMS)
+	}
+	return edges, err
 }
 
 func (s *Service) AccountHistory(ctx context.Context, req AccountHistoryRequest) (AccountHistoryResponse, error) {

@@ -196,6 +196,7 @@ func TestUsageArchiveMigrationIsAdditiveAndStartupBoundedWithLargeLedger(t *test
 	}
 	for _, statement := range []string{
 		`drop table usage_maintenance_locks`,
+		`drop table usage_archive_deleted_coverage_daily`,
 		`drop table usage_archive_event_refs`,
 		`drop table usage_archive_segments`,
 		`drop table usage_archive_runs`,
@@ -219,6 +220,7 @@ func TestUsageArchiveMigrationIsAdditiveAndStartupBoundedWithLargeLedger(t *test
 		"usage_archive_runs",
 		"usage_archive_segments",
 		"usage_archive_event_refs",
+		"usage_archive_deleted_coverage_daily",
 		"usage_maintenance_locks",
 	} {
 		var count int
@@ -3992,6 +3994,63 @@ func TestMigrationDevDBWithoutArchiveMetadataSucceeds(t *testing.T) {
 	// Verify core tables exist and can be queried
 	for _, table := range []string{"usage_events", "usage_hourly_aggregate_v1", "usage_pricing_hourly_rollups_v1"} {
 		assertTableCount(t, db, table, 0)
+	}
+}
+
+func TestMigrationBackfillsDeletedArchiveCoverageOnce(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "deleted-coverage.sqlite")
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []string{
+		`insert into usage_archive_runs(id, mode, schema_version, format, status, cutoff_timestamp_ms,
+			target_event_id, event_count, created_at_ms, updated_at_ms)
+		values('coverage-run', 'manual', 1, 'jsonl.gz', 'completed', 300000000, 3, 3, 1, 1)`,
+		`insert into usage_archive_segments(run_id, sequence, status, file_name, first_event_id,
+			last_event_id, min_timestamp_ms, max_timestamp_ms, event_count, uncompressed_bytes,
+			compressed_bytes, content_sha256, event_hash_digest, created_at_ms)
+		values('coverage-run', 1, 'published', 'coverage-segment', 1, 3, 1000, 172801000, 3, 1, 1, 'sha', 'digest', 1)`,
+		`insert into usage_event_identity_ledger(event_hash, timestamp_ms, bucket_ms, first_seen_at_ms, updated_at_ms)
+		values('coverage-1', 1000, 0, 1, 1), ('coverage-2', 86401000, 86400000, 1, 1),
+			('coverage-3', 172801000, 172800000, 1, 1)`,
+		`insert into usage_archive_event_refs(event_hash, run_id, segment_sequence, raw_event_id,
+			timestamp_ms, archived_at_ms, raw_deleted_at_ms)
+		values('coverage-1', 'coverage-run', 1, 1, 1000, 1, 2),
+			('coverage-2', 'coverage-run', 1, 2, 86401000, 1, null),
+			('coverage-3', 'coverage-run', 1, 3, 172801000, 1, 2)`,
+		`drop table usage_archive_deleted_coverage_daily`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatalf("prepare legacy archive metadata: %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for reopen := 0; reopen < 2; reopen++ {
+		db, err = Open(dbPath)
+		if err != nil {
+			t.Fatalf("open legacy database: %v", err)
+		}
+		var count, minMS, maxMS int64
+		if err := db.QueryRow(`select coalesce(sum(deleted_event_count), 0),
+			coalesce(min(min_timestamp_ms), 0), coalesce(max(max_timestamp_ms), 0)
+			from usage_archive_deleted_coverage_daily`).Scan(&count, &minMS, &maxMS); err != nil {
+			t.Fatal(err)
+		}
+		var exactCount, exactMinMS, exactMaxMS int64
+		if err := db.QueryRow(`select count(*), coalesce(min(timestamp_ms), 0), coalesce(max(timestamp_ms), 0)
+			from usage_archive_event_refs where raw_deleted_at_ms is not null`).Scan(
+			&exactCount, &exactMinMS, &exactMaxMS); err != nil {
+			t.Fatal(err)
+		}
+		if count != exactCount || minMS != exactMinMS || maxMS != exactMaxMS || count != 2 {
+			t.Fatalf("reopen %d daily coverage = (%d,%d,%d)", reopen, count, minMS, maxMS)
+		}
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

@@ -20,6 +20,7 @@ import (
 	sqliterepo "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/sqlite"
 	monitoringrepo "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/usagemonitoring"
 	usageservice "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/usage"
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/usagehourly"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/store"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usage"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usageidentity"
@@ -3590,6 +3591,324 @@ func TestAnalyticsReportsArchivedCoverageAndKeepsProjectionBackedCoreExact(t *te
 	}
 	if rawOnlyCore.Coverage == nil || !slices.Contains(rawOnlyCore.Coverage.FidelityLimitations, "core_metrics_require_raw_events") {
 		t.Fatalf("raw-only core coverage = %#v", rawOnlyCore.Coverage)
+	}
+}
+
+func TestAnalyticsArchivedPartialHourKeepsHourlyCore(t *testing.T) {
+	db := newMonitoringTestStore(t)
+	ctx := context.Background()
+	start := time.Date(2026, time.August, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
+	events := []usage.Event{
+		monitoringEvent("left-deleted", start+10_000, "gpt-a", "auth-1", "src", false, 10, 2, 0, 0, 12, nil),
+		monitoringEvent("middle-hour", start+time.Hour.Milliseconds()+10_000, "gpt-a", "auth-1", "src", false, 20, 3, 0, 0, 23, nil),
+		monitoringEvent("right-raw", start+3*time.Hour.Milliseconds()+10_000, "gpt-b", "auth-1", "src", true, 30, 4, 0, 0, 34, nil),
+	}
+	if _, err := db.InsertEvents(ctx, events); err != nil {
+		t.Fatalf("insert events: %v", err)
+	}
+	catchUpMonitoringArchiveDeleteReadiness(t, ctx, db)
+	archiveMonitoringEventsThrough(t, ctx, db, start+time.Hour.Milliseconds())
+	filter := store.AnalyticsFilter{
+		FromMS:        start + 1_000,
+		ToMS:          start + 3*time.Hour.Milliseconds() + 30_000,
+		IncludeFailed: true,
+	}
+	snapshot, available := usagehourly.New(db, true).LoadAnalytics(ctx, filter, "hour", time.UTC, true,
+		usagehourly.DeletedEdges{Left: true})
+	if !available || snapshot.Aggregate.TotalCalls != 3 {
+		t.Fatalf("hourly reader missed archived edge: available=%t aggregate=%#v error=%v", available, snapshot.Aggregate, snapshot.ReadError)
+	}
+	response, err := New(db, true).Analytics(ctx, Request{
+		FromMS: start + 1_000,
+		ToMS:   start + 3*time.Hour.Milliseconds() + 30_000,
+		NowMS:  start + 4*time.Hour.Milliseconds(),
+		Include: Include{
+			Summary:        true,
+			SummaryProfile: "compact",
+			ModelStats:     true,
+			Timeline:       true,
+			Granularity:    "hour",
+		},
+	})
+	if err != nil {
+		t.Fatalf("archived analytics: %v", err)
+	}
+	if response.Coverage == nil || !response.Coverage.CoreAggregateUsed {
+		t.Fatalf("hourly core was skipped for archived partial edge: %#v", response.Coverage)
+	}
+}
+
+func TestAnalyticsHourlyDeletedEdgeRouting(t *testing.T) {
+	const hourMS = int64(time.Hour / time.Millisecond)
+	start := time.Date(2026, time.August, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
+	tests := []struct {
+		name       string
+		initial    string
+		late       string
+		cutoffHour int64
+		aligned    bool
+		want       usagehourly.DeletedEdges
+	}{
+		{"no deleted raw", "lmr", "", 0, false, usagehourly.DeletedEdges{}},
+		{"deleted aligned range", "lmr", "", 1, true, usagehourly.DeletedEdges{}},
+		{"left deleted", "lmr", "", 1, false, usagehourly.DeletedEdges{Left: true}},
+		{"right deleted", "mr", "l", 4, false, usagehourly.DeletedEdges{Right: true}},
+		{"both deleted", "lmr", "", 4, false, usagehourly.DeletedEdges{Left: true, Right: true}},
+		{"deleted only in full hour", "m", "lr", 2, false, usagehourly.DeletedEdges{}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			db := newMonitoringTestStore(t)
+			ctx := context.Background()
+			if err := db.SaveModelPrices(ctx, map[string]store.ModelPrice{"gpt-a": {Prompt: 2, Completion: 4}}); err != nil {
+				t.Fatal(err)
+			}
+			makeEvents := func(slots string, suffix string) []usage.Event {
+				events := make([]usage.Event, 0, len(slots))
+				for _, slot := range slots {
+					at := map[rune]int64{'l': 10_000, 'm': hourMS + 10_000, 'r': 3*hourMS + 10_000}[slot]
+					events = append(events, monitoringEvent(tc.name+suffix+string(slot), start+at,
+						"gpt-a", "auth-1", "source-a", slot == 'r', 100, 20, 0, 0, 120, nil))
+				}
+				return events
+			}
+			if _, err := db.InsertEvents(ctx, makeEvents(tc.initial, "initial")); err != nil {
+				t.Fatal(err)
+			}
+			catchUpMonitoringArchiveDeleteReadiness(t, ctx, db)
+			if tc.cutoffHour > 0 {
+				archiveMonitoringEventsThrough(t, ctx, db, start+tc.cutoffHour*hourMS)
+			}
+			if tc.late != "" {
+				if _, err := db.InsertEvents(ctx, makeEvents(tc.late, "late")); err != nil {
+					t.Fatal(err)
+				}
+				catchUpMonitoringHourlyRollup(t, ctx, db)
+			}
+			fromMS, toMS := start+1_000, start+3*hourMS+30_000
+			if tc.aligned {
+				fromMS, toMS = start, start+4*hourMS
+			}
+			coverage, err := db.UsageArchives.RawCoverage(ctx, fromMS, toMS)
+			if err != nil {
+				t.Fatal(err)
+			}
+			service := New(db, true)
+			edges, err := service.deletedHourlyEdges(ctx, fromMS, toMS, coverage.RawDeletedEventCount > 0)
+			if err != nil || edges != tc.want {
+				t.Fatalf("deleted edges = %#v, want %#v, error=%v", edges, tc.want, err)
+			}
+			filter := store.AnalyticsFilter{FromMS: fromMS, ToMS: toMS, IncludeFailed: true}
+			snapshot, available := usagehourly.New(db, true).LoadAnalytics(ctx, filter, "hour", time.UTC, true, edges)
+			if !available || snapshot.Aggregate.TotalCalls != 3 || snapshot.Aggregate.FailureCalls != 1 {
+				t.Fatalf("hourly snapshot = %#v, available=%t", snapshot, available)
+			}
+			response, err := service.Analytics(ctx, Request{
+				FromMS: fromMS, ToMS: toMS, NowMS: toMS,
+				Include: Include{Summary: true, SummaryProfile: "compact", ModelStats: true, Timeline: true, Granularity: "hour"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if response.Summary == nil || response.Summary.TotalCalls != 3 || response.Summary.FailureCalls != 1 ||
+				response.Summary.TotalCost <= 0 || len(response.ModelStats) != 1 || response.ModelStats[0].Calls != 3 {
+				t.Fatalf("analytics response = %#v", response)
+			}
+		})
+	}
+}
+
+func TestAnalyticsHourlyCoreMatchesAfterArchiveDeleteAndCompact(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "usage.sqlite")
+	db, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	start := time.Date(2026, time.August, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
+	hourMS := int64(time.Hour / time.Millisecond)
+	if err := db.SaveModelPrices(ctx, map[string]store.ModelPrice{
+		"gpt-a": {Prompt: 2, Completion: 4},
+		"gpt-b": {Prompt: 3, Completion: 5},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	events := []usage.Event{
+		monitoringEvent("compact-left", start+10_000, "gpt-a", "auth-1", "source-a", false, 100, 20, 0, 0, 120, nil),
+		monitoringEvent("compact-middle-a", start+hourMS+10_000, "gpt-b", "auth-1", "source-a", true, 200, 30, 0, 0, 230, nil),
+		monitoringEvent("compact-middle-b", start+2*hourMS+10_000, "gpt-a", "auth-1", "source-a", false, 300, 40, 0, 0, 340, nil),
+		monitoringEvent("compact-right", start+3*hourMS+10_000, "gpt-b", "auth-1", "source-a", false, 400, 50, 0, 0, 450, nil),
+	}
+	if _, err := db.InsertEvents(ctx, events); err != nil {
+		t.Fatal(err)
+	}
+	catchUpMonitoringArchiveDeleteReadiness(t, ctx, db)
+	req := Request{
+		FromMS: start + 1_000, ToMS: start + 3*hourMS + 30_000,
+		NowMS: start + 4*hourMS,
+		Include: Include{Summary: true, SummaryProfile: "compact", ModelStats: true,
+			ModelShare: true, Timeline: true, Granularity: "hour"},
+	}
+	before, err := New(db, true).Analytics(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archiveMonitoringEventsThrough(t, ctx, db, start+hourMS)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sqliterepo.CompactUsage(ctx, dbPath); err != nil {
+		t.Fatalf("offline compact: %v", err)
+	}
+	db, err = store.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := New(db, true).Analytics(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.Summary == nil || after.Summary == nil || !reflect.DeepEqual(before.Summary, after.Summary) {
+		t.Fatalf("summary changed after archive/delete/compact: before=%#v after=%#v", before.Summary, after.Summary)
+	}
+	if before.Summary.TotalCost <= 0 || before.Summary.FailureCalls != 1 ||
+		!reflect.DeepEqual(before.ModelStats, after.ModelStats) || !reflect.DeepEqual(before.ModelShare, after.ModelShare) {
+		t.Fatalf("model and pricing totals changed: before=%#v after=%#v", before, after)
+	}
+	if len(before.Timeline) != len(after.Timeline) {
+		t.Fatalf("timeline length changed: before=%#v after=%#v", before.Timeline, after.Timeline)
+	}
+	for index := range before.Timeline {
+		want, got := before.Timeline[index], after.Timeline[index]
+		want.P95LatencyMS, want.P95TTFTMS = nil, nil
+		got.P95LatencyMS, got.P95TTFTMS = nil, nil
+		if !reflect.DeepEqual(want, got) {
+			t.Fatalf("timeline bucket %d changed: before=%#v after=%#v", index, want, got)
+		}
+	}
+	if after.Coverage == nil || after.Coverage.RawDeletedEventCount != 1 || !after.Coverage.CoreAggregateUsed {
+		t.Fatalf("archived coverage = %#v", after.Coverage)
+	}
+}
+
+func BenchmarkAnalyticsArchived100kLongRange(b *testing.B) {
+	ctx := context.Background()
+	dbPath := filepath.Join(b.TempDir(), "archived-analytics.sqlite")
+	sqlDB, err := sqliterepo.Open(dbPath)
+	if err != nil {
+		b.Fatal(err)
+	}
+	db := store.New(sqlDB)
+	start := time.Date(2026, time.August, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
+	duration := int64(30 * 24 * time.Hour / time.Millisecond)
+	if err := db.SaveModelPrices(ctx, map[string]store.ModelPrice{"gpt-a": {Prompt: 2, Completion: 4}}); err != nil {
+		b.Fatal(err)
+	}
+	if _, err := sqlDB.Exec(`with digits(value) as (values (0),(1),(2),(3),(4),(5),(6),(7),(8),(9)),
+		numbers(value) as (
+			select a.value + 10*b.value + 100*c.value + 1000*d.value + 10000*e.value
+			from digits a cross join digits b cross join digits c cross join digits d cross join digits e
+		)
+		insert into usage_events(event_hash, timestamp_ms, timestamp, model, requested_model,
+			input_tokens, output_tokens, total_tokens, created_at_ms)
+		select printf('benchmark-%06d', value), ? + value * ? / 100000, cast(value as text),
+			'gpt-a', 'gpt-a', 100, 20, 120, ? + value * ? / 100000
+		from numbers`, start, duration, start, duration); err != nil {
+		b.Fatalf("seed 100k usage events: %v", err)
+	}
+	for _, catchUp := range []struct {
+		name string
+		run  func(context.Context, int, int64) (bool, error)
+	}{
+		{"hourly core", func(ctx context.Context, limit int, nowMS int64) (bool, error) {
+			result, err := db.CatchUpUsageHourlyAggregate(ctx, limit, nowMS)
+			return result.Pending, err
+		}},
+		{"pricing", func(ctx context.Context, limit int, nowMS int64) (bool, error) {
+			result, err := db.CatchUpUsagePricing(ctx, limit, nowMS)
+			return result.Pending, err
+		}},
+		{"projection", func(ctx context.Context, limit int, nowMS int64) (bool, error) {
+			result, err := db.CatchUpUsageMonitoringProjection(ctx, limit, nowMS)
+			return result.Pending, err
+		}},
+	} {
+		for {
+			pending, err := catchUp.run(ctx, 10_000, start+duration+1_000)
+			if err != nil {
+				b.Fatalf("catch up %s: %v", catchUp.name, err)
+			}
+			if !pending {
+				break
+			}
+		}
+	}
+	req := Request{FromMS: start + 1, ToMS: start + duration - 1, NowMS: start + duration,
+		Include: Include{Summary: true, SummaryProfile: "compact", ModelStats: true}}
+	uncleaned := New(db, true)
+	b.Run("uncleaned_hourly", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			response, err := uncleaned.Analytics(ctx, req)
+			if err != nil || response.Summary == nil || response.Summary.TotalCalls != 99_999 {
+				b.Fatalf("uncleaned sanity check: summary=%v error=%v", response.Summary, err)
+			}
+		}
+	})
+	for _, statement := range []string{
+		`insert into usage_archive_runs(id, mode, schema_version, format, status, cutoff_timestamp_ms,
+			target_event_id, event_count, created_at_ms, updated_at_ms)
+		values('benchmark-archive', 'manual', 1, 'gzip-jsonl-v1', 'completed', 1, 100000, 100000, 1, 1)`,
+		`insert into usage_archive_segments(run_id, sequence, status, file_name, first_event_id,
+			last_event_id, min_timestamp_ms, max_timestamp_ms, event_count, uncompressed_bytes,
+			compressed_bytes, content_sha256, event_hash_digest, created_at_ms)
+		values('benchmark-archive', 1, 'verified', 'benchmark-segment', 1, 100000, 1, 1,
+			100000, 1, 1, 'sha', 'digest', 1)`,
+		`insert into usage_archive_event_refs(event_hash, run_id, segment_sequence, raw_event_id,
+			timestamp_ms, archived_at_ms, raw_deleted_at_ms)
+		select event_hash, 'benchmark-archive', 1, id, timestamp_ms, 1, 2 from usage_events`,
+		`update usage_event_identity_ledger set raw_event_id = null`,
+		`delete from usage_events`,
+		`insert into usage_archive_deleted_coverage_daily
+			select timestamp_ms / 86400000, count(*), min(timestamp_ms), max(timestamp_ms)
+			from usage_archive_event_refs group by timestamp_ms / 86400000`,
+	} {
+		if _, err := sqlDB.Exec(statement); err != nil {
+			b.Fatalf("prepare archived fixture: %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		b.Fatal(err)
+	}
+	if _, err := sqliterepo.CompactUsage(ctx, dbPath); err != nil {
+		b.Fatalf("compact archived fixture: %v", err)
+	}
+	db, err = store.Open(dbPath)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer db.Close()
+	for _, candidate := range []struct {
+		name    string
+		enabled bool
+	}{
+		{"projection_fallback", false},
+		{"hybrid_hourly", true},
+	} {
+		service := New(db, candidate.enabled)
+		response, err := service.Analytics(ctx, req)
+		if err != nil || response.Summary == nil || response.Summary.TotalCalls != 99_999 {
+			b.Fatalf("%s sanity check: calls=%v error=%v", candidate.name, response.Summary, err)
+		}
+		b.Run(candidate.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				if _, err := service.Analytics(ctx, req); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }
 

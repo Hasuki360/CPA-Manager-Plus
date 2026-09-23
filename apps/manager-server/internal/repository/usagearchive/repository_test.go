@@ -272,6 +272,14 @@ func TestRepositoryArchiveVerifyResumeAndBoundedDelete(t *testing.T) {
 		coverage.MinDeletedTimestampMS != 1_000 || coverage.MaxDeletedTimestampMS != 2_000 {
 		t.Fatalf("raw coverage = %#v", coverage)
 	}
+	var dailyCount, dailyMin, dailyMax int64
+	if err := db.QueryRow(`select deleted_event_count, min_timestamp_ms, max_timestamp_ms
+		from usage_archive_deleted_coverage_daily where utc_day = 0`).Scan(&dailyCount, &dailyMin, &dailyMax); err != nil {
+		t.Fatalf("read daily deleted coverage: %v", err)
+	}
+	if dailyCount != 2 || dailyMin != 1_000 || dailyMax != 2_000 {
+		t.Fatalf("daily deleted coverage = (%d,%d,%d)", dailyCount, dailyMin, dailyMax)
+	}
 	counts, err := repository.MaintenanceCounts(ctx)
 	if err != nil {
 		t.Fatalf("read maintenance counts: %v", err)
@@ -1780,6 +1788,159 @@ func openArchiveTestDB(t *testing.T) *sql.DB {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	return db
+}
+
+func BenchmarkRawCoverage100k(b *testing.B) {
+	for _, deleted := range []bool{false, true} {
+		name := "uncleaned"
+		if deleted {
+			name = "deleted"
+		}
+		b.Run(name, func(b *testing.B) {
+			db, err := sql.Open("sqlite", filepath.Join(b.TempDir(), "coverage.sqlite"))
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer db.Close()
+			for _, statement := range []string{
+				`create table usage_events (id integer primary key, timestamp_ms integer not null)`,
+				`create table usage_archive_event_refs (event_hash text primary key, timestamp_ms integer not null, raw_deleted_at_ms integer)`,
+				`create index idx_usage_archive_event_refs_timestamp_deleted on usage_archive_event_refs(timestamp_ms, raw_deleted_at_ms)`,
+				`create table usage_archive_deleted_coverage_daily (utc_day integer primary key, deleted_event_count integer not null, min_timestamp_ms integer not null, max_timestamp_ms integer not null)`,
+			} {
+				if _, err := db.Exec(statement); err != nil {
+					b.Fatal(err)
+				}
+			}
+			start := time.Date(2026, time.August, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
+			tx, err := db.Begin()
+			if err != nil {
+				b.Fatal(err)
+			}
+			insert, err := tx.Prepare(`insert into usage_archive_event_refs(event_hash, timestamp_ms, raw_deleted_at_ms) values (?, ?, ?)`)
+			if err != nil {
+				b.Fatal(err)
+			}
+			insertRaw, err := tx.Prepare(`insert into usage_events(id, timestamp_ms) values (?, ?)`)
+			if err != nil {
+				b.Fatal(err)
+			}
+			for i := 0; i < 100_000; i++ {
+				var deletedAt any
+				if deleted {
+					deletedAt = start + 31*24*time.Hour.Milliseconds()
+				}
+				timestampMS := start + int64(i)*30*24*time.Hour.Milliseconds()/100_000
+				if _, err := insert.Exec(fmt.Sprintf("event-%d", i), timestampMS, deletedAt); err != nil {
+					b.Fatal(err)
+				}
+				if _, err := insertRaw.Exec(i+1, timestampMS); err != nil {
+					b.Fatal(err)
+				}
+			}
+			if err := insert.Close(); err != nil {
+				b.Fatal(err)
+			}
+			if err := insertRaw.Close(); err != nil {
+				b.Fatal(err)
+			}
+			if err := tx.Commit(); err != nil {
+				b.Fatal(err)
+			}
+			if deleted {
+				if _, err := db.Exec(`delete from usage_events`); err != nil {
+					b.Fatal(err)
+				}
+			}
+			if _, err := db.Exec(`insert into usage_archive_deleted_coverage_daily
+				select timestamp_ms / 86400000, count(*), min(timestamp_ms), max(timestamp_ms)
+				from usage_archive_event_refs where raw_deleted_at_ms is not null group by timestamp_ms / 86400000`); err != nil {
+				b.Fatal(err)
+			}
+			if _, err := db.Exec(`vacuum`); err != nil {
+				b.Fatal(err)
+			}
+			coverage := New(db)
+			fromMS, toMS := start+1_000, start+30*24*time.Hour.Milliseconds()-1_000
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if _, err := coverage.RawCoverage(context.Background(), fromMS, toMS); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func TestRawCoverageDailyAndPartialEdgesMatchExactRefs(t *testing.T) {
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "coverage.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, statement := range []string{
+		`create table usage_events (id integer primary key, timestamp_ms integer not null)`,
+		`create index usage_events_timestamp on usage_events(timestamp_ms)`,
+		`create table usage_archive_event_refs (event_hash text primary key, timestamp_ms integer not null, raw_deleted_at_ms integer)`,
+		`create index idx_usage_archive_event_refs_timestamp_deleted on usage_archive_event_refs(timestamp_ms, raw_deleted_at_ms)`,
+		`create table usage_archive_deleted_coverage_daily (utc_day integer primary key, deleted_event_count integer not null, min_timestamp_ms integer not null, max_timestamp_ms integer not null)`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	start := time.Date(2026, time.August, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
+	day := int64(24 * time.Hour / time.Millisecond)
+	assertExact := func(name string, fromMS, toMS int64) {
+		t.Helper()
+		t.Run(name, func(t *testing.T) {
+			got, err := New(db).RawCoverage(context.Background(), fromMS, toMS)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var count, minMS, maxMS int64
+			if err := db.QueryRow(`select count(*), coalesce(min(timestamp_ms), 0), coalesce(max(timestamp_ms), 0)
+				from usage_archive_event_refs where raw_deleted_at_ms is not null and timestamp_ms >= ? and timestamp_ms < ?`,
+				fromMS, toMS).Scan(&count, &minMS, &maxMS); err != nil {
+				t.Fatal(err)
+			}
+			if got.RawDeletedEventCount != count || got.MinDeletedTimestampMS != minMS || got.MaxDeletedTimestampMS != maxMS {
+				t.Fatalf("coverage = %#v, exact=(%d,%d,%d)", got, count, minMS, maxMS)
+			}
+		})
+	}
+	assertExact("no archive", start, start+day)
+	if _, err := db.Exec(`insert into usage_archive_event_refs values ('undeleted', ?, null)`, start+10); err != nil {
+		t.Fatal(err)
+	}
+	assertExact("archive without deletion", start, start+day)
+	for i, timestamp := range []int64{
+		start + 20, start + day/2, start + day + 20, start + 2*day + 100,
+		start + 3*day + 300, start + 3*day + day/2, start + 4*day + 50,
+	} {
+		if _, err := db.Exec(`insert into usage_archive_event_refs values (?, ?, 1)`, fmt.Sprintf("deleted-%d", i), timestamp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.Exec(`insert into usage_archive_deleted_coverage_daily
+		select timestamp_ms / 86400000, count(*), min(timestamp_ms), max(timestamp_ms)
+		from usage_archive_event_refs where raw_deleted_at_ms is not null group by timestamp_ms / 86400000`); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name         string
+		fromMS, toMS int64
+	}{
+		{"deleted raw", start, start + 5*day},
+		{"one full UTC day", start + day, start + 2*day},
+		{"multiple full UTC days", start + day, start + 4*day},
+		{"partial first day", start + day + 10, start + 4*day},
+		{"partial last day", start + day, start + 4*day + 100},
+		{"both partial days", start + 10, start + 4*day + 100},
+		{"daily and edge refs", start + day/2 + 1, start + 4*day + 51},
+	} {
+		assertExact(tc.name, tc.fromMS, tc.toMS)
+	}
 }
 
 func archiveTestExec(t *testing.T, db *sql.DB, statement string, args ...any) {
