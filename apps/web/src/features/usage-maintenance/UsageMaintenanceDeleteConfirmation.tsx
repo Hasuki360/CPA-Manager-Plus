@@ -80,11 +80,11 @@ export function UsageMaintenanceDeleteConfirmation({
                 {remainingEventCount.toLocaleString(i18n.language)}
               </span>
               <span className={styles.metricUnit}>
-                {t('usage_maintenance.events_suffix', { defaultValue: '条明细' })}
+                {t('usage_maintenance.events_suffix', { defaultValue: 'events' })}
               </span>
               <span className={styles.scopeBadge}>
                 {remainingEventCount === run.event_count
-                  ? t('usage_maintenance.meta_cleaned_all', { defaultValue: '全量清理' })
+                  ? t('usage_maintenance.meta_cleaned_all', { defaultValue: 'Archived · Raw cleaned' })
                   : `${remainingEventCount.toLocaleString(i18n.language)} / ${run.event_count.toLocaleString(i18n.language)}`}
               </span>
             </div>
@@ -164,7 +164,7 @@ export function UsageMaintenanceDeleteConfirmation({
             </div>
             <span className={styles.cardTitleSuccess}>
               {t('usage_maintenance.delete_guarantees_title', {
-                defaultValue: '安全保障与保留项',
+                defaultValue: 'Safety Guarantees & Preserved Data',
               })}
             </span>
           </div>
@@ -202,7 +202,7 @@ export function UsageMaintenanceDeleteConfirmation({
             </div>
             <span className={styles.cardTitleWarning}>
               {t('usage_maintenance.delete_limitations_title', {
-                defaultValue: '影响与受限说明',
+                defaultValue: 'Impact & Operational Limitations',
               })}
             </span>
           </div>
@@ -243,12 +243,12 @@ export function UsageMaintenanceDeleteConfirmation({
             <span className={styles.checkboxText}>
               <strong className={styles.checkboxStrong}>
                 {t('usage_maintenance.delete_confirm_acknowledgement_strong', {
-                  defaultValue: '我已知晓此操作不可逆：',
+                  defaultValue: 'I understand this operation is irreversible:',
                 })}
               </strong>
               {t('usage_maintenance.delete_confirm_acknowledgement_text', {
                 defaultValue:
-                  '在线明细删除后将无法从管理面板中查询，且 SQLite 物理磁盘文件不会即时收缩（需在离线维护期执行收缩命令释放空间）。',
+                  'Online raw events will no longer be queryable from the panel after deletion, and SQLite physical disk files will not shrink immediately (compaction must be run offline to release space).',
               })}
             </span>
           }
