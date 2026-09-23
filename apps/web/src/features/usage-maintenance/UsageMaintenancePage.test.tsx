@@ -2779,9 +2779,9 @@ describe('maintenance workspace navigation and continuous operations', () => {
     expect(floatingBtn).toBeDefined();
     act(() => floatingBtn.props.onClick());
 
-    expect(
-      mocks.navigate.mock.calls.some(([to]) => to.search.includes('run=active-bg-run'))
-    ).toBe(true);
+    expect(mocks.navigate.mock.calls.some(([to]) => to.search.includes('run=active-bg-run'))).toBe(
+      true
+    );
     act(() => renderer.unmount());
   });
 
@@ -2891,6 +2891,27 @@ describe('maintenance workspace navigation and continuous operations', () => {
     const text = getText(renderer.root);
     expect(text).toContain('Archived · Raw cleaned');
     expect(text).toContain('Archived · Retained online');
+
+    act(() => renderer.unmount());
+  });
+
+  it('adds active executing animation to the stepper when a stage is in progress', async () => {
+    const archivingRun = archive('archiving', 'archiving-run');
+    mocks.getUsageArchive.mockResolvedValue(archiveStatus(archivingRun));
+    const renderer = await renderOverviewPage(maintenance({ active_run: archivingRun }), [
+      archivingRun,
+    ]);
+
+    await act(async () => {
+      findButtons(renderer, 'Continue this record')[0].props.onClick();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const runningSteps = renderer.root.findAllByProps({ 'data-running': true });
+    expect(runningSteps).toHaveLength(1);
+    expect(runningSteps[0].props['aria-busy']).toBe('true');
+    expect(getText(runningSteps[0])).toContain('Archive');
 
     act(() => renderer.unmount());
   });

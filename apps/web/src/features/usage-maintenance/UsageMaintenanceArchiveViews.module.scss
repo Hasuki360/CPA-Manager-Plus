@@ -906,6 +906,19 @@
     }
   }
 
+  li[data-running='true'] {
+    color: var(--primary-color);
+    font-weight: 700;
+
+    span {
+      background: var(--primary-color);
+      border-color: var(--primary-color);
+      color: #ffffff;
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary-color) 25%, transparent);
+      animation: stepperPulse 1.8s ease-in-out infinite;
+    }
+  }
+
   li[data-failed='true'] {
     color: var(--danger-color, #ef4444);
     font-weight: 700;
@@ -916,6 +929,30 @@
       color: var(--danger-color, #ef4444);
       box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger-color, #ef4444) 20%, transparent);
     }
+  }
+}
+
+.spinIcon {
+  display: inline-block;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes stepperPulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary-color) 20%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--primary-color) 40%, transparent);
+  }
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
   }
 }
 

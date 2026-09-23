@@ -16,6 +16,7 @@ import {
   IconChevronLeft,
   IconChevronRight,
   IconCircleHelp,
+  IconRefreshCw,
   IconTriangleAlert,
 } from '@/components/ui/icons';
 import { useNotificationStore } from '@/stores';
@@ -223,7 +224,8 @@ export function UsageMaintenanceOverviewView({
               <div className={styles.reclaimHighlight}>
                 <span>
                   {t('usage_maintenance.reclaim_estimated_benefit', {
-                    defaultValue: 'Compaction recommended: expected to shrink from {{total}} to ~{{compacted}}',
+                    defaultValue:
+                      'Compaction recommended: expected to shrink from {{total}} to ~{{compacted}}',
                     total: formatFileSize(maintenance.storage.total_bytes),
                     compacted: formatFileSize(
                       Math.max(
@@ -458,7 +460,8 @@ export function UsageArchiveHistoryView({
                   className={styles.clickableRow}
                   onClick={(e) => {
                     const target = e.target as HTMLElement | null;
-                    if (typeof target?.closest === 'function' && target.closest('button, a, input')) return;
+                    if (typeof target?.closest === 'function' && target.closest('button, a, input'))
+                      return;
                     onOpenRun(run);
                   }}
                 >
@@ -471,22 +474,22 @@ export function UsageArchiveHistoryView({
                       >
                         {formatTime(run.created_at_ms)}
                       </button>
-                        <span className={styles.identityHash} title={run.id}>
-                          #{run.id.slice(0, 8)}
-                          <button
-                            type="button"
-                            className={styles.copyIdBtn}
-                            title={`${t('common.copy')} ID`}
-                            aria-label={`${t('common.copy')} ${run.id}`}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              void handleCopyId(run.id);
-                            }}
-                          >
-                            <IconCopy size={11} />
-                          </button>
-                        </span>
-                      </div>
+                      <span className={styles.identityHash} title={run.id}>
+                        #{run.id.slice(0, 8)}
+                        <button
+                          type="button"
+                          className={styles.copyIdBtn}
+                          title={`${t('common.copy')} ID`}
+                          aria-label={`${t('common.copy')} ${run.id}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void handleCopyId(run.id);
+                          }}
+                        >
+                          <IconCopy size={11} />
+                        </button>
+                      </span>
+                    </div>
                   </td>
                   <td data-label={t('usage_maintenance.technical_mode')}>
                     <span
@@ -659,7 +662,7 @@ export function UsageArchiveRunView({
                   ? 'usage_maintenance.workspace_ready_cleanup'
                   : 'usage_maintenance.workspace_archive_done'
               )
-              : run.status === 'completed'
+            : run.status === 'completed'
               ? t('usage_maintenance.cleanup_complete_title')
               : run.status === 'failed'
                 ? t('usage_maintenance.run_failed_title', {
@@ -673,20 +676,37 @@ export function UsageArchiveRunView({
         {steps.map((step, index) => {
           const isCurrent = stepOrder === index + 1;
           const isFailed = isCurrent && (run.status === 'failed' || run.has_error);
+          const isRunning =
+            !isFailed &&
+            run.status !== 'cancelled' &&
+            run.status !== 'completed' &&
+            ((step === 'archive' &&
+              (run.status === 'archiving' ||
+                (Boolean(actions.working) && isCurrent && run.status === 'previewed'))) ||
+              (step === 'verify' &&
+                (run.status === 'verifying' ||
+                  (Boolean(actions.working) && isCurrent && run.status === 'archived'))) ||
+              (step === 'delete' &&
+                (run.status === 'deleting' ||
+                  (Boolean(actions.working) && isCurrent && run.status === 'verified'))));
           return (
             <li
               key={step}
               data-complete={stepOrder > index + 1}
               data-failed={isFailed}
+              data-running={isRunning}
               aria-current={
                 isCurrent && !isFailed && run.status !== 'cancelled' ? 'step' : undefined
               }
+              aria-busy={isRunning ? 'true' : undefined}
             >
               <span>
                 {stepOrder > index + 1 ? (
                   <IconCheck size={14} />
                 ) : isFailed ? (
                   <IconTriangleAlert size={14} />
+                ) : isRunning ? (
+                  <IconRefreshCw size={13} className={styles.spinIcon} />
                 ) : (
                   index + 1
                 )}
