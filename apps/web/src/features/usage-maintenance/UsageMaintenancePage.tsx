@@ -1889,11 +1889,12 @@ export function UsageMaintenancePage() {
             size="sm"
             variant="secondary"
             onClick={refreshMaintenance}
-            disabled={working || loading}
+            disabled={loading}
             aria-label={t('common.refresh')}
             title={t('common.refresh')}
+            aria-busy={loading ? 'true' : undefined}
           >
-            <IconRefreshCw size={16} />
+            <IconRefreshCw size={16} className={loading ? styles.refreshSpin : undefined} />
           </Button>
           <DropdownMenu
             ariaLabel={t('usage_maintenance.more_maintenance')}
@@ -2149,10 +2150,15 @@ export function UsageMaintenancePage() {
                       variant="ghost"
                       size="sm"
                       onClick={refreshMaintenance}
+                      disabled={loading}
                       aria-label={t('common.refresh')}
                       title={t('common.refresh')}
+                      aria-busy={loading ? 'true' : undefined}
                     >
-                      <IconRefreshCw size={16} />
+                      <IconRefreshCw
+                        size={16}
+                        className={loading ? styles.refreshSpin : undefined}
+                      />
                     </Button>
                     <Button variant="secondary" onClick={closeDrawer}>
                       {t('usage_maintenance.minimize')}
@@ -2164,10 +2170,15 @@ export function UsageMaintenancePage() {
                       variant="ghost"
                       size="sm"
                       onClick={refreshMaintenance}
+                      disabled={loading}
                       aria-label={t('common.refresh')}
                       title={t('common.refresh')}
+                      aria-busy={loading ? 'true' : undefined}
                     >
-                      <IconRefreshCw size={16} />
+                      <IconRefreshCw
+                        size={16}
+                        className={loading ? styles.refreshSpin : undefined}
+                      />
                     </Button>
                     <UsageArchiveRunActions
                       run={currentArchive.run}
@@ -2198,9 +2209,10 @@ export function UsageMaintenancePage() {
                 <Button
                   variant="secondary"
                   onClick={refreshMaintenance}
-                  disabled={working || loading}
+                  disabled={loading}
+                  aria-busy={loading ? 'true' : undefined}
                 >
-                  <IconRefreshCw size={16} />
+                  <IconRefreshCw size={16} className={loading ? styles.refreshSpin : undefined} />
                   {t('common.refresh')}
                 </Button>
                 <Button variant="secondary" onClick={closeDrawer}>

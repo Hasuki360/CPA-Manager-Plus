@@ -2941,4 +2941,34 @@ describe('maintenance workspace navigation and continuous operations', () => {
 
     act(() => renderer.unmount());
   });
+
+  it('shows spinning animation and disables refresh button while refreshing, then re-enables it', async () => {
+    const refreshDeferred = deferred<ReturnType<typeof maintenance>>();
+    const renderer = await renderOverviewPage(maintenance(), []);
+
+    const refreshBtn = renderer.root.findByProps({ 'aria-label': 'Refresh' });
+    expect(refreshBtn.props.disabled).toBe(false);
+    expect(refreshBtn.props['aria-busy']).toBeUndefined();
+
+    mocks.getUsageMaintenance.mockReturnValueOnce(refreshDeferred.promise);
+    act(() => {
+      refreshBtn.props.onClick();
+    });
+
+    expect(refreshBtn.props.disabled).toBe(true);
+    expect(refreshBtn.props['aria-busy']).toBe('true');
+    const svgIcon = refreshBtn.findByType('svg');
+    expect(svgIcon.props.className).toContain('refreshSpin');
+
+    await act(async () => {
+      refreshDeferred.resolve(maintenance({ raw_event_count: 50 }));
+      await Promise.resolve();
+    });
+
+    expect(refreshBtn.props.disabled).toBe(false);
+    expect(refreshBtn.props['aria-busy']).toBeUndefined();
+    expect(svgIcon.props.className).toBeUndefined();
+
+    act(() => renderer.unmount());
+  });
 });

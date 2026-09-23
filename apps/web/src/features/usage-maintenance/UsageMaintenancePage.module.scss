@@ -412,3 +412,17 @@
     gap: 4px;
   }
 }
+
+.refreshSpin {
+  display: inline-block;
+  animation: refreshSpinAnimation 1s linear infinite;
+}
+
+@keyframes refreshSpinAnimation {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
