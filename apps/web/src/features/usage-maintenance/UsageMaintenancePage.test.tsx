@@ -2915,4 +2915,30 @@ describe('maintenance workspace navigation and continuous operations', () => {
 
     act(() => renderer.unmount());
   });
+
+  it('hides continuation buttons in the drawer footer when an active task is running in the background after refresh', async () => {
+    const activeRun = archive('archiving', 'active-bg-run');
+    mocks.getUsageArchive.mockResolvedValue(archiveStatus(activeRun));
+    const renderer = await renderOverviewPage(maintenance({ active_run: activeRun }), [activeRun]);
+
+    await act(async () => {
+      findButtons(renderer, 'Continue this record')[0].props.onClick();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const footer = renderer.root.findByProps({ 'data-testid': 'maintenance-drawer-footer' });
+    const footerContinueButtons = footer
+      .findAllByType('button')
+      .filter((btn) => getText(btn).includes('Continue archive'));
+    // Does not show 'Continue archive' button in drawer footer when task is already executing
+    expect(footerContinueButtons).toHaveLength(0);
+    // Shows minimize button to close drawer while task runs in background
+    const footerMinimizeButtons = footer
+      .findAllByType('button')
+      .filter((btn) => getText(btn).includes('Minimize'));
+    expect(footerMinimizeButtons).toHaveLength(1);
+
+    act(() => renderer.unmount());
+  });
 });

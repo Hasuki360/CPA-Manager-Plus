@@ -1824,6 +1824,16 @@ export function UsageMaintenancePage() {
     navigation.panel === 'run' && selectedRunId === activeBackgroundRun?.id;
   const showFloatingProgress = Boolean(activeBackgroundRun && !isDrawerShowingActiveRun);
 
+  const isCurrentRunActive = Boolean(
+    currentRunWorking ||
+    (currentArchive &&
+      archiveProgressStatuses.has(currentArchive.run.status) &&
+      (isDrawerShowingActiveRun ||
+        activeBackgroundRun?.id === currentArchive.run.id ||
+        maintenance?.active_lock?.run_id === currentArchive.run.id ||
+        maintenance?.active_run?.id === currentArchive.run.id))
+  );
+
   const activeRunIsDeleting =
     activeBackgroundRun?.status === 'deleting' ||
     activeBackgroundRun?.resume_status === 'deleting' ||
@@ -2132,6 +2142,21 @@ export function UsageMaintenancePage() {
                       {t('usage_maintenance.archive_prepare_stop')}
                     </Button>
                     <Button onClick={closeDrawer}>{t('usage_maintenance.minimize')}</Button>
+                  </>
+                ) : isCurrentRunActive ? (
+                  <>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={refreshMaintenance}
+                      aria-label={t('common.refresh')}
+                      title={t('common.refresh')}
+                    >
+                      <IconRefreshCw size={16} />
+                    </Button>
+                    <Button variant="secondary" onClick={closeDrawer}>
+                      {t('usage_maintenance.minimize')}
+                    </Button>
                   </>
                 ) : (
                   <>
