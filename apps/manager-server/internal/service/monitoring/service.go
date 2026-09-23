@@ -1215,7 +1215,23 @@ func (s *Service) analytics(ctx context.Context, req Request) (Response, error) 
 		}
 		queries.Go(func(queryCtx context.Context) error {
 			var queryErr error
-			eventsPage, queryErr = s.eventsPage(queryCtx, filter, beforeMS, beforeID, limit)
+			if rawCoverage.RawDeletedEventCount > 0 {
+				eventsPage, queryErr = s.store.EventsPageWithFilter(
+					queryCtx,
+					filter,
+					beforeMS,
+					beforeID,
+					limit,
+				)
+			} else {
+				eventsPage, queryErr = s.eventsPage(
+					queryCtx,
+					filter,
+					beforeMS,
+					beforeID,
+					limit,
+				)
+			}
 			return queryErr
 		})
 	}
@@ -1463,7 +1479,11 @@ func (s *Service) analytics(ctx context.Context, req Request) (Response, error) 
 		// lightweight count(*).
 		total := summaryTotalCalls
 		if rawCoverage.RawDeletedEventCount > 0 {
-			total, err = s.eventDetailsCount(ctx, filter)
+			if !monitoringrollup.PrefersEventProjection(filter) {
+				total = rawCoverage.RawEventCount
+			} else {
+				total, err = s.store.EventsCountWithFilter(ctx, filter)
+			}
 		} else if !summaryComputed {
 			total, err = s.eventsCount(ctx, filter)
 		}
@@ -2417,13 +2437,6 @@ func (s *Service) eventsCount(ctx context.Context, filter store.AnalyticsFilter)
 		}
 		return aggregate.TotalCalls, nil
 	}
-	if total, available := s.monitoringReader.EventsCount(ctx, filter); available {
-		return total, nil
-	}
-	return s.store.EventsCountWithFilter(ctx, filter)
-}
-
-func (s *Service) eventDetailsCount(ctx context.Context, filter store.AnalyticsFilter) (int64, error) {
 	if total, available := s.monitoringReader.EventsCount(ctx, filter); available {
 		return total, nil
 	}

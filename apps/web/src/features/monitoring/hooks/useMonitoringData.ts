@@ -220,6 +220,20 @@ export const mergeMonitoringEventsPageItems = (
   );
 };
 
+export const resetMonitoringEventsPageCursor = (
+  state: MonitoringEventsPageState
+): MonitoringEventsPageState => {
+  if (state.beforeMs === null && state.beforeId === null && !state.loadingMore) {
+    return state;
+  }
+  return {
+    ...state,
+    beforeMs: null,
+    beforeId: null,
+    loadingMore: false,
+  };
+};
+
 export const withoutMonitoringSnapshotEvents = (
   snapshot: MonitoringPresentationSnapshot
 ): MonitoringPresentationSnapshot => ({
@@ -647,6 +661,19 @@ export function useMonitoringData({
       };
     }
   }, [analytics.error]);
+
+  useEffect(() => {
+    if (activeDataTab !== 'realtime') {
+      let cancelled = false;
+      queueMicrotask(() => {
+        if (cancelled) return;
+        setEventsPageState((previous) => resetMonitoringEventsPageCursor(previous));
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+  }, [activeDataTab]);
 
   const loadMoreEvents = useCallback(() => {
     if (

@@ -65,16 +65,16 @@ func TestBuildEventsIncludesRequestMetadata(t *testing.T) {
 	genTrue := true
 	streamFalse := false
 	response := buildEvents(store.EventsPage{Items: []store.EventPageItem{{
-		EventHash:          "request-metadata",
-		ClientIP:           "192.0.2.10",
-		XForwardedFor:      "203.0.113.5, 198.51.100.8",
-		UserAgent:          "test-client/1.0",
-		ResponseModel:      "gpt-4o-mini",
-		SessionID:          "sess-12345",
-		ParentSessionID:    "parent-sess-67890",
-		AccessTokenSHA256:  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-		Generate:           &genTrue,
-		Stream:             &streamFalse,
+		EventHash:         "request-metadata",
+		ClientIP:          "192.0.2.10",
+		XForwardedFor:     "203.0.113.5, 198.51.100.8",
+		UserAgent:         "test-client/1.0",
+		ResponseModel:     "gpt-4o-mini",
+		SessionID:         "sess-12345",
+		ParentSessionID:   "parent-sess-67890",
+		AccessTokenSHA256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+		Generate:          &genTrue,
+		Stream:            &streamFalse,
 	}}}, 1)
 	if response == nil || len(response.Items) != 1 {
 		t.Fatalf("events response = %#v", response)
@@ -3792,6 +3792,260 @@ func TestAnalyticsReportsActualDerivedReaderFallbacksAfterArchivedDeletion(t *te
 		!slices.Contains(response.Coverage.FidelityLimitations, "identity_metrics_require_raw_events") ||
 		!slices.Contains(response.Coverage.FidelityLimitations, "filter_options_require_raw_events") {
 		t.Fatalf("fallback coverage = %#v", response.Coverage)
+	}
+}
+
+func TestAnalyticsArchivedRawDeletionWithoutFilterUsesRawEventsAndCoverageCount(t *testing.T) {
+	db := newMonitoringTestStore(t)
+	ctx := context.Background()
+	fromMS := time.Date(2026, time.August, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
+	toMS := fromMS + 2*time.Hour.Milliseconds()
+
+	// 3 events: 2 in the first hour (archived and raw-deleted), 1 retained in the second hour
+	events := []usage.Event{
+		monitoringEvent("archived-1", fromMS+1_000, "gpt-a", "auth-1", "src-1", false, 10, 2, 0, 0, 12, nil),
+		monitoringEvent("archived-2", fromMS+2_000, "gpt-b", "auth-2", "src-2", true, 20, 3, 0, 0, 23, nil),
+		monitoringEvent("retained-1", fromMS+time.Hour.Milliseconds()+1_000, "gpt-a", "auth-1", "src-1", false, 30, 4, 0, 0, 34, nil),
+	}
+	for i := range events {
+		events[i].AccountSnapshot = "user@example.com"
+		events[i].AuthFileSnapshot = "user.json"
+	}
+	if _, err := db.InsertEvents(ctx, events); err != nil {
+		t.Fatalf("insert events: %v", err)
+	}
+
+	catchUpMonitoringArchiveDeleteReadiness(t, ctx, db)
+	archiveMonitoringEventsThrough(t, ctx, db, fromMS+time.Hour.Milliseconds())
+
+	resp, err := New(db, true).Analytics(ctx, Request{
+		FromMS: fromMS,
+		ToMS:   toMS,
+		Include: Include{
+			Summary:        true,
+			SummaryProfile: "compact",
+			EventsPage:     &EventsPage{Limit: 10},
+		},
+	})
+	if err != nil {
+		t.Fatalf("analytics: %v", err)
+	}
+
+	if resp.Summary == nil || resp.Summary.TotalCalls != 3 {
+		t.Fatalf("summary total calls = %v, want 3", resp.Summary)
+	}
+	if resp.Events == nil {
+		t.Fatalf("events is nil")
+	}
+	if resp.Events.TotalCount != 1 {
+		t.Fatalf("events total count = %d, want 1", resp.Events.TotalCount)
+	}
+	if len(resp.Events.Items) != 1 {
+		t.Fatalf("events items len = %d, want 1", len(resp.Events.Items))
+	}
+	if resp.Events.Items[0].EventHash != testCanonicalHash("retained-1") {
+		t.Fatalf("events items[0] hash = %s, want retained-1", resp.Events.Items[0].EventHash)
+	}
+	if resp.Coverage == nil || resp.Coverage.RawDeletedEventCount != 2 || resp.Coverage.RawEventCount != 1 {
+		t.Fatalf("coverage mismatch: %#v", resp.Coverage)
+	}
+}
+
+func TestAnalyticsArchivedRawDeletionWithRowLevelFilterCountsAndPagesRawEventsOnly(t *testing.T) {
+	db := newMonitoringTestStore(t)
+	ctx := context.Background()
+	fromMS := time.Date(2026, time.August, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
+	toMS := fromMS + 2*time.Hour.Milliseconds()
+
+	// 4 events: 2 in first hour (archived+deleted), 2 in second hour (retained)
+	events := []usage.Event{
+		monitoringEvent("archived-match", fromMS+1_000, "gpt-match", "auth-1", "src-1", false, 10, 2, 0, 0, 12, nil),
+		monitoringEvent("archived-other", fromMS+2_000, "gpt-other", "auth-2", "src-2", false, 20, 3, 0, 0, 23, nil),
+		monitoringEvent("retained-match", fromMS+time.Hour.Milliseconds()+1_000, "gpt-match", "auth-1", "src-1", false, 30, 4, 0, 0, 34, nil),
+		monitoringEvent("retained-other", fromMS+time.Hour.Milliseconds()+2_000, "gpt-other", "auth-2", "src-2", false, 40, 5, 0, 0, 45, nil),
+	}
+	for i := range events {
+		events[i].AccountSnapshot = "user@example.com"
+		events[i].AuthFileSnapshot = "user.json"
+	}
+	if _, err := db.InsertEvents(ctx, events); err != nil {
+		t.Fatalf("insert events: %v", err)
+	}
+
+	catchUpMonitoringArchiveDeleteReadiness(t, ctx, db)
+	archiveMonitoringEventsThrough(t, ctx, db, fromMS+time.Hour.Milliseconds())
+
+	// Filter by Models: ["gpt-match"]
+	resp, err := New(db, true).Analytics(ctx, Request{
+		FromMS: fromMS,
+		ToMS:   toMS,
+		Filters: Filters{
+			Models: []string{"gpt-match"},
+		},
+		Include: Include{
+			Summary:        true,
+			SummaryProfile: "compact",
+			EventsPage:     &EventsPage{Limit: 10},
+		},
+	})
+	if err != nil {
+		t.Fatalf("analytics: %v", err)
+	}
+
+	if resp.Summary == nil || resp.Summary.TotalCalls != 2 {
+		t.Fatalf("summary total calls = %v, want 2", resp.Summary)
+	}
+	if resp.Events == nil {
+		t.Fatalf("events is nil")
+	}
+	if resp.Events.TotalCount != 1 {
+		t.Fatalf("events total count = %d, want 1", resp.Events.TotalCount)
+	}
+	if len(resp.Events.Items) != 1 {
+		t.Fatalf("events items len = %d, want 1", len(resp.Events.Items))
+	}
+	if resp.Events.Items[0].EventHash != testCanonicalHash("retained-match") {
+		t.Fatalf("events items[0] hash = %s, want retained-match", resp.Events.Items[0].EventHash)
+	}
+}
+
+func TestAnalyticsArchivedRawDeletionKeysetPagination(t *testing.T) {
+	db := newMonitoringTestStore(t)
+	ctx := context.Background()
+	fromMS := time.Date(2026, time.August, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
+	toMS := fromMS + 2*time.Hour.Milliseconds()
+
+	sameTS := fromMS + time.Hour.Milliseconds() + 2_000
+	events := []usage.Event{
+		// 2 archived & deleted
+		monitoringEvent("archived-1", fromMS+1_000, "gpt-a", "auth-1", "src-1", false, 10, 2, 0, 0, 12, nil),
+		monitoringEvent("archived-2", fromMS+2_000, "gpt-b", "auth-2", "src-2", false, 20, 3, 0, 0, 23, nil),
+		// 4 retained raw events: two sharing the exact same timestamp
+		monitoringEvent("retained-1", fromMS+time.Hour.Milliseconds()+1_000, "gpt-a", "auth-1", "src-1", false, 10, 2, 0, 0, 12, nil),
+		monitoringEvent("retained-2a", sameTS, "gpt-a", "auth-1", "src-1", false, 20, 3, 0, 0, 23, nil),
+		monitoringEvent("retained-2b", sameTS, "gpt-a", "auth-1", "src-1", false, 30, 4, 0, 0, 34, nil),
+		monitoringEvent("retained-3", fromMS+time.Hour.Milliseconds()+3_000, "gpt-a", "auth-1", "src-1", false, 40, 5, 0, 0, 45, nil),
+	}
+	for i := range events {
+		events[i].AccountSnapshot = "user@example.com"
+		events[i].AuthFileSnapshot = "user.json"
+	}
+	if _, err := db.InsertEvents(ctx, events); err != nil {
+		t.Fatalf("insert events: %v", err)
+	}
+
+	catchUpMonitoringArchiveDeleteReadiness(t, ctx, db)
+	archiveMonitoringEventsThrough(t, ctx, db, fromMS+time.Hour.Milliseconds())
+
+	// Page 1: limit 2
+	resp1, err := New(db, true).Analytics(ctx, Request{
+		FromMS: fromMS,
+		ToMS:   toMS,
+		Include: Include{
+			EventsPage: &EventsPage{Limit: 2},
+		},
+	})
+	if err != nil {
+		t.Fatalf("page 1 analytics: %v", err)
+	}
+	if resp1.Events == nil || len(resp1.Events.Items) != 2 {
+		t.Fatalf("page 1 items len = %v, want 2", resp1.Events)
+	}
+	if !resp1.Events.HasMore {
+		t.Fatalf("page 1 HasMore = false, want true")
+	}
+	if resp1.Events.NextBeforeMS == 0 || resp1.Events.NextBeforeID == 0 {
+		t.Fatalf("page 1 NextBeforeMS=%d NextBeforeID=%d, want non-zero", resp1.Events.NextBeforeMS, resp1.Events.NextBeforeID)
+	}
+
+	// Page 2: with before_ms, before_id
+	resp2, err := New(db, true).Analytics(ctx, Request{
+		FromMS: fromMS,
+		ToMS:   toMS,
+		Include: Include{
+			EventsPage: &EventsPage{
+				Limit:    2,
+				BeforeMS: &resp1.Events.NextBeforeMS,
+				BeforeID: &resp1.Events.NextBeforeID,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("page 2 analytics: %v", err)
+	}
+	if resp2.Events == nil || len(resp2.Events.Items) != 2 {
+		t.Fatalf("page 2 items len = %v, want 2", resp2.Events)
+	}
+	if resp2.Events.HasMore {
+		t.Fatalf("page 2 HasMore = true, want false")
+	}
+
+	// Verify all 4 retained items were returned with no duplicates
+	seen := make(map[string]bool)
+	for _, item := range append(resp1.Events.Items, resp2.Events.Items...) {
+		if seen[item.EventHash] {
+			t.Fatalf("duplicate event returned: %s", item.EventHash)
+		}
+		seen[item.EventHash] = true
+	}
+	if len(seen) != 4 {
+		t.Fatalf("seen items count = %d, want 4", len(seen))
+	}
+	for _, expected := range []string{"retained-1", "retained-2a", "retained-2b", "retained-3"} {
+		if !seen[testCanonicalHash(expected)] {
+			t.Fatalf("missing expected retained event %s", expected)
+		}
+	}
+}
+
+func TestAnalyticsWithoutRawDeletionRetainsProjectionOptimization(t *testing.T) {
+	db := newMonitoringTestStore(t)
+	ctx := context.Background()
+	fromMS := time.Date(2026, time.August, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
+	toMS := fromMS + time.Hour.Milliseconds()
+
+	events := []usage.Event{
+		monitoringEvent("hot-1", fromMS+1_000, "gpt-a", "auth-1", "src-1", false, 10, 2, 0, 0, 12, nil),
+		monitoringEvent("hot-2", fromMS+2_000, "gpt-b", "auth-2", "src-2", false, 20, 3, 0, 0, 23, nil),
+	}
+	for i := range events {
+		events[i].AccountSnapshot = "user@example.com"
+		events[i].AuthFileSnapshot = "user.json"
+	}
+	if _, err := db.InsertEvents(ctx, events); err != nil {
+		t.Fatalf("insert events: %v", err)
+	}
+
+	catchUpMonitoringArchiveDeleteReadiness(t, ctx, db)
+	// No archive delete performed: RawDeletedEventCount == 0
+
+	resp, err := New(db, true).Analytics(ctx, Request{
+		FromMS: fromMS,
+		ToMS:   toMS,
+		Filters: Filters{
+			Models: []string{"gpt-a"},
+		},
+		Include: Include{
+			Summary:        true,
+			SummaryProfile: "compact",
+			EventsPage:     &EventsPage{Limit: 10},
+		},
+	})
+	if err != nil {
+		t.Fatalf("analytics: %v", err)
+	}
+
+	if resp.Coverage != nil && resp.Coverage.RawDeletedEventCount != 0 {
+		t.Fatalf("raw deleted event count = %d, want 0", resp.Coverage.RawDeletedEventCount)
+	}
+	if resp.Summary == nil || resp.Summary.TotalCalls != 1 {
+		t.Fatalf("summary total calls = %v, want 1", resp.Summary)
+	}
+	if resp.Events == nil || resp.Events.TotalCount != 1 || len(resp.Events.Items) != 1 {
+		t.Fatalf("events response = %#v", resp.Events)
+	}
+	if resp.Events.Items[0].EventHash != testCanonicalHash("hot-1") {
+		t.Fatalf("events items[0] hash = %s, want hot-1", resp.Events.Items[0].EventHash)
 	}
 }
 
