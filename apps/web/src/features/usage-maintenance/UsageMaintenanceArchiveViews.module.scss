@@ -932,11 +932,6 @@
   }
 }
 
-.spinIcon {
-  display: inline-block;
-  animation: spin 1s linear infinite;
-}
-
 @keyframes stepperPulse {
   0%,
   100% {
@@ -944,15 +939,6 @@
   }
   50% {
     box-shadow: 0 0 0 6px color-mix(in srgb, var(--primary-color) 40%, transparent);
-  }
-}
-
-@keyframes spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
   }
 }
 

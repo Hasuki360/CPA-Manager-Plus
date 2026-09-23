@@ -16,7 +16,6 @@ import {
   IconChevronLeft,
   IconChevronRight,
   IconCircleHelp,
-  IconRefreshCw,
   IconTriangleAlert,
 } from '@/components/ui/icons';
 import { useNotificationStore } from '@/stores';
@@ -705,8 +704,6 @@ export function UsageArchiveRunView({
                   <IconCheck size={14} />
                 ) : isFailed ? (
                   <IconTriangleAlert size={14} />
-                ) : isRunning ? (
-                  <IconRefreshCw size={13} className={styles.spinIcon} />
                 ) : (
                   index + 1
                 )}
