@@ -2961,6 +2961,7 @@
     "coverage_warning_auxiliary": "Before filters are applied, an additional requested range includes {{deleted}} archived events that are no longer available as raw rows.",
     "coverage_warning_limited": "Permanent derived data keeps supported totals available, but some requested raw-only metrics are incomplete.",
     "coverage_warning_derived": "All requested metrics are available from retained raw events or permanent derived data.",
+    "coverage_warning_dismiss": "Got it, don't show again",
     "database_maintenance_hint_title": "Database maintenance is still pending.",
     "database_maintenance_hint_body": "Historical request queries may be slower or time out until offline maintenance completes.",
     "database_maintenance_long_range_hint": "Long time ranges can be especially expensive while this warning is present.",

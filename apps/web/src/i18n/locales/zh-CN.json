@@ -2959,6 +2959,7 @@
     "coverage_warning_auxiliary": "额外请求范围内（未按筛选条件缩小）包含 {{deleted}} 条已归档且不再保留原始行的事件。",
     "coverage_warning_limited": "永久派生数据仍可提供受支持的汇总，但部分本次请求的仅原始数据指标并不完整。",
     "coverage_warning_derived": "本次请求的全部指标均可由保留的原始事件或永久派生数据提供。",
+    "coverage_warning_dismiss": "我知道了，不再显示",
     "database_maintenance_hint_title": "数据库维护尚未完成。",
     "database_maintenance_hint_body": "离线维护完成前，历史请求查询可能较慢或超时。",
     "database_maintenance_long_range_hint": "当前提示存在时，较长时间范围的查询可能尤其昂贵。",

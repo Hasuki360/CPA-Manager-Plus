@@ -2959,6 +2959,7 @@
     "coverage_warning_auxiliary": "額外要求範圍內（未按篩選條件縮小）包含 {{deleted}} 筆已歸檔且不再保留原始列的事件。",
     "coverage_warning_limited": "永久衍生資料仍可提供受支援的彙總，但部分本次要求的僅原始資料指標並不完整。",
     "coverage_warning_derived": "本次要求的全部指標均可由保留的原始事件或永久衍生資料提供。",
+    "coverage_warning_dismiss": "我知道了，不再顯示",
     "database_maintenance_hint_title": "資料庫維護尚未完成。",
     "database_maintenance_hint_body": "離線維護完成前，歷史請求查詢可能較慢或逾時。",
     "database_maintenance_long_range_hint": "目前提示存在時，較長時間範圍的查詢可能尤其昂貴。",
