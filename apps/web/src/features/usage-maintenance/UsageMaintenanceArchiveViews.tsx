@@ -13,6 +13,7 @@ import {
   IconSparkles,
   IconSearch,
   IconX,
+  IconChevronDown,
   IconChevronLeft,
   IconChevronRight,
   IconCircleHelp,
@@ -654,27 +655,6 @@ export function UsageArchiveRunView({
         : 1;
   return (
     <div className={styles.view}>
-      <section className={styles.runResult} data-status={run.status} aria-live="polite">
-        <span className={styles.pill} data-status={run.status}>
-          {statusLabel(run.status)}
-        </span>
-        <h2>
-          {run.status === 'verified'
-            ? t(
-                intent === 'cleanup'
-                  ? 'usage_maintenance.workspace_ready_cleanup'
-                  : 'usage_maintenance.workspace_archive_done'
-              )
-            : run.status === 'completed'
-              ? t('usage_maintenance.cleanup_complete_title')
-              : run.status === 'failed'
-                ? t('usage_maintenance.run_failed_title', {
-                    defaultValue: 'Task Interrupted',
-                  })
-                : t('usage_maintenance.workspace_current')}
-        </h2>
-        <p>{formatTime(run.created_at_ms)}</p>
-      </section>
       <ol className={styles.stepper} aria-label={t('usage_maintenance.run_steps_label')}>
         {steps.map((step, index) => {
           const isCurrent = stepOrder === index + 1;
@@ -738,42 +718,6 @@ export function UsageArchiveRunView({
           </p>
         </div>
       ) : null}
-      {progress ? (
-        <div className={styles.progress} data-failed={run.status === 'failed' || run.has_error}>
-          <div>
-            <span>
-              {run.status === 'failed' || run.has_error
-                ? `${t('usage_maintenance.progress_interrupted_at')}: `
-                : ''}
-              {t(progress.labelKey)}
-            </span>
-            {progress.percent !== null ? <strong>{progress.percent.toFixed(1)}%</strong> : null}
-          </div>
-          {progress.total > 0 ? (
-            <p>
-              {progress.current.toLocaleString(i18n.language)} /{' '}
-              {progress.total.toLocaleString(i18n.language)}{' '}
-              {t(`usage_maintenance.progress_unit_${progress.unit ?? 'events'}`)}
-            </p>
-          ) : null}
-          <div
-            className={`${styles.progressTrack} ${progress.percent === null ? styles.progressIndeterminate : ''}`}
-            role="progressbar"
-            aria-label={t(progress.labelKey)}
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuenow={progress.percent === null ? undefined : Math.round(progress.percent)}
-            aria-busy={progress.percent === null ? true : undefined}
-          >
-            <i style={progress.percent === null ? undefined : { width: `${progress.percent}%` }} />
-          </div>
-          {progress.updatedAtMS ? (
-            <small>
-              {t('usage_maintenance.progress_recent')}: {formatTime(progress.updatedAtMS)}
-            </small>
-          ) : null}
-        </div>
-      ) : null}
       <dl className={styles.runCounts}>
         <div>
           <dt>{t('usage_maintenance.workspace_record_count')}</dt>
@@ -806,45 +750,139 @@ export function UsageArchiveRunView({
       {active || actions.working ? (
         <p className={styles.hint}>{t('usage_maintenance.stop_waiting_note')}</p>
       ) : null}
-      <details className={styles.technical}>
-        <summary>{t('usage_maintenance.execution_details')}</summary>
-        {progress ? (
-          <p>
-            {t('usage_maintenance.current_operation')}: {t(progress.labelKey)}
-            {progress.total > 0
-              ? ` · ${progress.current.toLocaleString(i18n.language)} / ${progress.total.toLocaleString(i18n.language)} ${t(`usage_maintenance.progress_unit_${progress.unit ?? 'events'}`)}`
-              : ''}
-            {progress.updatedAtMS
-              ? ` · ${t('usage_maintenance.progress_recent')}: ${formatTime(progress.updatedAtMS)}`
-              : ''}
-          </p>
-        ) : null}
-        <ul className={styles.executionMilestones}>
+      <details
+        className={styles.executionDetailsCard}
+        open={
+          active ||
+          actions.working ||
+          run.status === 'archiving' ||
+          run.status === 'verifying' ||
+          run.status === 'deleting' ||
+          run.status === 'failed' ||
+          run.has_error ||
+          Boolean(progress)
+        }
+      >
+        <summary className={styles.executionDetailsSummary}>
+          <span>{t('usage_maintenance.execution_details')}</span>
+          <IconChevronDown size={16} className={styles.chevron} aria-hidden="true" />
+        </summary>
+        <div className={styles.timeline}>
           {milestones.map(([field, label]) =>
             run[field] ? (
-              <li key={field}>
-                <time>{formatTime(run[field])}</time> {t(`usage_maintenance.milestone_${label}`)}
-              </li>
+              <div key={field} className={styles.timelineItem} data-status="complete">
+                <div className={styles.timelineTrack}>
+                  <span className={styles.timelineNode}>
+                    <IconCheck size={11} />
+                  </span>
+                  <div className={styles.timelineLine} />
+                </div>
+                <div className={styles.timelineContent}>
+                  <time>{formatTime(run[field])}</time>
+                  <span>{t(`usage_maintenance.milestone_${label}`)}</span>
+                </div>
+              </div>
             ) : null
           )}
-        </ul>
-        <h3>{t('usage_maintenance.segment_summary')}</h3>
-        <p>{t('usage_maintenance.segment_total', { count: archive.segments.length })}</p>
-        <ul className={styles.executionMilestones}>
-          {archive.segments
-            .slice(-20)
-            .reverse()
-            .map((segment) => (
-              <li key={segment.sequence}>
-                #{segment.sequence} · {segment.event_count.toLocaleString(i18n.language)}{' '}
-                {t('usage_maintenance.progress_unit_events')} ·{' '}
-                {formatFileSize(segment.compressed_bytes)} · {statusLabel(segment.status)}
-              </li>
-            ))}
-        </ul>
+          {progress ? (
+            <div
+              className={styles.timelineItem}
+              data-status={run.status === 'failed' || run.has_error ? 'failed' : 'active'}
+            >
+              <div className={styles.timelineTrack}>
+                <span className={styles.timelineNode}>
+                  {run.status === 'failed' || run.has_error ? (
+                    <IconTriangleAlert size={12} />
+                  ) : (
+                    <i className={styles.activeSpinner} aria-hidden="true" />
+                  )}
+                </span>
+                <div className={styles.timelineLine} />
+              </div>
+              <div className={styles.timelineContent}>
+                <div className={styles.timelineSubphaseHeader}>
+                  <strong className={styles.subphaseTitle}>
+                    {run.status === 'failed' || run.has_error
+                      ? `${t('usage_maintenance.progress_interrupted_at')}: `
+                      : ''}
+                    {t(progress.labelKey)}
+                  </strong>
+                  {progress.percent !== null ? (
+                    <span className={styles.subphasePercent}>
+                      {progress.percent.toFixed(1)}%
+                    </span>
+                  ) : null}
+                </div>
+                {progress.total > 0 ? (
+                  <p className={styles.subphaseCount}>
+                    {progress.current.toLocaleString(i18n.language)} /{' '}
+                    {progress.total.toLocaleString(i18n.language)}{' '}
+                    {t(`usage_maintenance.progress_unit_${progress.unit ?? 'events'}`)}
+                  </p>
+                ) : null}
+                <div
+                  className={`${styles.progressTrack} ${progress.percent === null ? styles.progressIndeterminate : ''}`}
+                  role="progressbar"
+                  aria-label={t(progress.labelKey)}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={
+                    progress.percent === null ? undefined : Math.round(progress.percent)
+                  }
+                  aria-busy={progress.percent === null ? true : undefined}
+                >
+                  <i
+                    style={
+                      progress.percent === null ? undefined : { width: `${progress.percent}%` }
+                    }
+                  />
+                </div>
+                {progress.updatedAtMS ? (
+                  <small className={styles.subphaseRecent}>
+                    <IconClock size={11} aria-hidden="true" />
+                    <span>
+                      {t('usage_maintenance.progress_recent')}: {formatTime(progress.updatedAtMS)}
+                    </span>
+                  </small>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+        </div>
+        {archive.segments.length > 0 ? (
+          <div className={styles.segmentSummarySection}>
+            <div className={styles.segmentSummaryHeader}>
+              <h3>{t('usage_maintenance.segment_summary')}</h3>
+              <span className={styles.segmentTotal}>
+                {t('usage_maintenance.segment_total', { count: archive.segments.length })}
+              </span>
+            </div>
+            <div className={styles.segmentList}>
+              {archive.segments
+                .slice(-20)
+                .reverse()
+                .map((segment) => (
+                  <div key={segment.sequence} className={styles.segmentRow}>
+                    <span className={styles.segmentSeq}>#{segment.sequence}</span>
+                    <span className={styles.segmentMeta}>
+                      {segment.event_count.toLocaleString(i18n.language)}{' '}
+                      {t('usage_maintenance.progress_unit_events')} ·{' '}
+                      {formatFileSize(segment.compressed_bytes)}
+                    </span>
+                    <span className={styles.segmentBadge} data-status={segment.status}>
+                      {statusLabel(segment.status)}
+                    </span>
+                  </div>
+                ))}
+            </div>
+          </div>
+        ) : null}
       </details>
       <details className={styles.technical}>
-        <summary>{t('usage_maintenance.workspace_technical')}</summary>
+        <summary className={styles.technicalSummary}>
+          <span>{t('usage_maintenance.workspace_technical')}</span>
+          <IconChevronDown size={14} className={styles.chevron} aria-hidden="true" />
+        </summary>
         <dl className={styles.keyValues}>
           <div>
             <dt>{t('usage_maintenance.technical_run_id')}</dt>

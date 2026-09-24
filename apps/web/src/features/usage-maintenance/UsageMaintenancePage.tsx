@@ -1742,24 +1742,44 @@ export function UsageMaintenancePage() {
             </div>
           </div>
         );
-      case 'run':
+      case 'run': {
+        const run = currentArchive?.run;
+        const status = run?.status;
         return (
           <div className={styles.drawerHeaderTitle}>
             <span className={`${styles.drawerHeaderIcon} ${styles.iconPurple}`} aria-hidden="true">
               <IconArchive size={18} />
             </span>
             <div className={styles.drawerHeaderContent}>
-              <strong className={styles.drawerTitleText}>
-                {t('usage_maintenance.run_detail_title')}
-              </strong>
-              {currentArchive?.run.id ? (
-                <span className={styles.drawerSubtitleMono}>
-                  ID: {currentArchive.run.id.slice(0, 12)}
-                </span>
+              <div className={styles.drawerTitleRow}>
+                <strong className={styles.drawerTitleText}>
+                  {t('usage_maintenance.run_detail_title')}
+                </strong>
+                {status ? (
+                  <span className={styles.pill} data-status={status}>
+                    {t(`usage_maintenance.run_status_${status}`, { defaultValue: status })}
+                  </span>
+                ) : null}
+              </div>
+              {run?.id ? (
+                <div className={styles.drawerMetaRow}>
+                  <span className={styles.drawerSubtitleMono}>ID: {run.id.slice(0, 12)}</span>
+                  {run.created_at_ms ? (
+                    <>
+                      <span className={styles.drawerMetaDot} aria-hidden="true">
+                        ·
+                      </span>
+                      <span className={styles.drawerSubtitleText}>
+                        {formatTime(run.created_at_ms)}
+                      </span>
+                    </>
+                  ) : null}
+                </div>
               ) : null}
             </div>
           </div>
         );
+      }
       case 'overview':
         return (
           <div className={styles.drawerHeaderTitle}>

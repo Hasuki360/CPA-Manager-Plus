@@ -1102,9 +1102,8 @@ describe('UsageMaintenancePage', () => {
       mocks.verifyUsageArchive.mock.invocationCallOrder[0]
     );
     expect(mocks.deleteUsageArchive).not.toHaveBeenCalled();
-    expect(getText(renderer.root)).toContain(
-      'Archive complete. Online details are still available.'
-    );
+    expect(getText(renderer.root)).toContain('Archive task details');
+    expect(getText(renderer.root)).toContain('Verified');
     act(() => renderer.unmount());
   });
 
@@ -2886,9 +2885,8 @@ describe('maintenance workspace navigation and continuous operations', () => {
     await act(async () => {
       pending.resolve(archiveStatus());
     });
-    expect(getText(renderer.root)).toContain(
-      'Archive complete. Online details are still available.'
-    );
+    expect(getText(renderer.root)).toContain('Archive task details');
+    expect(getText(renderer.root)).toContain('Verified');
     expect(mocks.deleteUsageArchive).not.toHaveBeenCalled();
   });
 
@@ -2946,7 +2944,7 @@ describe('maintenance workspace navigation and continuous operations', () => {
     await act(async () => {
       getDrawerConfirmation(renderer).onConfirm();
     });
-    expect(getText(renderer.root)).toContain('Archive verified. Review cleanup next.');
+    expect(getText(renderer.root)).toContain('Archive task details');
     expect(mocks.deleteUsageArchive).not.toHaveBeenCalled();
     expect(mocks.navigate.mock.calls.some(([to]) => to.search.includes('run=created-run'))).toBe(
       true
