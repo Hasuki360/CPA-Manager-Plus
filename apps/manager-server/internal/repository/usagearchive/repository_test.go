@@ -72,6 +72,9 @@ func TestRepositoryArchiveVerifyResumeAndBoundedDelete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("begin archive: %v", err)
 	}
+	if run.ProgressPhase != ProgressArchivingRecords || run.ProgressCurrent != 0 || run.ProgressTotal != 2 || run.ProgressUpdatedAtMS != 10_002 {
+		t.Fatalf("initial archive progress = %#v", run)
+	}
 	records, err := repository.Records(ctx, run.ID, 0, 100, 1<<30)
 	if err != nil {
 		t.Fatalf("read archive records: %v", err)
@@ -139,6 +142,22 @@ func TestRepositoryArchiveVerifyResumeAndBoundedDelete(t *testing.T) {
 	if run.ArchivedEventCount != 2 || run.LastArchivedEventID != 2 {
 		t.Fatalf("run after segment = %#v", run)
 	}
+	if run.ProgressPhase != ProgressArchivingRecords || run.ProgressCurrent != 2 || run.ProgressTotal != 2 || run.ProgressUpdatedAtMS != 10_003 {
+		t.Fatalf("segment progress = %#v", run)
+	}
+	if err := repository.SetProgress(ctx, run.ID, StatusArchiving, ProgressArchiveFinalizing, 1, 2, "segments", 10_003); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.SetProgress(ctx, run.ID, StatusArchiving, "private-path", 1, 2, "segments", 10_003); err == nil {
+		t.Fatal("accepted unknown progress phase")
+	}
+	listed, err := repository.ListRuns(ctx, RunListFilter{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Runs) != 1 || listed.Runs[0].ProgressPhase != ProgressArchiveFinalizing || listed.Runs[0].ProgressCurrent != 1 {
+		t.Fatalf("list progress = %#v", listed.Runs)
+	}
 	rows, err := db.Query(`select
 		event_hash, raw_event_id, timestamp_ms, segment_sequence, raw_deleted_at_ms
 		from usage_archive_event_refs where run_id = ? order by raw_event_id`, run.ID)
@@ -177,6 +196,15 @@ func TestRepositoryArchiveVerifyResumeAndBoundedDelete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mark archived: %v", err)
 	}
+	if run.ProgressPhase != "" {
+		t.Fatalf("archived progress = %#v", run)
+	}
+	if err := repository.SetProgress(ctx, run.ID, StatusArchiving, ProgressArchivePublishing, 0, 0, "", 10_005); err != nil {
+		t.Fatal(err)
+	}
+	if latest, err := repository.Run(ctx, run.ID); err != nil || latest.ProgressPhase != "" {
+		t.Fatalf("stale progress changed archived run: %#v %v", latest, err)
+	}
 	if _, found, err := repository.ActiveRun(ctx); err != nil || found {
 		t.Fatalf("static manual archived run found=%v err=%v", found, err)
 	}
@@ -198,6 +226,9 @@ func TestRepositoryArchiveVerifyResumeAndBoundedDelete(t *testing.T) {
 	run, err = repository.MarkVerified(ctx, run.ID, 10_007)
 	if err != nil {
 		t.Fatalf("mark verified: %v", err)
+	}
+	if run.ProgressPhase != "" {
+		t.Fatalf("verified progress = %#v", run)
 	}
 	if _, found, err := repository.ActiveRun(ctx); err != nil || found {
 		t.Fatalf("static manual verified run found=%v err=%v", found, err)
@@ -231,6 +262,9 @@ func TestRepositoryArchiveVerifyResumeAndBoundedDelete(t *testing.T) {
 	if firstDelete.Deleted != 1 || firstDelete.Completed || firstDelete.Run.DeletedEventCount != 1 {
 		t.Fatalf("first delete = %#v", firstDelete)
 	}
+	if firstDelete.Run.ProgressPhase != ProgressDeletingRecords || firstDelete.Run.ProgressCurrent != 1 || firstDelete.Run.ProgressTotal != 2 {
+		t.Fatalf("first delete progress = %#v", firstDelete.Run)
+	}
 	var firstRawID, firstDeletedAt sql.NullInt64
 	if err := db.QueryRow(`select ledger.raw_event_id, archived.raw_deleted_at_ms
 		from usage_archive_event_refs archived
@@ -252,6 +286,9 @@ func TestRepositoryArchiveVerifyResumeAndBoundedDelete(t *testing.T) {
 	if failed.Status != StatusFailed || failed.ResumeStatus != StatusDeleting || failed.DeletedEventCount != 1 {
 		t.Fatalf("failed delete run = %#v", failed)
 	}
+	if failed.ProgressPhase != ProgressDeletingRecords || failed.ProgressCurrent != 1 {
+		t.Fatalf("failure lost progress = %#v", failed)
+	}
 	if _, err := repository.BeginDelete(ctx, run.ID, 10_012); err != nil {
 		t.Fatalf("resume delete: %v", err)
 	}
@@ -262,6 +299,9 @@ func TestRepositoryArchiveVerifyResumeAndBoundedDelete(t *testing.T) {
 	if secondDelete.Deleted != 1 || !secondDelete.Completed ||
 		secondDelete.Run.Status != StatusCompleted || secondDelete.Run.DeletedEventCount != 2 {
 		t.Fatalf("second delete = %#v", secondDelete)
+	}
+	if secondDelete.Run.ProgressPhase != "" {
+		t.Fatalf("completed progress = %#v", secondDelete.Run)
 	}
 
 	coverage, err := repository.RawCoverage(ctx, 1, 2_500)

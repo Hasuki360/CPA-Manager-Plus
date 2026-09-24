@@ -48,6 +48,10 @@ func TestArchiveJobContinuesAfterWaitingRequestIsCancelled(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("archive job did not start")
 	}
+	persisted, err := service.ArchiveStatus(context.Background(), created.Run.ID)
+	if err != nil || persisted.Run.ProgressPhase != usagearchive.ProgressArchivingRecords || persisted.Run.ProgressTotal != 2 {
+		t.Fatalf("persisted active progress = %#v err=%v", persisted.Run, err)
+	}
 	cancelRequest()
 	select {
 	case submitErr := <-result:
@@ -71,6 +75,9 @@ func TestArchiveJobContinuesAfterWaitingRequestIsCancelled(t *testing.T) {
 	status := waitForArchiveRunStatus(t, service, created.Run.ID, usagearchive.StatusArchived)
 	if status.Run.RequestedStage != "" {
 		t.Fatalf("completed archive retained requested stage: %#v", status.Run)
+	}
+	if status.Run.ProgressPhase != "" {
+		t.Fatalf("stable archived progress = %#v", status.Run)
 	}
 }
 
@@ -241,7 +248,7 @@ func TestArchiveJobRecoversPersistedRequestWithoutAdvancingDestructiveStages(t *
 	if err != nil {
 		t.Fatalf("load stable verified archive: %v", err)
 	}
-	if stable.Run.Status != usagearchive.StatusVerified || stable.Run.DeletedEventCount != 0 || stable.Run.RequestedStage != "" {
+	if stable.Run.Status != usagearchive.StatusVerified || stable.Run.DeletedEventCount != 0 || stable.Run.RequestedStage != "" || stable.Run.ProgressPhase != "" {
 		t.Fatalf("verified archive advanced without delete authorization: %#v", stable.Run)
 	}
 }

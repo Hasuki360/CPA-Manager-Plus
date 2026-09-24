@@ -1,3 +1,5 @@
+import type { UsageArchiveRunSummary, UsageArchiveStatus } from '@/services/api/usageService';
+
 export const retentionPresetDays = [7, 30, 90] as const;
 
 export type RetentionPresetDays = (typeof retentionPresetDays)[number];
@@ -128,6 +130,113 @@ export const resolveProgressPercent = (completed: number, total: number): number
     return null;
   }
   return Math.min(100, Math.max(0, (completed / total) * 100));
+};
+
+export interface ArchiveProgressPresentation {
+  phase: string;
+  labelKey: string;
+  current: number;
+  total: number;
+  unit: 'events' | 'segments' | null;
+  percent: number | null;
+  updatedAtMS?: number;
+}
+
+const archiveProgressLabels: Record<string, string> = {
+  archiving_records: 'usage_maintenance.progress_archiving_records',
+  archive_finalizing: 'usage_maintenance.progress_archive_finalizing',
+  archive_publishing: 'usage_maintenance.progress_archive_publishing',
+  verifying_archive: 'usage_maintenance.progress_verifying_archive',
+  cleanup_revalidating: 'usage_maintenance.progress_cleanup_revalidating',
+  deleting_records: 'usage_maintenance.progress_deleting_records',
+};
+
+export const resolveArchiveProgressPresentation = (
+  run: UsageArchiveRunSummary
+): ArchiveProgressPresentation | null => {
+  let phase = run.progress?.phase;
+  let current = run.progress?.current ?? 0;
+  let total = run.progress?.total ?? 0;
+  let unit: 'events' | 'segments' | null =
+    run.progress?.unit === 'events' || run.progress?.unit === 'segments' ? run.progress.unit : null;
+  if (!phase || !archiveProgressLabels[phase]) {
+    if (run.status === 'archiving' || run.resume_status === 'archiving') {
+      phase =
+        run.event_count > 0 && run.archived_event_count >= run.event_count
+          ? 'archive_publishing'
+          : 'archiving_records';
+      current = run.archived_event_count;
+      total = phase === 'archiving_records' ? run.event_count : 0;
+      unit = phase === 'archiving_records' ? 'events' : null;
+    } else if (run.status === 'verifying' || run.resume_status === 'verifying') {
+      phase = 'verifying_archive';
+    } else if (run.status === 'deleting' || run.resume_status === 'deleting') {
+      phase = run.deleted_event_count > 0 ? 'deleting_records' : 'cleanup_preparing';
+      current = run.deleted_event_count;
+      total = phase === 'deleting_records' ? run.event_count : 0;
+      unit = phase === 'deleting_records' ? 'events' : null;
+    } else {
+      return null;
+    }
+  }
+  return {
+    phase,
+    labelKey: archiveProgressLabels[phase] ?? 'usage_maintenance.progress_cleanup_preparing',
+    current,
+    total,
+    unit,
+    percent: resolveProgressPercent(current, total),
+    updatedAtMS: run.progress?.updated_at_ms,
+  };
+};
+
+export const pickFreshestArchiveStatus = (
+  selected: UsageArchiveStatus | null,
+  operation: UsageArchiveStatus | null
+): UsageArchiveStatus | null => {
+  if (!selected) return operation;
+  if (!operation || selected.run.id !== operation.run.id) return selected;
+  const freshness = (status: UsageArchiveStatus) =>
+    Math.max(status.run.progress?.updated_at_ms ?? 0, status.run.updated_at_ms);
+  const selectedTime = freshness(selected);
+  const operationTime = freshness(operation);
+  if (selectedTime !== operationTime) return selectedTime > operationTime ? selected : operation;
+  const statusOrder = [
+    'previewed',
+    'archiving',
+    'archived',
+    'verifying',
+    'verified',
+    'deleting',
+    'completed',
+  ];
+  const selectedStatus = statusOrder.indexOf(selected.run.status);
+  const operationStatus = statusOrder.indexOf(operation.run.status);
+  if (selectedStatus !== operationStatus && selectedStatus >= 0 && operationStatus >= 0) {
+    return selectedStatus > operationStatus ? selected : operation;
+  }
+  const phaseOrder = [
+    'archiving_records',
+    'archive_finalizing',
+    'archive_publishing',
+    'verifying_archive',
+    'cleanup_revalidating',
+    'deleting_records',
+  ];
+  const selectedPhase = phaseOrder.indexOf(selected.run.progress?.phase ?? '');
+  const operationPhase = phaseOrder.indexOf(operation.run.progress?.phase ?? '');
+  if (selectedPhase !== operationPhase && selectedPhase >= 0 && operationPhase >= 0) {
+    return selectedPhase > operationPhase ? selected : operation;
+  }
+  if (
+    selectedPhase === operationPhase &&
+    selected.run.progress?.current !== operation.run.progress?.current
+  ) {
+    return (selected.run.progress?.current ?? 0) > (operation.run.progress?.current ?? 0)
+      ? selected
+      : operation;
+  }
+  return operation;
 };
 
 export const archiveHistoryFilterStatus = (filter: ArchiveHistoryFilter): string | undefined =>

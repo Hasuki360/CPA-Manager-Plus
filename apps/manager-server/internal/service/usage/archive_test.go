@@ -135,6 +135,172 @@ func TestUsageArchiveServiceFullLifecycle(t *testing.T) {
 	}
 }
 
+func TestUsageArchiveServicePersistsSubphaseProgress(t *testing.T) {
+	service, st, _ := newArchiveTestService(t, 2, 1, archiveTestServiceEvents(4))
+	ctx := context.Background()
+	created, err := service.CreateArchive(ctx, 5_000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publishedSegments, inspectedArchive, inspectedVerify, inspectedCleanup := int64(0), int64(0), int64(0), int64(0)
+	service.archive.testHook = func(point string) error {
+		run, err := st.UsageArchives.Run(ctx, created.Run.ID)
+		if err != nil {
+			return err
+		}
+		wantPhase, wantCurrent, wantTotal := "", int64(0), int64(2)
+		switch point {
+		case "segment_published":
+			wantPhase, wantCurrent, wantTotal = usagearchive.ProgressArchivingRecords, publishedSegments*2, 4
+			publishedSegments++
+		case "archive_finalizing_started":
+			wantPhase = usagearchive.ProgressArchiveFinalizing
+			if run.ArchivedEventCount != run.EventCount || run.Status != usagearchive.StatusArchiving {
+				t.Fatalf("finalizing run = %#v", run)
+			}
+		case "archive_segment_inspected":
+			inspectedArchive++
+			wantPhase, wantCurrent = usagearchive.ProgressArchiveFinalizing, inspectedArchive
+		case "archive_publishing_started":
+			wantPhase, wantTotal = usagearchive.ProgressArchivePublishing, 0
+		case "archive_verification_started":
+			wantPhase = usagearchive.ProgressVerifyingArchive
+		case "verification_segment_inspected":
+			if run.Status == usagearchive.StatusVerifying {
+				inspectedVerify++
+				wantPhase, wantCurrent = usagearchive.ProgressVerifyingArchive, inspectedVerify
+			} else {
+				inspectedCleanup++
+				wantPhase, wantCurrent = usagearchive.ProgressCleanupRevalidating, inspectedCleanup
+			}
+		case "cleanup_revalidation_started":
+			wantPhase = usagearchive.ProgressCleanupRevalidating
+		case "delete_records_started":
+			wantPhase, wantCurrent, wantTotal = usagearchive.ProgressDeletingRecords, 0, 4
+		case "delete_batch_committed":
+			wantPhase, wantCurrent, wantTotal = usagearchive.ProgressDeletingRecords, run.DeletedEventCount, 4
+		default:
+			return nil
+		}
+		if run.ProgressPhase != wantPhase || run.ProgressCurrent != wantCurrent || run.ProgressTotal != wantTotal || run.ProgressUpdatedAtMS == 0 {
+			t.Fatalf("%s progress = %#v; want %s %d/%d", point, run, wantPhase, wantCurrent, wantTotal)
+		}
+		return nil
+	}
+	archived, err := service.ResumeArchive(ctx, created.Run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if archived.Run.ProgressPhase != "" || inspectedArchive != 2 {
+		t.Fatalf("archived progress = %#v, inspections = %d", archived.Run, inspectedArchive)
+	}
+	catchUpUsageAggregate(t, st)
+	verified, err := service.VerifyArchive(ctx, created.Run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verified.Run.ProgressPhase != "" || inspectedVerify != 2 {
+		t.Fatalf("verified progress = %#v, inspections = %d", verified.Run, inspectedVerify)
+	}
+	completed, err := service.DeleteArchive(ctx, created.Run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if completed.Run.ProgressPhase != "" || inspectedCleanup != 2 {
+		t.Fatalf("completed progress = %#v, inspections = %d", completed.Run, inspectedCleanup)
+	}
+}
+
+func TestUsageArchiveServiceKeepsProgressAtInterruptedSubphase(t *testing.T) {
+	for _, testCase := range []struct {
+		point, phase, resume string
+		current, total       int64
+	}{
+		{"archive_segment_inspected", usagearchive.ProgressArchiveFinalizing, usagearchive.StatusArchiving, 1, 2},
+		{"archive_publishing_started", usagearchive.ProgressArchivePublishing, usagearchive.StatusArchiving, 0, 0},
+		{"verification_segment_inspected", usagearchive.ProgressVerifyingArchive, usagearchive.StatusVerifying, 1, 2},
+		{"cleanup_revalidation_started", usagearchive.ProgressCleanupRevalidating, usagearchive.StatusDeleting, 0, 2},
+		{"verification_segment_inspected", usagearchive.ProgressCleanupRevalidating, usagearchive.StatusDeleting, 1, 2},
+		{"delete_batch_committed", usagearchive.ProgressDeletingRecords, usagearchive.StatusDeleting, 1, 4},
+	} {
+		t.Run(testCase.point+"/"+testCase.resume, func(t *testing.T) {
+			service, st, _ := newArchiveTestService(t, 2, 1, archiveTestServiceEvents(4))
+			ctx := context.Background()
+			created, err := service.CreateArchive(ctx, 5_000)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if testCase.resume != usagearchive.StatusArchiving {
+				if _, err := service.ResumeArchive(ctx, created.Run.ID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if testCase.resume == usagearchive.StatusDeleting {
+				catchUpUsageAggregate(t, st)
+				if _, err := service.VerifyArchive(ctx, created.Run.ID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			interrupted := errors.New("test interruption")
+			fired := false
+			service.archive.testHook = func(point string) error {
+				if point == testCase.point && !fired {
+					fired = true
+					return interrupted
+				}
+				return nil
+			}
+			switch testCase.resume {
+			case usagearchive.StatusArchiving:
+				_, err = service.ResumeArchive(ctx, created.Run.ID)
+			case usagearchive.StatusVerifying:
+				_, err = service.VerifyArchive(ctx, created.Run.ID)
+			case usagearchive.StatusDeleting:
+				_, err = service.DeleteArchive(ctx, created.Run.ID)
+			}
+			if !errors.Is(err, interrupted) {
+				t.Fatalf("stage error = %v", err)
+			}
+			failed, err := service.ArchiveStatus(ctx, created.Run.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if failed.Run.Status != usagearchive.StatusFailed || failed.Run.ResumeStatus != testCase.resume ||
+				failed.Run.ProgressPhase != testCase.phase || failed.Run.ProgressCurrent != testCase.current || failed.Run.ProgressTotal != testCase.total {
+				t.Fatalf("failed progress = %#v", failed.Run)
+			}
+		})
+	}
+}
+
+func TestUsageArchiveServiceTelemetryWriteFailureDoesNotFailSafeArchive(t *testing.T) {
+	service, st, rawDB, _ := newRawArchiveTestService(t, 2, 1)
+	ctx := context.Background()
+	insertArchiveTestEvents(t, st, archiveTestServiceEvents(2))
+	created, err := service.CreateArchive(ctx, 3_000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	installed := false
+	service.archive.testHook = func(point string) error {
+		if point == "segment_published" && !installed {
+			installed = true
+			_, err := rawDB.ExecContext(ctx, `create trigger fail_archive_progress before update on usage_archive_runs
+				when new.progress_phase in ('archive_finalizing', 'archive_publishing')
+				begin select raise(abort, 'telemetry unavailable'); end`)
+			return err
+		}
+		return nil
+	}
+	archived, err := service.ResumeArchive(ctx, created.Run.ID)
+	if err != nil {
+		t.Fatalf("telemetry error failed archive: %v", err)
+	}
+	if archived.Run.Status != usagearchive.StatusArchived || archived.Run.ProgressPhase != "" {
+		t.Fatalf("archive after telemetry error = %#v", archived.Run)
+	}
+}
+
 func TestUsageArchiveServiceCancelReleasesMaintenanceAndRejectsUnsafeRuns(t *testing.T) {
 	service, _, _ := newArchiveTestService(t, 2, 1, archiveTestServiceEvents(2))
 	ctx := context.Background()
@@ -235,15 +401,20 @@ func TestArchiveStatusSummarySanitizesInternalMetadata(t *testing.T) {
 	const secretPath = "/private/archive/run/manifest.json"
 	status := ArchiveStatus{
 		Run: store.UsageArchiveRun{
-			ID:             strings.Repeat("a", 32),
-			Mode:           usagearchive.RunModeManual,
-			SchemaVersion:  99,
-			Format:         "internal-format",
-			Status:         usagearchive.StatusFailed,
-			ArchiveDigest:  "internal-archive-digest",
-			ManifestFile:   secretPath,
-			ManifestSHA256: "internal-manifest-digest",
-			LastError:      "open " + secretPath + ": permission denied",
+			ID:                  strings.Repeat("a", 32),
+			Mode:                usagearchive.RunModeManual,
+			SchemaVersion:       99,
+			Format:              "internal-format",
+			Status:              usagearchive.StatusFailed,
+			ArchiveDigest:       "internal-archive-digest",
+			ManifestFile:        secretPath,
+			ManifestSHA256:      "internal-manifest-digest",
+			LastError:           "open " + secretPath + ": permission denied",
+			ProgressPhase:       usagearchive.ProgressArchiveFinalizing,
+			ProgressCurrent:     12,
+			ProgressTotal:       14,
+			ProgressUnit:        "segments",
+			ProgressUpdatedAtMS: 1234,
 		},
 		Segments: []store.UsageArchiveSegment{{
 			RunID:           strings.Repeat("a", 32),
@@ -281,6 +452,17 @@ func TestArchiveStatusSummarySanitizesInternalMetadata(t *testing.T) {
 	}
 	if !strings.Contains(response, `"has_error":true`) {
 		t.Fatalf("archive summary did not preserve safe error state: %s", response)
+	}
+	if !strings.Contains(response, `"progress":{"phase":"archive_finalizing","current":12,"total":14,"unit":"segments","updated_at_ms":1234}`) {
+		t.Fatalf("archive summary lost safe progress: %s", response)
+	}
+	status.Run.ProgressUnit = secretPath
+	if summary := NewArchiveStatusSummary(status); summary.Run.Progress == nil || summary.Run.Progress.Unit != "segments" {
+		t.Fatalf("archive summary published unsafe progress unit: %#v", summary.Run.Progress)
+	}
+	status.Run.ProgressPhase = secretPath
+	if summary := NewArchiveStatusSummary(status); summary.Run.Progress != nil {
+		t.Fatalf("archive summary published unknown progress: %#v", summary.Run.Progress)
 	}
 }
 
@@ -867,6 +1049,9 @@ func TestUsageArchiveServiceResumesPublishedOrphanManifest(t *testing.T) {
 		len(failed.Segments) != 1 {
 		t.Fatalf("failed archive = %#v", failed)
 	}
+	if failed.Run.ProgressPhase != usagearchive.ProgressArchivePublishing || failed.Run.ProgressTotal != 0 {
+		t.Fatalf("published orphan progress = %#v", failed.Run)
+	}
 	manifestPath := filepath.Join(archiveDirectory, created.Run.ID, "manifest.json")
 	if err := os.WriteFile(manifestPath, []byte("corrupt orphan manifest"), 0o600); err != nil {
 		t.Fatalf("corrupt orphan manifest: %v", err)
@@ -878,6 +1063,10 @@ func TestUsageArchiveServiceResumesPublishedOrphanManifest(t *testing.T) {
 		DeleteBatchSize:       1,
 		AggregateReadsEnabled: true,
 	}))
+	persisted, err := restarted.ArchiveStatus(ctx, created.Run.ID)
+	if err != nil || persisted.Run.ProgressPhase != usagearchive.ProgressArchivePublishing {
+		t.Fatalf("restarted progress = %#v err=%v", persisted.Run, err)
+	}
 	archived, err := restarted.ResumeArchive(ctx, created.Run.ID)
 	if err != nil {
 		t.Fatalf("resume archive: %v", err)
@@ -886,6 +1075,9 @@ func TestUsageArchiveServiceResumesPublishedOrphanManifest(t *testing.T) {
 		archived.Run.ManifestFile == "" ||
 		archived.Run.ManifestSHA256 == "" {
 		t.Fatalf("resumed archive = %#v", archived)
+	}
+	if archived.Run.ProgressPhase != "" {
+		t.Fatalf("resumed archived progress = %#v", archived.Run)
 	}
 	catchUpUsageAggregate(t, st)
 	if _, err := restarted.VerifyArchive(ctx, created.Run.ID); err != nil {

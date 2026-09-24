@@ -30,7 +30,7 @@ import { formatDateTime, formatFileSize } from '@/utils/format';
 import {
   getArchiveRunAction,
   isArchiveRunCancellable,
-  resolveProgressPercent,
+  resolveArchiveProgressPresentation,
   type ArchiveHistoryFilter,
   type ArchiveHistorySource,
   type ArchiveRunAction,
@@ -630,11 +630,15 @@ export function UsageArchiveRunView({
     t(`usage_maintenance.run_status_${value}`, { defaultValue: value });
   const deleting =
     run.status === 'deleting' || run.resume_status === 'deleting' || run.status === 'completed';
-  const progress = deleting
-    ? resolveProgressPercent(run.deleted_event_count, run.event_count)
-    : run.status === 'archiving' || run.resume_status === 'archiving'
-      ? resolveProgressPercent(run.archived_event_count, run.event_count)
-      : null;
+  const progress = resolveArchiveProgressPresentation(run);
+  const milestones = [
+    ['created_at_ms', 'created'],
+    ['started_at_ms', 'started'],
+    ['archived_at_ms', 'archived'],
+    ['verified_at_ms', 'verified'],
+    ['delete_started_at_ms', 'delete_started'],
+    ['completed_at_ms', 'completed'],
+  ] as const;
   const action = getArchiveRunAction(run.status);
   const disabledReason = action ? actions.actionTitle(run, action) : undefined;
   const steps =
@@ -734,35 +738,40 @@ export function UsageArchiveRunView({
           </p>
         </div>
       ) : null}
-      {progress !== null ? (
+      {progress ? (
         <div className={styles.progress} data-failed={run.status === 'failed' || run.has_error}>
           <div>
             <span>
-              {t(
-                deleting
-                  ? 'usage_maintenance.workspace_delete_progress'
-                  : 'usage_maintenance.workspace_archive_progress'
-              )}
               {run.status === 'failed' || run.has_error
-                ? ` (${t('usage_maintenance.progress_status_interrupted', { defaultValue: 'Interrupted' })})`
+                ? `${t('usage_maintenance.progress_interrupted_at')}: `
                 : ''}
+              {t(progress.labelKey)}
             </span>
-            <strong>{progress.toFixed(1)}%</strong>
+            {progress.percent !== null ? <strong>{progress.percent.toFixed(1)}%</strong> : null}
           </div>
+          {progress.total > 0 ? (
+            <p>
+              {progress.current.toLocaleString(i18n.language)} /{' '}
+              {progress.total.toLocaleString(i18n.language)}{' '}
+              {t(`usage_maintenance.progress_unit_${progress.unit ?? 'events'}`)}
+            </p>
+          ) : null}
           <div
-            className={styles.progressTrack}
+            className={`${styles.progressTrack} ${progress.percent === null ? styles.progressIndeterminate : ''}`}
             role="progressbar"
-            aria-label={t(
-              deleting
-                ? 'usage_maintenance.workspace_delete_progress'
-                : 'usage_maintenance.workspace_archive_progress'
-            )}
+            aria-label={t(progress.labelKey)}
             aria-valuemin={0}
             aria-valuemax={100}
-            aria-valuenow={Math.round(progress)}
+            aria-valuenow={progress.percent === null ? undefined : Math.round(progress.percent)}
+            aria-busy={progress.percent === null ? true : undefined}
           >
-            <i style={{ width: `${progress}%` }} />
+            <i style={progress.percent === null ? undefined : { width: `${progress.percent}%` }} />
           </div>
+          {progress.updatedAtMS ? (
+            <small>
+              {t('usage_maintenance.progress_recent')}: {formatTime(progress.updatedAtMS)}
+            </small>
+          ) : null}
         </div>
       ) : null}
       <dl className={styles.runCounts}>
@@ -797,6 +806,43 @@ export function UsageArchiveRunView({
       {active || actions.working ? (
         <p className={styles.hint}>{t('usage_maintenance.stop_waiting_note')}</p>
       ) : null}
+      <details className={styles.technical}>
+        <summary>{t('usage_maintenance.execution_details')}</summary>
+        {progress ? (
+          <p>
+            {t('usage_maintenance.current_operation')}: {t(progress.labelKey)}
+            {progress.total > 0
+              ? ` · ${progress.current.toLocaleString(i18n.language)} / ${progress.total.toLocaleString(i18n.language)} ${t(`usage_maintenance.progress_unit_${progress.unit ?? 'events'}`)}`
+              : ''}
+            {progress.updatedAtMS
+              ? ` · ${t('usage_maintenance.progress_recent')}: ${formatTime(progress.updatedAtMS)}`
+              : ''}
+          </p>
+        ) : null}
+        <ul className={styles.executionMilestones}>
+          {milestones.map(([field, label]) =>
+            run[field] ? (
+              <li key={field}>
+                <time>{formatTime(run[field])}</time> {t(`usage_maintenance.milestone_${label}`)}
+              </li>
+            ) : null
+          )}
+        </ul>
+        <h3>{t('usage_maintenance.segment_summary')}</h3>
+        <p>{t('usage_maintenance.segment_total', { count: archive.segments.length })}</p>
+        <ul className={styles.executionMilestones}>
+          {archive.segments
+            .slice(-20)
+            .reverse()
+            .map((segment) => (
+              <li key={segment.sequence}>
+                #{segment.sequence} · {segment.event_count.toLocaleString(i18n.language)}{' '}
+                {t('usage_maintenance.progress_unit_events')} ·{' '}
+                {formatFileSize(segment.compressed_bytes)} · {statusLabel(segment.status)}
+              </li>
+            ))}
+        </ul>
+      </details>
       <details className={styles.technical}>
         <summary>{t('usage_maintenance.workspace_technical')}</summary>
         <dl className={styles.keyValues}>
@@ -856,41 +902,44 @@ export function UsageArchiveRunView({
           ) : null}
         </dl>
         <h3>{t('usage_maintenance.segment_summary')}</h3>
-        {archive.segments.map((segment) => (
-          <details className={styles.segment} key={segment.sequence}>
-            <summary>
-              #{segment.sequence} · {statusLabel(segment.status)} ·{' '}
-              {segment.event_count.toLocaleString(i18n.language)}
-            </summary>
-            <dl className={styles.keyValues}>
-              <div>
-                <dt>{t('usage_maintenance.technical_event_ids')}</dt>
-                <dd>
-                  {segment.first_event_id.toLocaleString(i18n.language)} –{' '}
-                  {segment.last_event_id.toLocaleString(i18n.language)}
-                </dd>
-              </div>
-              <div>
-                <dt>{t('usage_maintenance.preview_range')}</dt>
-                <dd>
-                  {formatTime(segment.min_timestamp_ms)} – {formatTime(segment.max_timestamp_ms)}
-                </dd>
-              </div>
-              <div>
-                <dt>{t('usage_maintenance.uncompressed_size')}</dt>
-                <dd>{formatFileSize(segment.uncompressed_bytes)}</dd>
-              </div>
-              <div>
-                <dt>{t('usage_maintenance.compressed_size')}</dt>
-                <dd>{formatFileSize(segment.compressed_bytes)}</dd>
-              </div>
-              <div>
-                <dt>{t('usage_maintenance.verified_at')}</dt>
-                <dd>{formatTime(segment.verified_at_ms)}</dd>
-              </div>
-            </dl>
-          </details>
-        ))}
+        {archive.segments
+          .slice(-20)
+          .reverse()
+          .map((segment) => (
+            <details className={styles.segment} key={segment.sequence}>
+              <summary>
+                #{segment.sequence} · {statusLabel(segment.status)} ·{' '}
+                {segment.event_count.toLocaleString(i18n.language)}
+              </summary>
+              <dl className={styles.keyValues}>
+                <div>
+                  <dt>{t('usage_maintenance.technical_event_ids')}</dt>
+                  <dd>
+                    {segment.first_event_id.toLocaleString(i18n.language)} –{' '}
+                    {segment.last_event_id.toLocaleString(i18n.language)}
+                  </dd>
+                </div>
+                <div>
+                  <dt>{t('usage_maintenance.preview_range')}</dt>
+                  <dd>
+                    {formatTime(segment.min_timestamp_ms)} – {formatTime(segment.max_timestamp_ms)}
+                  </dd>
+                </div>
+                <div>
+                  <dt>{t('usage_maintenance.uncompressed_size')}</dt>
+                  <dd>{formatFileSize(segment.uncompressed_bytes)}</dd>
+                </div>
+                <div>
+                  <dt>{t('usage_maintenance.compressed_size')}</dt>
+                  <dd>{formatFileSize(segment.compressed_bytes)}</dd>
+                </div>
+                <div>
+                  <dt>{t('usage_maintenance.verified_at')}</dt>
+                  <dd>{formatTime(segment.verified_at_ms)}</dd>
+                </div>
+              </dl>
+            </details>
+          ))}
         {archive.segments.length === 0 ? (
           <p className={styles.hint}>{t('usage_maintenance.no_segments')}</p>
         ) : null}

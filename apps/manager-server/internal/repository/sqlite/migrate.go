@@ -603,6 +603,11 @@ func Migrate(db *sql.DB) error {
 			status text not null,
 			resume_status text,
 			requested_stage text,
+			progress_phase text,
+			progress_current integer not null default 0,
+			progress_total integer not null default 0,
+			progress_unit text,
+			progress_updated_at_ms integer,
 			cutoff_timestamp_ms integer not null,
 			target_event_id integer not null,
 			event_count integer not null,
@@ -2548,11 +2553,22 @@ func ensureUsageArchiveRunColumns(db *sql.DB) error {
 	if len(existing) == 0 {
 		return nil
 	}
-	if _, ok := existing["requested_stage"]; ok {
-		return nil
+	for _, column := range []string{
+		"requested_stage text",
+		"progress_phase text",
+		"progress_current integer not null default 0",
+		"progress_total integer not null default 0",
+		"progress_unit text",
+		"progress_updated_at_ms integer",
+	} {
+		if _, ok := existing[strings.Fields(column)[0]]; ok {
+			continue
+		}
+		if _, err := db.Exec(`alter table usage_archive_runs add column ` + column); err != nil {
+			return err
+		}
 	}
-	_, err = db.Exec(`alter table usage_archive_runs add column requested_stage text`)
-	return err
+	return nil
 }
 
 func ensureCodexInspectionOwnershipColumns(db *sql.DB) error {

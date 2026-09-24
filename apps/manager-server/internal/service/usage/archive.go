@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -70,29 +71,38 @@ type ArchiveStatus struct {
 // ArchiveRunSummary is the public archive progress view. It intentionally
 // excludes archive paths, digests, formats, schemas, and raw internal errors.
 type ArchiveRunSummary struct {
-	ID                        string `json:"id"`
-	Mode                      string `json:"mode"`
-	Status                    string `json:"status"`
-	ResumeStatus              string `json:"resume_status,omitempty"`
-	RequestedStage            string `json:"requested_stage,omitempty"`
-	CutoffTimestampMS         int64  `json:"cutoff_timestamp_ms"`
-	TargetEventID             int64  `json:"target_event_id"`
-	EventCount                int64  `json:"event_count"`
-	EstimatedBytes            int64  `json:"estimated_bytes"`
-	LastArchivedEventID       int64  `json:"last_archived_event_id"`
-	ArchivedEventCount        int64  `json:"archived_event_count"`
-	ArchivedUncompressedBytes int64  `json:"archived_uncompressed_bytes"`
-	ArchivedCompressedBytes   int64  `json:"archived_compressed_bytes"`
-	LastDeletedEventID        int64  `json:"last_deleted_event_id"`
-	DeletedEventCount         int64  `json:"deleted_event_count"`
-	CreatedAtMS               int64  `json:"created_at_ms"`
-	UpdatedAtMS               int64  `json:"updated_at_ms"`
-	StartedAtMS               int64  `json:"started_at_ms,omitempty"`
-	ArchivedAtMS              int64  `json:"archived_at_ms,omitempty"`
-	VerifiedAtMS              int64  `json:"verified_at_ms,omitempty"`
-	DeleteStartedAtMS         int64  `json:"delete_started_at_ms,omitempty"`
-	CompletedAtMS             int64  `json:"completed_at_ms,omitempty"`
-	HasError                  bool   `json:"has_error"`
+	ID                        string                  `json:"id"`
+	Mode                      string                  `json:"mode"`
+	Status                    string                  `json:"status"`
+	ResumeStatus              string                  `json:"resume_status,omitempty"`
+	RequestedStage            string                  `json:"requested_stage,omitempty"`
+	Progress                  *ArchiveProgressSummary `json:"progress,omitempty"`
+	CutoffTimestampMS         int64                   `json:"cutoff_timestamp_ms"`
+	TargetEventID             int64                   `json:"target_event_id"`
+	EventCount                int64                   `json:"event_count"`
+	EstimatedBytes            int64                   `json:"estimated_bytes"`
+	LastArchivedEventID       int64                   `json:"last_archived_event_id"`
+	ArchivedEventCount        int64                   `json:"archived_event_count"`
+	ArchivedUncompressedBytes int64                   `json:"archived_uncompressed_bytes"`
+	ArchivedCompressedBytes   int64                   `json:"archived_compressed_bytes"`
+	LastDeletedEventID        int64                   `json:"last_deleted_event_id"`
+	DeletedEventCount         int64                   `json:"deleted_event_count"`
+	CreatedAtMS               int64                   `json:"created_at_ms"`
+	UpdatedAtMS               int64                   `json:"updated_at_ms"`
+	StartedAtMS               int64                   `json:"started_at_ms,omitempty"`
+	ArchivedAtMS              int64                   `json:"archived_at_ms,omitempty"`
+	VerifiedAtMS              int64                   `json:"verified_at_ms,omitempty"`
+	DeleteStartedAtMS         int64                   `json:"delete_started_at_ms,omitempty"`
+	CompletedAtMS             int64                   `json:"completed_at_ms,omitempty"`
+	HasError                  bool                    `json:"has_error"`
+}
+
+type ArchiveProgressSummary struct {
+	Phase       string `json:"phase"`
+	Current     int64  `json:"current"`
+	Total       int64  `json:"total"`
+	Unit        string `json:"unit,omitempty"`
+	UpdatedAtMS int64  `json:"updated_at_ms,omitempty"`
 }
 
 // ArchiveSegmentSummary exposes progress and size metadata without publishing
@@ -770,7 +780,7 @@ func NewArchiveStatusSummary(status ArchiveStatus) ArchiveStatusSummary {
 }
 
 func summarizeArchiveRun(run store.UsageArchiveRun) ArchiveRunSummary {
-	return ArchiveRunSummary{
+	summary := ArchiveRunSummary{
 		ID:                        run.ID,
 		Mode:                      run.Mode,
 		Status:                    run.Status,
@@ -794,6 +804,35 @@ func summarizeArchiveRun(run store.UsageArchiveRun) ArchiveRunSummary {
 		DeleteStartedAtMS:         run.DeleteStartedAtMS,
 		CompletedAtMS:             run.CompletedAtMS,
 		HasError:                  strings.TrimSpace(run.LastError) != "",
+	}
+	if unit, ok := publicArchiveProgressUnit(run.ProgressPhase); ok {
+		summary.Progress = &ArchiveProgressSummary{
+			Phase: run.ProgressPhase, Current: run.ProgressCurrent, Total: run.ProgressTotal,
+			Unit: unit, UpdatedAtMS: run.ProgressUpdatedAtMS,
+		}
+	}
+	return summary
+}
+
+func publicArchiveProgressUnit(phase string) (string, bool) {
+	switch phase {
+	case usagearchive.ProgressArchivingRecords, usagearchive.ProgressDeletingRecords:
+		return "events", true
+	case usagearchive.ProgressArchiveFinalizing, usagearchive.ProgressVerifyingArchive,
+		usagearchive.ProgressCleanupRevalidating:
+		return "segments", true
+	case usagearchive.ProgressArchivePublishing:
+		return "", true
+	default:
+		return "", false
+	}
+}
+
+type archiveSegmentProgressFunc func(completed, total int64)
+
+func (m *archiveManager) reportProgress(ctx context.Context, runID, status, phase string, current, total int64, unit string) {
+	if err := m.store.UsageArchives.SetProgress(ctx, runID, status, phase, current, total, unit, time.Now().UnixMilli()); err != nil {
+		log.Printf("usage archive progress update failed for run %s phase %s: %v", runID, phase, err)
 	}
 }
 
@@ -879,9 +918,19 @@ func (m *archiveManager) archiveLocked(ctx context.Context, runID string) (Archi
 	if err != nil {
 		return ArchiveStatus{}, m.recordFailure(ctx, run.ID, usagearchive.StatusArchiving, err)
 	}
+	m.reportProgress(ctx, run.ID, usagearchive.StatusArchiving, usagearchive.ProgressArchiveFinalizing, 0, int64(len(segments)), "segments")
+	if err := m.callTestHook("archive_finalizing_started"); err != nil {
+		return ArchiveStatus{}, m.recordFailure(ctx, run.ID, usagearchive.StatusArchiving, err)
+	}
 	generatedAtMS := time.Now().UnixMilli()
-	manifest, err := m.buildManifest(ctx, run, segments, generatedAtMS)
+	manifest, err := m.buildManifest(ctx, run, segments, generatedAtMS, func(completed, total int64) {
+		m.reportProgress(ctx, run.ID, usagearchive.StatusArchiving, usagearchive.ProgressArchiveFinalizing, completed, total, "segments")
+	})
 	if err != nil {
+		return ArchiveStatus{}, m.recordFailure(ctx, run.ID, usagearchive.StatusArchiving, err)
+	}
+	m.reportProgress(ctx, run.ID, usagearchive.StatusArchiving, usagearchive.ProgressArchivePublishing, 0, 0, "")
+	if err := m.callTestHook("archive_publishing_started"); err != nil {
 		return ArchiveStatus{}, m.recordFailure(ctx, run.ID, usagearchive.StatusArchiving, err)
 	}
 	manifestFile, manifestSHA256, err := m.writeManifest(run.ID, manifest)
@@ -947,7 +996,13 @@ func (m *archiveManager) verifyLocked(ctx context.Context, runID string) (Archiv
 	if err != nil {
 		return ArchiveStatus{}, m.recordFailure(ctx, run.ID, usagearchive.StatusVerifying, err)
 	}
-	if err := m.verifyManifest(ctx, run, segments); err != nil {
+	m.reportProgress(ctx, run.ID, usagearchive.StatusVerifying, usagearchive.ProgressVerifyingArchive, 0, int64(len(segments)), "segments")
+	if err := m.callTestHook("archive_verification_started"); err != nil {
+		return ArchiveStatus{}, m.recordFailure(ctx, run.ID, usagearchive.StatusVerifying, err)
+	}
+	if err := m.verifyManifest(ctx, run, segments, func(completed, total int64) {
+		m.reportProgress(ctx, run.ID, usagearchive.StatusVerifying, usagearchive.ProgressVerifyingArchive, completed, total, "segments")
+	}); err != nil {
 		return ArchiveStatus{}, m.recordFailure(ctx, run.ID, usagearchive.StatusVerifying, err)
 	}
 	run, err = m.store.UsageArchives.MarkVerified(ctx, run.ID, time.Now().UnixMilli())
@@ -988,9 +1043,19 @@ func (m *archiveManager) deleteLocked(ctx context.Context, runID string) (Archiv
 	// A persisted verified state only proves the files were valid earlier.
 	// Revalidate before the first raw-delete batch of every invocation, including
 	// recovery after a restart, so missing or changed archives cannot lose data.
-	if err := m.verifyManifest(ctx, run, status.Segments); err != nil {
+	m.reportProgress(ctx, run.ID, usagearchive.StatusDeleting, usagearchive.ProgressCleanupRevalidating, 0, int64(len(status.Segments)), "segments")
+	if err := m.callTestHook("cleanup_revalidation_started"); err != nil {
+		return ArchiveStatus{}, m.recordFailure(ctx, run.ID, usagearchive.StatusDeleting, err)
+	}
+	if err := m.verifyManifest(ctx, run, status.Segments, func(completed, total int64) {
+		m.reportProgress(ctx, run.ID, usagearchive.StatusDeleting, usagearchive.ProgressCleanupRevalidating, completed, total, "segments")
+	}); err != nil {
 		return ArchiveStatus{}, m.recordFailure(ctx, run.ID, usagearchive.StatusDeleting,
 			fmt.Errorf("revalidate usage archive before raw cleanup: %w", err))
+	}
+	m.reportProgress(ctx, run.ID, usagearchive.StatusDeleting, usagearchive.ProgressDeletingRecords, run.DeletedEventCount, run.EventCount, "events")
+	if err := m.callTestHook("delete_records_started"); err != nil {
+		return ArchiveStatus{}, m.recordFailure(ctx, run.ID, usagearchive.StatusDeleting, err)
 	}
 	for run.Status == usagearchive.StatusDeleting {
 		if err := ctx.Err(); err != nil {
@@ -1116,7 +1181,7 @@ func (m *archiveManager) writeSegment(runID string, sequence int, records []stor
 	}, refs, nil
 }
 
-func (m *archiveManager) buildManifest(ctx context.Context, run store.UsageArchiveRun, segments []store.UsageArchiveSegment, generatedAtMS int64) (ArchiveManifest, error) {
+func (m *archiveManager) buildManifest(ctx context.Context, run store.UsageArchiveRun, segments []store.UsageArchiveSegment, generatedAtMS int64, progress ...archiveSegmentProgressFunc) (ArchiveManifest, error) {
 	if len(segments) == 0 {
 		return ArchiveManifest{}, fmt.Errorf("%w: archive has no segments", ErrArchiveCoverageIncomplete)
 	}
@@ -1152,6 +1217,12 @@ func (m *archiveManager) buildManifest(ctx context.Context, run store.UsageArchi
 		maxTimestampMS = max(maxTimestampMS, inspection.MaxTimestampMS)
 		manifestSegments = append(manifestSegments, manifestSegment(segment))
 		previousLastEventID = segment.LastEventID
+		if len(progress) > 0 && progress[0] != nil {
+			progress[0](int64(index+1), int64(len(segments)))
+		}
+		if err := m.callTestHook("archive_segment_inspected"); err != nil {
+			return ArchiveManifest{}, err
+		}
 	}
 	if eventCount != run.EventCount || uncompressedBytes != run.ArchivedUncompressedBytes || compressedBytes != run.ArchivedCompressedBytes {
 		return ArchiveManifest{}, fmt.Errorf(
@@ -1209,7 +1280,7 @@ func (m *archiveManager) writeManifest(runID string, manifest ArchiveManifest) (
 	return relativeName, hex.EncodeToString(digest[:]), nil
 }
 
-func (m *archiveManager) verifyManifest(ctx context.Context, run store.UsageArchiveRun, segments []store.UsageArchiveSegment) error {
+func (m *archiveManager) verifyManifest(ctx context.Context, run store.UsageArchiveRun, segments []store.UsageArchiveSegment, progress ...archiveSegmentProgressFunc) error {
 	if len(segments) == 0 {
 		return fmt.Errorf("%w: archive has no segments", ErrArchiveCoverageIncomplete)
 	}
@@ -1287,6 +1358,12 @@ func (m *archiveManager) verifyManifest(ctx context.Context, run store.UsageArch
 		minTimestampMS = min(minTimestampMS, inspection.MinTimestampMS)
 		maxTimestampMS = max(maxTimestampMS, inspection.MaxTimestampMS)
 		previousLastEventID = segment.LastEventID
+		if len(progress) > 0 && progress[0] != nil {
+			progress[0](int64(index+1), int64(len(segments)))
+		}
+		if err := m.callTestHook("verification_segment_inspected"); err != nil {
+			return err
+		}
 	}
 	if manifest.MinTimestampMS != minTimestampMS || manifest.MaxTimestampMS != maxTimestampMS {
 		return errors.New("usage archive manifest time range does not match segments")

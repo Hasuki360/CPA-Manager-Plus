@@ -134,6 +134,50 @@ func TestUsageArchiveRunMigrationAddsRequestedStageColumn(t *testing.T) {
 	}
 }
 
+func TestUsageArchiveRunProgressColumnsMigrateIndependently(t *testing.T) {
+	progressColumns := []string{"progress_phase", "progress_current", "progress_total", "progress_unit", "progress_updated_at_ms"}
+	for _, testCase := range []struct {
+		name string
+		drop []string
+	}{
+		{name: "fresh"},
+		{name: "requested stage already present", drop: progressColumns},
+		{name: "partial progress", drop: progressColumns[2:]},
+		{name: "fully migrated"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "archive-progress.sqlite")
+			db, err := Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, column := range testCase.drop {
+				if _, err := db.Exec(`alter table usage_archive_runs drop column ` + column); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+			for attempt := 0; attempt < 2; attempt++ {
+				db, err = Open(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				columns := migrationTableColumns(t, db, "usage_archive_runs")
+				for _, column := range append([]string{"requested_stage"}, progressColumns...) {
+					if !columns[column] {
+						t.Fatalf("missing %s after migration %d", column, attempt)
+					}
+				}
+				if err := db.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
 func TestUsageArchiveMigrationIsAdditiveAndStartupBoundedWithLargeLedger(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "usage-archive-large-ledger.sqlite")
 	db, err := Open(path)

@@ -23,15 +23,21 @@ const (
 	FormatGzipJSONLV1 = "gzip-jsonl-v1"
 	utcDayMS          = int64(24 * 60 * 60 * 1000)
 
-	StatusPreviewed = "previewed"
-	StatusArchiving = "archiving"
-	StatusArchived  = "archived"
-	StatusVerifying = "verifying"
-	StatusVerified  = "verified"
-	StatusDeleting  = "deleting"
-	StatusCompleted = "completed"
-	StatusFailed    = "failed"
-	StatusCancelled = "cancelled"
+	StatusPreviewed             = "previewed"
+	StatusArchiving             = "archiving"
+	StatusArchived              = "archived"
+	StatusVerifying             = "verifying"
+	StatusVerified              = "verified"
+	StatusDeleting              = "deleting"
+	StatusCompleted             = "completed"
+	StatusFailed                = "failed"
+	StatusCancelled             = "cancelled"
+	ProgressArchivingRecords    = "archiving_records"
+	ProgressArchiveFinalizing   = "archive_finalizing"
+	ProgressArchivePublishing   = "archive_publishing"
+	ProgressVerifyingArchive    = "verifying_archive"
+	ProgressCleanupRevalidating = "cleanup_revalidating"
+	ProgressDeletingRecords     = "deleting_records"
 
 	SegmentStatusPublished = "published"
 	SegmentStatusVerified  = "verified"
@@ -73,6 +79,11 @@ type Run struct {
 	Status                    string `json:"status"`
 	ResumeStatus              string `json:"resume_status,omitempty"`
 	RequestedStage            string `json:"requested_stage,omitempty"`
+	ProgressPhase             string `json:"progress_phase,omitempty"`
+	ProgressCurrent           int64  `json:"progress_current"`
+	ProgressTotal             int64  `json:"progress_total"`
+	ProgressUnit              string `json:"progress_unit,omitempty"`
+	ProgressUpdatedAtMS       int64  `json:"progress_updated_at_ms,omitempty"`
 	CutoffTimestampMS         int64  `json:"cutoff_timestamp_ms"`
 	TargetEventID             int64  `json:"target_event_id"`
 	EventCount                int64  `json:"event_count"`
@@ -298,7 +309,8 @@ func (r *Repository) ListRuns(ctx context.Context, filter RunListFilter) (RunLis
 	}
 	args = append(args, filter.Limit+1)
 	rows, err := r.db.QueryContext(ctx, `select
-		id, mode, schema_version, format, status, resume_status, requested_stage, cutoff_timestamp_ms,
+		id, mode, schema_version, format, status, resume_status, requested_stage,
+		progress_phase, progress_current, progress_total, progress_unit, progress_updated_at_ms, cutoff_timestamp_ms,
 		target_event_id, event_count, estimated_bytes, last_archived_event_id,
 		archived_event_count, archived_uncompressed_bytes, archived_compressed_bytes,
 		archive_digest, manifest_file, manifest_sha256, last_deleted_event_id,
@@ -675,7 +687,9 @@ func (r *Repository) CancelRun(ctx context.Context, runID string, nowMS int64) (
 	}
 	if run.Status == StatusCancelled {
 		if _, err := tx.ExecContext(ctx, `update usage_archive_runs set
-			resume_status = null, requested_stage = null, last_error = null, updated_at_ms = ? where id = ?`, nowMS, runID); err != nil {
+			resume_status = null, requested_stage = null, last_error = null, updated_at_ms = ?,
+			progress_phase = null, progress_current = 0, progress_total = 0, progress_unit = null, progress_updated_at_ms = null
+			where id = ?`, nowMS, runID); err != nil {
 			return Run{}, err
 		}
 		if err := releaseLock(ctx, tx, runID); err != nil {
@@ -741,7 +755,8 @@ func (r *Repository) CancelRun(ctx context.Context, runID string, nowMS int64) (
 	}
 	if _, err := tx.ExecContext(ctx, `update usage_archive_runs set
 		status = ?, resume_status = null, requested_stage = null,
-		last_error = null, updated_at_ms = ?
+		last_error = null, updated_at_ms = ?,
+		progress_phase = null, progress_current = 0, progress_total = 0, progress_unit = null, progress_updated_at_ms = null
 	where id = ?`, StatusCancelled, nowMS, runID); err != nil {
 		return Run{}, err
 	}
@@ -789,20 +804,55 @@ func (r *Repository) beginStage(ctx context.Context, runID string, stage string,
 		return Run{}, err
 	}
 	startedColumn := "started_at_ms"
+	progressPhase, progressUnit := ProgressArchivingRecords, "events"
+	progressCurrent, progressTotal := run.ArchivedEventCount, run.EventCount
 	if stage == StatusDeleting {
 		startedColumn = "delete_started_at_ms"
+		progressPhase, progressUnit = ProgressCleanupRevalidating, "segments"
+		progressCurrent, progressTotal = 0, 0
+	} else if stage == StatusVerifying {
+		progressPhase, progressUnit = ProgressVerifyingArchive, "segments"
+		progressCurrent, progressTotal = 0, 0
 	}
 	statement := fmt.Sprintf(`update usage_archive_runs set
 		status = ?, resume_status = null, last_error = null, updated_at_ms = ?,
+		progress_phase = ?, progress_current = ?, progress_total = ?, progress_unit = ?, progress_updated_at_ms = ?,
 		%s = coalesce(%s, ?)
 	where id = ?`, startedColumn, startedColumn)
-	if _, err := tx.ExecContext(ctx, statement, stage, nowMS, nowMS, runID); err != nil {
+	if _, err := tx.ExecContext(ctx, statement, stage, nowMS, progressPhase, progressCurrent, progressTotal, progressUnit, nowMS, nowMS, runID); err != nil {
 		return Run{}, err
 	}
 	if err := tx.Commit(); err != nil {
 		return Run{}, err
 	}
 	return r.Run(ctx, runID)
+}
+
+// SetProgress updates only telemetry. A stale callback cannot cross a status boundary.
+// updated_at_ms remains reserved for business state and queue ordering.
+func (r *Repository) SetProgress(ctx context.Context, runID, expectedStatus, phase string, current, total int64, unit string, nowMS int64) error {
+	valid := false
+	switch phase {
+	case ProgressArchivingRecords:
+		valid = expectedStatus == StatusArchiving && unit == "events"
+	case ProgressArchiveFinalizing:
+		valid = expectedStatus == StatusArchiving && unit == "segments"
+	case ProgressArchivePublishing:
+		valid = expectedStatus == StatusArchiving && unit == "" && current == 0 && total == 0
+	case ProgressVerifyingArchive:
+		valid = expectedStatus == StatusVerifying && unit == "segments"
+	case ProgressCleanupRevalidating:
+		valid = expectedStatus == StatusDeleting && unit == "segments"
+	case ProgressDeletingRecords:
+		valid = expectedStatus == StatusDeleting && unit == "events"
+	}
+	if !valid || nowMS <= 0 || current < 0 || total < 0 {
+		return fmt.Errorf("invalid archive progress")
+	}
+	_, err := r.db.ExecContext(ctx, `update usage_archive_runs set
+		progress_phase = ?, progress_current = ?, progress_total = ?, progress_unit = ?, progress_updated_at_ms = ?
+		where id = ? and status = ?`, phase, current, total, unit, nowMS, runID, expectedStatus)
+	return err
 }
 
 func (r *Repository) Records(ctx context.Context, runID string, afterEventID int64, limit int, maxBytes int64) ([]Record, error) {
@@ -1006,12 +1056,17 @@ func (r *Repository) RecordSegment(ctx context.Context, runID string, segment Se
 		archived_event_count = archived_event_count + ?,
 		archived_uncompressed_bytes = archived_uncompressed_bytes + ?,
 		archived_compressed_bytes = archived_compressed_bytes + ?,
+		progress_phase = ?, progress_current = archived_event_count + ?, progress_total = event_count,
+		progress_unit = 'events', progress_updated_at_ms = ?,
 		updated_at_ms = ?
 	where id = ?`,
 		segment.LastEventID,
 		segment.EventCount,
 		segment.UncompressedBytes,
 		segment.CompressedBytes,
+		ProgressArchivingRecords,
+		segment.EventCount,
+		nowMS,
 		nowMS,
 		runID,
 	); err != nil {
@@ -1100,7 +1155,8 @@ func (r *Repository) MarkArchived(ctx context.Context, runID, archiveDigest, man
 	}
 	if _, err := tx.ExecContext(ctx, `update usage_archive_runs set
 		status = ?, archive_digest = ?, manifest_file = ?, manifest_sha256 = ?,
-		archived_at_ms = ?, updated_at_ms = ?, last_error = null
+		archived_at_ms = ?, updated_at_ms = ?, last_error = null,
+		progress_phase = null, progress_current = 0, progress_total = 0, progress_unit = null, progress_updated_at_ms = null
 	where id = ?`, StatusArchived, archiveDigest, manifestFile, manifestSHA256, nowMS, nowMS, runID); err != nil {
 		return Run{}, err
 	}
@@ -1143,7 +1199,8 @@ func (r *Repository) MarkVerified(ctx context.Context, runID string, nowMS int64
 		return Run{}, err
 	}
 	if _, err := tx.ExecContext(ctx, `update usage_archive_runs set
-		status = ?, verified_at_ms = ?, updated_at_ms = ?, last_error = null
+		status = ?, verified_at_ms = ?, updated_at_ms = ?, last_error = null,
+		progress_phase = null, progress_current = 0, progress_total = 0, progress_unit = null, progress_updated_at_ms = null
 	where id = ?`, StatusVerified, nowMS, nowMS, runID); err != nil {
 		return Run{}, err
 	}
@@ -1307,8 +1364,10 @@ func (r *Repository) DeleteBatch(ctx context.Context, runID string, limit int, n
 		lastID = candidates[len(candidates)-1].ID
 	}
 	if _, err := tx.ExecContext(ctx, `update usage_archive_runs set
-		last_deleted_event_id = ?, deleted_event_count = deleted_event_count + ?, updated_at_ms = ?
-	where id = ?`, lastID, len(candidates), nowMS, runID); err != nil {
+		last_deleted_event_id = ?, deleted_event_count = deleted_event_count + ?, updated_at_ms = ?,
+		progress_phase = ?, progress_current = deleted_event_count + ?, progress_total = event_count,
+		progress_unit = 'events', progress_updated_at_ms = ?
+	where id = ?`, lastID, len(candidates), nowMS, ProgressDeletingRecords, len(candidates), nowMS, runID); err != nil {
 		return DeleteBatchResult{}, err
 	}
 	var remaining, missingRaw int
@@ -1347,7 +1406,8 @@ func (r *Repository) DeleteBatch(ctx context.Context, runID string, limit int, n
 	completed := remaining == 0 && deletedEventCount == run.EventCount
 	if completed {
 		if _, err := tx.ExecContext(ctx, `update usage_archive_runs set
-			status = ?, completed_at_ms = ?, updated_at_ms = ?, last_error = null
+			status = ?, completed_at_ms = ?, updated_at_ms = ?, last_error = null,
+			progress_phase = null, progress_current = 0, progress_total = 0, progress_unit = null, progress_updated_at_ms = null
 		where id = ?`, StatusCompleted, nowMS, nowMS, runID); err != nil {
 			return DeleteBatchResult{}, err
 		}
@@ -1450,7 +1510,8 @@ func runQuery(ctx context.Context, queryer interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }, id string) (Run, error) {
 	run, err := scanRun(queryer.QueryRowContext(ctx, `select
-		id, mode, schema_version, format, status, resume_status, requested_stage, cutoff_timestamp_ms,
+		id, mode, schema_version, format, status, resume_status, requested_stage,
+		progress_phase, progress_current, progress_total, progress_unit, progress_updated_at_ms, cutoff_timestamp_ms,
 		target_event_id, event_count, estimated_bytes, last_archived_event_id,
 		archived_event_count, archived_uncompressed_bytes, archived_compressed_bytes,
 		archive_digest, manifest_file, manifest_sha256, last_deleted_event_id,
@@ -1468,8 +1529,8 @@ func runQuery(ctx context.Context, queryer interface {
 
 func scanRun(scanner interface{ Scan(...any) error }) (Run, error) {
 	var run Run
-	var resumeStatus, requestedStage, archiveDigest, manifestFile, manifestSHA256, lastError sql.NullString
-	var startedAt, archivedAt, verifiedAt, deleteStartedAt, completedAt sql.NullInt64
+	var resumeStatus, requestedStage, progressPhase, progressUnit, archiveDigest, manifestFile, manifestSHA256, lastError sql.NullString
+	var progressUpdatedAt, startedAt, archivedAt, verifiedAt, deleteStartedAt, completedAt sql.NullInt64
 	if err := scanner.Scan(
 		&run.ID,
 		&run.Mode,
@@ -1478,6 +1539,11 @@ func scanRun(scanner interface{ Scan(...any) error }) (Run, error) {
 		&run.Status,
 		&resumeStatus,
 		&requestedStage,
+		&progressPhase,
+		&run.ProgressCurrent,
+		&run.ProgressTotal,
+		&progressUnit,
+		&progressUpdatedAt,
 		&run.CutoffTimestampMS,
 		&run.TargetEventID,
 		&run.EventCount,
@@ -1504,6 +1570,9 @@ func scanRun(scanner interface{ Scan(...any) error }) (Run, error) {
 	}
 	run.ResumeStatus = resumeStatus.String
 	run.RequestedStage = requestedStage.String
+	run.ProgressPhase = progressPhase.String
+	run.ProgressUnit = progressUnit.String
+	run.ProgressUpdatedAtMS = progressUpdatedAt.Int64
 	run.ArchiveDigest = archiveDigest.String
 	run.ManifestFile = manifestFile.String
 	run.ManifestSHA256 = manifestSHA256.String

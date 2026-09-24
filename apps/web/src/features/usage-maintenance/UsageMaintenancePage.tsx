@@ -36,6 +36,7 @@ import {
   usageServiceApi,
   type UsageArchiveList,
   type UsageArchivePreview,
+  type UsageArchiveProgress,
   type UsageArchiveResumeStage,
   type UsageArchiveRunSummary,
   type UsageArchiveSegmentSummary,
@@ -47,8 +48,9 @@ import { usePanelFeatureAvailability } from '@/hooks/usePanelFeatureAvailability
 import { formatDateTime, formatFileSize } from '@/utils/format';
 import {
   archiveHistoryFilterStatus,
+  pickFreshestArchiveStatus,
   recommendRetentionDays,
-  resolveProgressPercent,
+  resolveArchiveProgressPresentation,
   resolveRawEventRange,
   resolveRetentionCutoff,
   type ArchiveHistoryFilter,
@@ -158,6 +160,14 @@ const isUsageArchivePreview = (value: unknown): value is UsageArchivePreview =>
   hasOptionalNumber(value, 'min_timestamp_ms') &&
   hasOptionalNumber(value, 'max_timestamp_ms');
 
+const isUsageArchiveProgress = (value: unknown): value is UsageArchiveProgress =>
+  isRecord(value) &&
+  hasString(value, 'phase') &&
+  hasNumber(value, 'current') &&
+  hasNumber(value, 'total') &&
+  hasOptionalString(value, 'unit') &&
+  hasOptionalNumber(value, 'updated_at_ms');
+
 const isUsageArchiveRunSummary = (value: unknown): value is UsageArchiveRunSummary => {
   if (!isRecord(value)) return false;
   return (
@@ -166,6 +176,7 @@ const isUsageArchiveRunSummary = (value: unknown): value is UsageArchiveRunSumma
     hasString(value, 'status') &&
     hasOptionalString(value, 'resume_status') &&
     hasOptionalString(value, 'requested_stage') &&
+    (value.progress === undefined || isUsageArchiveProgress(value.progress)) &&
     hasNumber(value, 'cutoff_timestamp_ms') &&
     hasNumber(value, 'target_event_id') &&
     hasNumber(value, 'event_count') &&
@@ -490,6 +501,7 @@ export function UsageMaintenancePage() {
   const [unsupported, setUnsupported] = useState(false);
   const [postDeleteNoticeVisible, setPostDeleteNoticeVisible] = useState(false);
   const [postDeleteRefreshFailed, setPostDeleteRefreshFailed] = useState(false);
+  const preservePostDeleteErrorRef = useRef(false);
   const mountedRef = useRef(false);
   const loadControllerRef = useRef<AbortController | null>(null);
   const loadGenerationRef = useRef(0);
@@ -745,13 +757,7 @@ export function UsageMaintenancePage() {
   }, [loadHistory, navigation.tab, maintenanceLoaded, unsupported]);
 
   useEffect(() => {
-    if (
-      !selectedRunId ||
-      !serviceBase ||
-      drawerConfirmation ||
-      (operationControllerRef.current && activeOperationRunIdRef.current === selectedRunId)
-    )
-      return;
+    if (!selectedRunId || !serviceBase || drawerConfirmation) return;
     const generation = ++selectedArchiveGenerationRef.current;
     selectedArchiveControllerRef.current?.abort();
     const controller = new AbortController();
@@ -777,7 +783,7 @@ export function UsageMaintenancePage() {
           return;
         }
         setSelectedArchive(result);
-        setError(null);
+        if (!operationControllerRef.current && !preservePostDeleteErrorRef.current) setError(null);
       } catch (cause) {
         if (controller.signal.aborted || generation !== selectedArchiveGenerationRef.current)
           return;
@@ -820,6 +826,7 @@ export function UsageMaintenancePage() {
       const controller = new AbortController();
       loadControllerRef.current = controller;
       if (!background) {
+        preservePostDeleteErrorRef.current = false;
         setLoading(true);
         setError(null);
       }
@@ -851,10 +858,10 @@ export function UsageMaintenancePage() {
         }
         hasLoadedMaintenanceRef.current = true;
         setMaintenance(maintenanceResult);
-        setPostDeleteRefreshFailed(false);
+        if (!background || !preservePostDeleteErrorRef.current) setPostDeleteRefreshFailed(false);
         setArchiveList(archiveResult);
         setUnsupported(false);
-        setError(null);
+        if (!background || !preservePostDeleteErrorRef.current) setError(null);
         return maintenanceResult;
       } catch (cause) {
         if (generation !== loadGenerationRef.current || controller.signal.aborted) return null;
@@ -895,12 +902,13 @@ export function UsageMaintenancePage() {
 
   const shouldPollMaintenance = Boolean(
     maintenance?.active_lock ||
+    (working && activeOperationRunIdRef.current) ||
     (maintenance?.active_run &&
       (maintenance.active_run.mode === 'retention' ||
         archiveProgressStatuses.has(maintenance.active_run.status)))
   );
   useEffect(() => {
-    if (!shouldPollMaintenance || working || !serviceBase) return;
+    if (!shouldPollMaintenance || !serviceBase) return;
     const timer = setInterval(() => {
       if (!loadControllerRef.current) {
         void load({ background: true }).then(() => {
@@ -911,7 +919,7 @@ export function UsageMaintenancePage() {
       }
     }, activeRefreshIntervalMs);
     return () => clearInterval(timer);
-  }, [load, selectedRunId, serviceBase, shouldPollMaintenance, working]);
+  }, [load, selectedRunId, serviceBase, shouldPollMaintenance]);
 
   const cutoffTimestamp = useMemo(
     () => resolveRetentionCutoff(retentionSelection, customCutoff, referenceNowMS),
@@ -1338,6 +1346,7 @@ export function UsageMaintenancePage() {
       const refreshedMaintenance = await load({ background: true });
       if (!operationIsCurrent(operation)) return;
       if (destructiveCompleted) {
+        preservePostDeleteErrorRef.current = refreshedMaintenance === null;
         setPostDeleteRefreshFailed(refreshedMaintenance === null);
         // The mutation already succeeded. Keep its authoritative result even if a read fails.
         if (navigationRef.current.runId === run.id) setSelectedArchive(updated);
@@ -1651,12 +1660,10 @@ export function UsageMaintenancePage() {
     actionError: runActionError || error,
   };
   const currentRunWorking = working && activeOperationRunIdRef.current === selectedRunId;
-  const currentArchive =
-    currentRunWorking && operationArchive?.run.id === selectedRunId
-      ? operationArchive
-      : selectedArchive?.run.id === selectedRunId
-        ? selectedArchive
-        : null;
+  const currentArchive = pickFreshestArchiveStatus(
+    selectedArchive?.run.id === selectedRunId ? selectedArchive : null,
+    operationArchive?.run.id === selectedRunId ? operationArchive : null
+  );
   const renderRun = () =>
     currentArchive && maintenance ? (
       <UsageArchiveRunView
@@ -1813,12 +1820,14 @@ export function UsageMaintenancePage() {
   };
 
   const activeBackgroundRun =
-    (operationArchive?.run && archiveProgressStatuses.has(operationArchive.run.status)
-      ? operationArchive.run
-      : null) ??
-    (maintenance?.active_run && archiveProgressStatuses.has(maintenance.active_run.status)
-      ? maintenance.active_run
-      : null);
+    pickFreshestArchiveStatus(
+      maintenance?.active_run && archiveProgressStatuses.has(maintenance.active_run.status)
+        ? { run: maintenance.active_run, segments: [] }
+        : null,
+      operationArchive?.run && archiveProgressStatuses.has(operationArchive.run.status)
+        ? operationArchive
+        : null
+    )?.run ?? null;
 
   const isDrawerShowingActiveRun =
     navigation.panel === 'run' && selectedRunId === activeBackgroundRun?.id;
@@ -1834,31 +1843,9 @@ export function UsageMaintenancePage() {
         maintenance?.active_run?.id === currentArchive.run.id))
   );
 
-  const activeRunIsDeleting =
-    activeBackgroundRun?.status === 'deleting' ||
-    activeBackgroundRun?.resume_status === 'deleting' ||
-    activeBackgroundRun?.status === 'completed';
-
-  const activeRunProgressPercent = activeBackgroundRun
-    ? activeRunIsDeleting
-      ? resolveProgressPercent(
-          activeBackgroundRun.deleted_event_count,
-          activeBackgroundRun.event_count
-        )
-      : activeBackgroundRun.status === 'archiving' ||
-          activeBackgroundRun.resume_status === 'archiving'
-        ? resolveProgressPercent(
-            activeBackgroundRun.archived_event_count,
-            activeBackgroundRun.event_count
-          )
-        : null
+  const activeRunProgress = activeBackgroundRun
+    ? resolveArchiveProgressPresentation(activeBackgroundRun)
     : null;
-
-  const activeRunProcessedCount = activeBackgroundRun
-    ? activeRunIsDeleting
-      ? activeBackgroundRun.deleted_event_count
-      : activeBackgroundRun.archived_event_count
-    : 0;
 
   return (
     <div className={styles.page} ref={pageRef}>
@@ -2311,19 +2298,19 @@ export function UsageMaintenancePage() {
           <span className={styles.floatingProgressDot} aria-hidden="true" />
           <div className={styles.floatingProgressContent}>
             <span className={styles.floatingProgressTitle}>
-              {t(`usage_maintenance.run_status_${activeBackgroundRun.status}`, {
-                defaultValue: activeBackgroundRun.status,
-              })}
+              {activeRunProgress
+                ? t(activeRunProgress.labelKey)
+                : t(`usage_maintenance.run_status_${activeBackgroundRun.status}`)}
             </span>
-            {activeRunProgressPercent !== null ? (
+            {activeRunProgress?.percent !== null && activeRunProgress?.percent !== undefined ? (
               <span className={styles.floatingProgressPercent}>
-                {activeRunProgressPercent.toFixed(1)}%
+                {activeRunProgress.percent.toFixed(1)}%
               </span>
             ) : null}
-            {activeBackgroundRun.event_count > 0 ? (
+            {activeRunProgress && activeRunProgress.total > 0 ? (
               <span className={styles.floatingProgressCount}>
-                ({activeRunProcessedCount.toLocaleString(i18n.language)} /{' '}
-                {activeBackgroundRun.event_count.toLocaleString(i18n.language)})
+                ({activeRunProgress.current.toLocaleString(i18n.language)} /{' '}
+                {activeRunProgress.total.toLocaleString(i18n.language)})
               </span>
             ) : null}
           </div>

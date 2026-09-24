@@ -607,12 +607,21 @@ export interface UsageArchivePreview {
 
 // Public archive DTO. Deliberately excludes archive paths, formats, digests,
 // schema metadata, and raw internal errors.
+export interface UsageArchiveProgress {
+  phase: string;
+  current: number;
+  total: number;
+  unit?: string;
+  updated_at_ms?: number;
+}
+
 export interface UsageArchiveRunSummary {
   id: string;
   mode: 'manual' | 'retention' | string;
   status: UsageArchiveRunStatus;
   resume_status?: UsageArchiveRunStatus;
   requested_stage?: UsageArchiveResumeStage;
+  progress?: UsageArchiveProgress;
   cutoff_timestamp_ms: number;
   target_event_id: number;
   event_count: number;

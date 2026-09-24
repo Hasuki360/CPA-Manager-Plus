@@ -1,6 +1,7 @@
 package usage
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -8,9 +9,48 @@ import (
 	"testing"
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/app"
+	sqliterepo "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/sqlite"
 	usagesvc "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/usage"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/testutil"
 )
+
+func TestGetArchiveDetailReturnsOnlySafePersistedProgress(t *testing.T) {
+	cfg := testutil.NewConfig(t)
+	st := testutil.NewStore(t, cfg)
+	db, err := sqliterepo.Open(cfg.DBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	runID := strings.Repeat("a", 32)
+	_, err = db.ExecContext(context.Background(), `insert into usage_archive_runs (
+		id, mode, schema_version, format, status, cutoff_timestamp_ms, target_event_id,
+		event_count, created_at_ms, updated_at_ms, progress_phase, progress_current,
+		progress_total, progress_unit, progress_updated_at_ms, manifest_file, manifest_sha256,
+		archive_digest, last_error
+	) values (?, 'manual', 1, 'gzip-jsonl-v1', 'failed', 100, 100, 100,
+		1, 2, 'archive_finalizing', 12, 14, 'segments', 3, 'secret-manifest', 'secret-sha',
+		'secret-digest', 'secret-error')`, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := &Handler{App: &app.Context{UsageService: usagesvc.New(st, usagesvc.WithArchive(usagesvc.ArchiveConfig{Directory: cfg.UsageArchiveDir}))}}
+	request := httptest.NewRequest(http.MethodGet, usageArchivesPath+"/"+runID, nil)
+	recorder := httptest.NewRecorder()
+	handler.handleArchive(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", recorder.Code, recorder.Body.String())
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, `"progress":{"phase":"archive_finalizing","current":12,"total":14,"unit":"segments","updated_at_ms":3}`) {
+		t.Fatalf("progress missing: %s", body)
+	}
+	for _, forbidden := range []string{"manifest_file", "manifest_sha256", "archive_digest", "file_name", "content_sha256", "event_hash_digest", "last_error", "secret-manifest", "secret-sha", "secret-digest", "secret-error"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("response leaked %s: %s", forbidden, body)
+		}
+	}
+}
 
 func TestImportReturnsBadRequestWhenUncommittedArrayParsingFails(t *testing.T) {
 	st := testutil.NewStore(t, testutil.NewConfig(t))

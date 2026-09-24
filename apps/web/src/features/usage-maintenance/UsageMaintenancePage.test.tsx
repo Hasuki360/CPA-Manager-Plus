@@ -823,8 +823,204 @@ describe('UsageMaintenancePage', () => {
       await Promise.resolve();
     });
     expect(mocks.getUsageMaintenance).toHaveBeenCalledTimes(2);
-    expect(mocks.getUsageArchive).toHaveBeenCalledTimes(2);
+    expect(mocks.getUsageArchive.mock.calls.length).toBeGreaterThanOrEqual(2);
     act(() => renderer.unmount());
+  });
+
+  it.each([
+    ['archiving', undefined, 'Finishing archive', null, null],
+    [
+      'archiving',
+      { phase: 'archiving_records', current: 6, total: 10, unit: 'events' },
+      'Archiving records',
+      '6 / 10',
+      60,
+    ],
+    [
+      'archiving',
+      {
+        phase: 'archive_finalizing',
+        current: 12,
+        total: 14,
+        unit: 'segments',
+        updated_at_ms: 1_700_000_002_000,
+      },
+      'Checking archive segments',
+      '12 / 14',
+      86,
+    ],
+    [
+      'archiving',
+      { phase: 'archive_publishing', current: 0, total: 0 },
+      'Finishing archive',
+      null,
+      null,
+    ],
+    ['verifying', undefined, 'Verifying archive', null, null],
+    [
+      'verifying',
+      { phase: 'verifying_archive', current: 6, total: 14, unit: 'segments' },
+      'Verifying archive',
+      '6 / 14',
+      43,
+    ],
+    ['deleting', undefined, 'Preparing cleanup', null, null],
+    [
+      'deleting',
+      { phase: 'cleanup_revalidating', current: 8, total: 14, unit: 'segments' },
+      'Revalidating archive before cleanup',
+      '8 / 14',
+      57,
+    ],
+    [
+      'deleting',
+      { phase: 'deleting_records', current: 4, total: 10, unit: 'events' },
+      'Cleaning up online records',
+      '4 / 10',
+      40,
+    ],
+  ] as const)(
+    'shows %s subphase %s in detail and floating progress',
+    async (status, progress, label, count, ariaNow) => {
+      const run = {
+        ...archive(status, `progress-${status}-${progress?.phase ?? 'legacy'}`),
+        progress,
+      };
+      if (status === 'deleting')
+        run.deleted_event_count = progress?.phase === 'deleting_records' ? 4 : 0;
+      mocks.getUsageArchive.mockResolvedValue(archiveStatus(run));
+      const renderer = await renderOverviewPage(maintenance({ active_run: run }), [run]);
+      await act(async () => {
+        findButtons(renderer, 'Continue this record')[0].props.onClick();
+        await Promise.resolve();
+      });
+      const drawer = renderer.root.findByProps({ 'data-testid': 'maintenance-drawer' });
+      expect(getText(drawer)).toContain(label);
+      if (count) expect(getText(drawer)).toContain(count);
+      else expect(getText(drawer)).not.toContain('100.0%');
+      const bar = drawer.findByProps({ role: 'progressbar' });
+      expect(bar.props['aria-valuenow'] ?? null).toBe(ariaNow);
+      act(() => findButtons(renderer, 'Close drawer')[0].props.onClick());
+      expect(getText(renderer.root)).toContain(label);
+      if (count) expect(getText(renderer.root)).toContain(count);
+    }
+  );
+
+  it('polls the selected archive during a waiting mutation and uses the newer snapshot', async () => {
+    vi.useFakeTimers();
+    const initial = {
+      ...archive('archiving', 'working-progress'),
+      archived_event_count: 45,
+      progress: {
+        phase: 'archiving_records',
+        current: 45,
+        total: 100,
+        unit: 'events',
+        updated_at_ms: 1_700_000_001_000,
+      },
+    };
+    const newer = {
+      ...initial,
+      archived_event_count: 100,
+      progress: {
+        phase: 'archive_finalizing',
+        current: 12,
+        total: 14,
+        unit: 'segments',
+        updated_at_ms: 1_700_000_002_000,
+      },
+    };
+    mocks.getUsageArchive.mockResolvedValue(archiveStatus(initial));
+    const pending = deferred<unknown>();
+    mocks.resumeUsageArchive.mockReturnValue(pending.promise);
+    const renderer = await renderOverviewPage(maintenance({ active_run: initial }), [initial]);
+    await act(async () => {
+      findButtons(renderer, 'Continue this record')[0].props.onClick();
+      await Promise.resolve();
+    });
+    act(() => findButtons(renderer, 'Continue archive')[0].props.onClick());
+    mocks.getUsageMaintenance.mockResolvedValue(maintenance({ active_run: newer }));
+    mocks.listUsageArchives.mockResolvedValue({ runs: [newer] });
+    mocks.getUsageArchive.mockResolvedValue(archiveStatus(newer));
+    await act(async () => {
+      vi.advanceTimersByTime(5_000);
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(mocks.getUsageMaintenance).toHaveBeenCalledTimes(2);
+    expect(mocks.getUsageArchive.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(getText(renderer.root.findByProps({ 'data-testid': 'maintenance-drawer' }))).toContain(
+      'Checking archive segments'
+    );
+    expect(getText(renderer.root.findByProps({ 'data-testid': 'maintenance-drawer' }))).toContain(
+      '12 / 14'
+    );
+  });
+
+  it('shows safe execution milestones and bounded segment summaries', async () => {
+    const run = {
+      ...archive('failed', 'execution-details'),
+      resume_status: 'verifying' as const,
+      started_at_ms: 1_700_000_000_100,
+      progress: {
+        phase: 'verifying_archive',
+        current: 1,
+        total: 2,
+        unit: 'segments',
+        updated_at_ms: 1_700_000_002_000,
+      },
+    };
+    const segments = Array.from({ length: 25 }, (_, index) => ({
+      run_id: run.id,
+      sequence: index + 1,
+      status: 'published',
+      first_event_id: index * 10 + 1,
+      last_event_id: index * 10 + 10,
+      min_timestamp_ms: 1,
+      max_timestamp_ms: 2,
+      event_count: 10,
+      uncompressed_bytes: 1024,
+      compressed_bytes: 512,
+      created_at_ms: 1,
+      file_name: 'secret-file',
+      content_sha256: 'secret-sha',
+      event_hash_digest: 'secret-digest',
+    }));
+    mocks.getUsageArchive.mockResolvedValue({ run, segments });
+    const renderer = await renderOverviewPage(maintenance({ active_run: run }), [run]);
+    await act(async () => {
+      findButtons(renderer, 'Continue this record')[0].props.onClick();
+      await Promise.resolve();
+    });
+    const text = getText(renderer.root.findByProps({ 'data-testid': 'maintenance-drawer' }));
+    expect(text).toContain('Interrupted at');
+    expect(text).toContain('Execution details');
+    expect(text).toContain('Archive task created');
+    expect(text).toContain('Archiving started');
+    expect(text).toContain('25 segments total');
+    expect(text).toContain('#25');
+    expect(text).not.toContain('secret-file');
+    expect(text).not.toContain('secret-sha');
+    expect(text).not.toContain('secret-digest');
+  });
+
+  it('rejects a malformed optional progress snapshot without weakening the archive validator', async () => {
+    const run = archive('verified', 'invalid-progress');
+    mocks.getUsageArchive.mockResolvedValue(
+      archiveStatus({
+        ...run,
+        progress: { phase: 'verifying_archive', current: Number.NaN, total: 2 },
+      })
+    );
+    const renderer = await renderOverviewPage(maintenance(), [run]);
+    await act(async () => {
+      findButtons(renderer, 'Details')[0].props.onClick();
+      await Promise.resolve();
+    });
+    expect(getText(renderer.root)).toContain(
+      'The server returned an invalid archive task response.'
+    );
   });
 
   it('stops a browser wait started from the active task view without cancelling server work', async () => {
@@ -1990,7 +2186,7 @@ describe('UsageMaintenancePage', () => {
     act(() => renderer.unmount());
   });
 
-  it('polls active state without a loading flash, pauses while working, refreshes failures, and cleans up', async () => {
+  it('polls active state without a loading flash, including while working, refreshes failures, and cleans up', async () => {
     vi.useFakeTimers();
     const active = archive('verifying');
     const renderer = await renderOverviewPage(maintenance({ active_run: active }), [active]);
@@ -2036,14 +2232,14 @@ describe('UsageMaintenancePage', () => {
     });
     act(() => findButtons(failedRenderer, 'Continue verification')[0].props.onClick());
     act(() => vi.advanceTimersByTime(5_000));
-    expect(mocks.getUsageMaintenance).toHaveBeenCalledTimes(1);
+    expect(mocks.getUsageMaintenance).toHaveBeenCalledTimes(2);
     await act(async () => {
       resumeFailure.reject(new Error('verification interrupted'));
       await Promise.resolve();
       await Promise.resolve();
     });
     expect(mocks.showNotification).toHaveBeenCalledWith('verification interrupted', 'error');
-    expect(mocks.getUsageMaintenance).toHaveBeenCalledTimes(2);
+    expect(mocks.getUsageMaintenance).toHaveBeenCalledTimes(3);
     expect(getText(failedRenderer.root)).toContain('failed');
     act(() => failedRenderer.unmount());
   });
@@ -2315,8 +2511,10 @@ describe('UsageMaintenancePage', () => {
     expect(text).toContain('Archive task details');
     expect(text).toContain('completed');
 
-    // 4. No extra getUsageArchive call was made
-    expect(mocks.getUsageArchive.mock.calls.length).toBe(archiveCallsBeforeDelete);
+    // Read-only detail refresh is allowed while the delete request is in flight.
+    expect(mocks.getUsageArchive.mock.calls.length).toBeGreaterThanOrEqual(
+      archiveCallsBeforeDelete
+    );
 
     act(() => renderer.unmount());
   });

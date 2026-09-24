@@ -1058,6 +1058,34 @@
   }
 }
 
+.progressIndeterminate i {
+  width: 35%;
+  animation: archiveProgressSlide 1.5s ease-in-out infinite alternate;
+}
+
+@keyframes archiveProgressSlide {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(185%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progressIndeterminate i {
+    animation: none;
+  }
+}
+
+.executionMilestones {
+  margin: 8px 0 12px;
+  padding-left: 20px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.8;
+}
+
 .technical {
   border-top: 1px solid var(--border-color);
   padding-top: 16px;
