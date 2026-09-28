@@ -8,6 +8,7 @@ import {
 } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/Button';
+import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import styles from './VisualConfigEditor.module.scss';
 import type {
@@ -20,6 +21,7 @@ import type {
   PayloadRule,
   PluginStoreAuthApplyTo,
   PluginStoreAuthRule,
+  ModelRetryRule,
   PluginStoreAuthType,
 } from '@/types/visualConfig';
 import { makeClientId } from '@/types/visualConfig';
@@ -260,14 +262,109 @@ const PLUGIN_STORE_AUTH_APPLY_TO_OPTIONS: Array<{
 const createPluginStoreAuthRule = (): PluginStoreAuthRule => ({
   id: makeClientId(),
   match: '',
-  applyTo: [],
-  type: 'bearer',
+  applyTo: ['registry', 'metadata', 'artifact'],
+  type: 'none',
   tokenEnv: '',
   usernameEnv: '',
   passwordEnv: '',
   headerName: '',
   headerValueEnv: '',
   allowInsecure: false,
+});
+
+const createModelRetryRule = (): ModelRetryRule => ({
+  id: makeClientId(),
+  model: '',
+  requestRetry: '3',
+  maxRetryInterval: '30',
+});
+
+export const ModelRetryEditor = memo(function ModelRetryEditor({
+  value,
+  disabled,
+  onChange,
+}: {
+  value: ModelRetryRule[];
+  disabled?: boolean;
+  onChange: (next: ModelRetryRule[]) => void;
+}) {
+  const { t } = useTranslation();
+
+  const updateRule = (id: string, patch: Partial<ModelRetryRule>) => {
+    onChange(value.map((rule) => (rule.id === id ? { ...rule, ...patch } : rule)));
+  };
+  const addRule = () => onChange([...value, createModelRetryRule()]);
+  const removeRule = (id: string) => onChange(value.filter((rule) => rule.id !== id));
+
+  return (
+    <div className={styles.storeAuthEditor}>
+      {value.length === 0 ? (
+        <div className={styles.storeAuthEmpty}>
+          <div className={styles.storeAuthEmptyCopy}>
+            <strong>🎯 模型专属重试规则</strong>
+            <span>针对指定模型（如 gpt-6-astra）设置专属的重试次数与退避间隔，防止 429 限流失败。</span>
+          </div>
+          <Button variant="secondary" size="xs" onClick={addRule} disabled={disabled}>
+            + 添加专属模型
+          </Button>
+        </div>
+      ) : null}
+      {value.map((rule) => (
+        <div key={rule.id} className={styles.storeAuthRule}>
+          <div className={styles.storeAuthRuleHeader}>
+            <strong>{rule.model || '未命名模型规则'}</strong>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <Button
+                variant="ghost"
+                size="xs"
+                onClick={() => removeRule(rule.id)}
+                disabled={disabled}
+              >
+                {t('config_management.visual.common.delete')}
+              </Button>
+            </div>
+          </div>
+
+          <div className={styles.storeAuthGrid}>
+            <label className={styles.storeAuthField}>
+              <span>匹配模型名称（支持通配符 *）</span>
+              <ExpandableInput
+                value={rule.model}
+                placeholder="例如 gpt-6-astra 或 claude-*"
+                disabled={disabled}
+                onChange={(model) => updateRule(rule.id, { model })}
+              />
+            </label>
+            <label className={styles.storeAuthField}>
+              <span>重试次数 (request-retry)</span>
+              <Input
+                type="number"
+                value={rule.requestRetry}
+                placeholder="3"
+                disabled={disabled}
+                onChange={(e) => updateRule(rule.id, { requestRetry: e.target.value })}
+              />
+            </label>
+            <label className={styles.storeAuthField}>
+              <span>最大退避间隔 (秒) (max-retry-interval)</span>
+              <Input
+                type="number"
+                value={rule.maxRetryInterval}
+                placeholder="30 (留空跟随全局)"
+                disabled={disabled}
+                onChange={(e) => updateRule(rule.id, { maxRetryInterval: e.target.value })}
+              />
+            </label>
+          </div>
+        </div>
+      ))}
+      {value.length > 0 ? (
+        <Button variant="secondary" size="xs" onClick={addRule} disabled={disabled} style={{ alignSelf: 'flex-start' }}>
+          + 添加更多模型规则
+        </Button>
+      ) : null}
+    </div>
+  );
 });
 
 export const PluginStoreAuthEditor = memo(function PluginStoreAuthEditor({

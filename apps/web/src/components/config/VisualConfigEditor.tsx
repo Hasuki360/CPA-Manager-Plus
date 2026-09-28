@@ -42,6 +42,7 @@ import {
   ApiKeysCardEditor,
   PayloadFilterRulesEditor,
   PayloadRulesEditor,
+  ModelRetryEditor,
   PluginStoreAuthEditor,
   StringListEditor,
 } from './VisualConfigEditorBlocks';
@@ -1050,6 +1051,18 @@ export function VisualConfigEditor({
                   )}
                   error={transientErrorCooldownError}
                 />
+                <div className={styles.fieldWide}>
+                  <FieldShell
+                    label="🎯 模型专属重试 (Model Retry Rules)"
+                    hint="针对特定模型（例如 gpt-6-astra 或通配符）单独配置重试次数与等待秒数，防止 429 报错过早退出"
+                  >
+                    <ModelRetryEditor
+                      value={values.modelRetryRules}
+                      disabled={disabled}
+                      onChange={(modelRetryRules) => onChange({ modelRetryRules })}
+                    />
+                  </FieldShell>
+                </div>
                 <FieldShell
                   label={t('config_management.visual.sections.network.disable_image_generation')}
                   labelId={disableImageGenerationLabelId}

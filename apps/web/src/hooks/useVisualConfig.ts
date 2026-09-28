@@ -2,6 +2,7 @@ import { useCallback, useMemo, useReducer } from 'react';
 import { isMap, parse as parseYaml, parseDocument } from 'yaml';
 import type {
   DisableImageGenerationMode,
+  ModelRetryRule,
   PluginStoreAuthApplyTo,
   PluginStoreAuthRule,
   PluginStoreAuthType,
@@ -268,6 +269,94 @@ function areStringArraysEqual(left: string[] | undefined, right: string[] | unde
   return leftItems.every((item, index) => item === rightItems[index]);
 }
 
+function parseModelRetryRules(raw: unknown): ModelRetryRule[] {
+  if (Array.isArray(raw)) {
+    return raw
+      .map((item, index): ModelRetryRule | null => {
+        const record = asRecord(item);
+        if (!record) return null;
+        const model = typeof record.model === 'string' ? record.model.trim() : '';
+        if (!model) return null;
+        const retry =
+          typeof record['request-retry'] === 'number' || typeof record['request-retry'] === 'string'
+            ? String(record['request-retry'])
+            : '3';
+        const interval =
+          typeof record['max-retry-interval'] === 'number' || typeof record['max-retry-interval'] === 'string'
+            ? String(record['max-retry-interval'])
+            : '';
+        return {
+          id: `model-retry-${index}`,
+          model,
+          requestRetry: retry,
+          maxRetryInterval: interval,
+        };
+      })
+      .filter((rule): rule is ModelRetryRule => Boolean(rule));
+  }
+  const record = asRecord(raw);
+  if (record) {
+    return Object.entries(record)
+      .map(([model, val], index): ModelRetryRule | null => {
+        const m = model.trim();
+        if (!m) return null;
+        if (typeof val === 'number' || typeof val === 'string') {
+          return {
+            id: `model-retry-${index}`,
+            model: m,
+            requestRetry: String(val),
+            maxRetryInterval: '',
+          };
+        }
+        const ruleObj = asRecord(val);
+        if (!ruleObj) return null;
+        return {
+          id: `model-retry-${index}`,
+          model: typeof ruleObj.model === 'string' && ruleObj.model.trim() ? ruleObj.model.trim() : m,
+          requestRetry: String(ruleObj['request-retry'] ?? '3'),
+          maxRetryInterval: ruleObj['max-retry-interval'] ? String(ruleObj['max-retry-interval']) : '',
+        };
+      })
+      .filter((rule): rule is ModelRetryRule => Boolean(rule));
+  }
+  return [];
+}
+
+function serializeModelRetryForYaml(rules: ModelRetryRule[]): Array<Record<string, unknown>> {
+  return rules
+    .map((rule) => {
+      const model = rule.model.trim();
+      if (!model) return null;
+      const item: Record<string, unknown> = {
+        model,
+        'request-retry': Number(rule.requestRetry) || 0,
+      };
+      if (rule.maxRetryInterval.trim() !== '') {
+        item['max-retry-interval'] = Number(rule.maxRetryInterval) || 0;
+      }
+      return item;
+    })
+    .filter((rule): rule is Record<string, unknown> => Boolean(rule));
+}
+
+function areModelRetryRulesEqual(
+  left: ModelRetryRule[] | undefined,
+  right: ModelRetryRule[] | undefined
+): boolean {
+  const leftItems = left ?? [];
+  const rightItems = right ?? [];
+  if (leftItems.length !== rightItems.length) return false;
+  return leftItems.every((a, index) => {
+    const b = rightItems[index];
+    return (
+      Boolean(b) &&
+      a.model === b.model &&
+      a.requestRetry === b.requestRetry &&
+      a.maxRetryInterval === b.maxRetryInterval
+    );
+  });
+}
+
 function arePluginStoreAuthRulesEqual(
   left: PluginStoreAuthRule[] | undefined,
   right: PluginStoreAuthRule[] | undefined
@@ -471,6 +560,13 @@ function getNextDirtyFields(
     updateDirty(
       'pluginStoreAuth',
       arePluginStoreAuthRulesEqual(nextValues.pluginStoreAuth, baselineValues.pluginStoreAuth)
+    );
+  }
+
+  if (Object.prototype.hasOwnProperty.call(patch, 'modelRetryRules')) {
+    updateDirty(
+      'modelRetryRules',
+      areModelRetryRulesEqual(nextValues.modelRetryRules, baselineValues.modelRetryRules)
     );
   }
 
@@ -815,6 +911,7 @@ export function useVisualConfig() {
         disableCooling: Boolean(parsed['disable-cooling']),
         saveCooldownStatus: Boolean(parsed['save-cooldown-status']),
         transientErrorCooldownSeconds: String(parsed['transient-error-cooldown-seconds'] ?? ''),
+        modelRetryRules: parseModelRetryRules(parsed['model-retry'] ?? parsed.modelRetry),
         disableClaudeCloakMode: Boolean(parsed['disable-claude-cloak-mode']),
         disableImageGeneration: parseDisableImageGenerationMode(parsed['disable-image-generation']),
         gptImage2BaseModel:
@@ -1093,6 +1190,14 @@ export function useVisualConfig() {
             ['transient-error-cooldown-seconds'],
             values.transientErrorCooldownSeconds
           );
+        }
+        if (isDirty('modelRetryRules')) {
+          const modelRetryYaml = serializeModelRetryForYaml(values.modelRetryRules);
+          if (modelRetryYaml.length > 0) {
+            doc.setIn(['model-retry'], modelRetryYaml);
+          } else if (docHas(doc, ['model-retry'])) {
+            doc.deleteIn(['model-retry']);
+          }
         }
         if (isDirty('disableClaudeCloakMode')) {
           setBooleanInDoc(doc, ['disable-claude-cloak-mode'], values.disableClaudeCloakMode);

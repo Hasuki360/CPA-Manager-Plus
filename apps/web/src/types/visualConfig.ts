@@ -88,6 +88,13 @@ export type PluginStoreAuthRule = {
   allowInsecure: boolean;
 };
 
+export type ModelRetryRule = {
+  id: string;
+  model: string;
+  requestRetry: string;
+  maxRetryInterval: string;
+};
+
 export type VisualConfigValues = {
   host: string;
   port: string;
@@ -126,6 +133,7 @@ export type VisualConfigValues = {
   disableCooling: boolean;
   saveCooldownStatus: boolean;
   transientErrorCooldownSeconds: string;
+  modelRetryRules: ModelRetryRule[];
   disableClaudeCloakMode: boolean;
   disableImageGeneration: DisableImageGenerationMode;
   gptImage2BaseModel: string;
@@ -202,6 +210,7 @@ export const DEFAULT_VISUAL_VALUES: VisualConfigValues = {
   disableCooling: false,
   saveCooldownStatus: false,
   transientErrorCooldownSeconds: '',
+  modelRetryRules: [],
   disableClaudeCloakMode: false,
   disableImageGeneration: 'false',
   gptImage2BaseModel: '',
