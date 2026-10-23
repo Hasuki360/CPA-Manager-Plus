@@ -68,6 +68,13 @@ describe('source resolver', () => {
     expect(resolved.type).toBe('');
     expect(resolved.identityKey).toBe('shared:m:sk-s...cdef');
     expect(resolved.displayName).not.toContain('sk-shared');
+
+    const codex = resolveSourceDisplay('m:sk-s...cdef', '', sourceInfoMap, new Map(), 'codex');
+    const claude = resolveSourceDisplay('m:sk-s...cdef', '', sourceInfoMap, new Map(), 'claude');
+    expect(codex.identityKey).toBe('codex:0');
+    expect(codex.type).toBe('codex');
+    expect(claude.identityKey).toBe('claude:0');
+    expect(claude.type).toBe('claude');
   });
 
   it('distinguishes multiple keys from the same base URL without exposing raw keys', () => {

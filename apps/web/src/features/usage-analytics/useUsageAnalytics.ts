@@ -36,6 +36,7 @@ import {
   buildUsageAnalyticsInclude,
   buildUsageTimeline,
   getSelectableApiKeyHash,
+  getUsagePresentationRangeScopeKey,
   getUsageRangeBounds,
   resolveUsageGranularity,
   USAGE_ANALYTICS_DEFAULT_FILTERS,
@@ -214,6 +215,7 @@ export function useUsageAnalytics() {
   );
 
   const bounds = useMemo(() => getUsageRangeBounds(filters, nowMs), [filters, nowMs]);
+  const presentationRangeScopeKey = getUsagePresentationRangeScopeKey(filters, bounds);
   const heatmapRangeContext = useMemo(
     () => buildUsageHeatmapRangeContext(bounds, 'en-US', browserTimeZone),
     [bounds, browserTimeZone]
@@ -263,7 +265,7 @@ export function useUsageAnalytics() {
     () =>
       JSON.stringify({
         activeTab: activeTabState,
-        bounds,
+        presentationRangeScopeKey,
         drilldownPreview,
         filters: analyticsFilters,
         granularity: resolvedGranularity,
@@ -272,7 +274,7 @@ export function useUsageAnalytics() {
     [
       activeTabState,
       analyticsFilters,
-      bounds,
+      presentationRangeScopeKey,
       debouncedSearchQuery,
       drilldownPreview,
       resolvedGranularity,
@@ -294,10 +296,10 @@ export function useUsageAnalytics() {
   const filterSelectorsDataScopeKey = useMemo(
     () =>
       JSON.stringify({
-        bounds,
+        presentationRangeScopeKey,
         searchQuery: debouncedSearchQuery,
       }),
-    [bounds, debouncedSearchQuery]
+    [presentationRangeScopeKey, debouncedSearchQuery]
   );
   const filterSelectorsAnalytics = useMonitoringAnalytics({
     fromMs: bounds?.fromMs,
@@ -395,7 +397,7 @@ export function useUsageAnalytics() {
       JSON.stringify({
         activeTab: activeTabState,
         apiKeyHashes: apiKeyTrendHashes,
-        bounds,
+        presentationRangeScopeKey,
         filters: apiKeyTrendFilters,
         granularity: resolvedGranularity,
         searchQuery: debouncedSearchQuery,
@@ -404,7 +406,7 @@ export function useUsageAnalytics() {
       activeTabState,
       apiKeyTrendFilters,
       apiKeyTrendHashes,
-      bounds,
+      presentationRangeScopeKey,
       debouncedSearchQuery,
       resolvedGranularity,
     ]
@@ -526,7 +528,7 @@ export function useUsageAnalytics() {
     () =>
       JSON.stringify({
         activeTab: activeTabState,
-        bounds,
+        presentationRangeScopeKey,
         filters: selectedApiKeyTimelineFilters,
         granularity: resolvedGranularity,
         searchQuery: debouncedSearchQuery,
@@ -534,7 +536,7 @@ export function useUsageAnalytics() {
       }),
     [
       activeTabState,
-      bounds,
+      presentationRangeScopeKey,
       debouncedSearchQuery,
       resolvedGranularity,
       selectedApiKeyFilterHash,
@@ -581,7 +583,7 @@ export function useUsageAnalytics() {
     () =>
       JSON.stringify({
         activeTab: activeTabState,
-        bounds,
+        presentationRangeScopeKey,
         filters: selectedCredentialTimelineFilters,
         granularity: resolvedGranularity,
         searchQuery: debouncedSearchQuery,
@@ -589,7 +591,7 @@ export function useUsageAnalytics() {
       }),
     [
       activeTabState,
-      bounds,
+      presentationRangeScopeKey,
       debouncedSearchQuery,
       resolvedGranularity,
       selectedCredentialFilterID,

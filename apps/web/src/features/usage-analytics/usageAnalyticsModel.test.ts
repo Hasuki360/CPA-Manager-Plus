@@ -34,6 +34,7 @@ import {
   computeRowAverageCostPerCall,
   computeRowCacheHitRate,
   getUsageCacheTokens,
+  getUsagePresentationRangeScopeKey,
   getUsageRangeBounds,
   maskApiKeyHash,
   resolveUsageGranularity,
@@ -81,6 +82,34 @@ describe('usage analytics request model', () => {
       ).toBe('/monitoring?from_ms=1000&to_ms=2000');
     }
   );
+
+  it('keeps rolling range presentation scope stable across refresh ticks', () => {
+    const later = NOW_MS + 60_000;
+    expect(
+      getUsagePresentationRangeScopeKey(
+        { timeRange: '24h' },
+        getUsageRangeBounds({ timeRange: '24h', customRange: null }, NOW_MS)
+      )
+    ).toBe(
+      getUsagePresentationRangeScopeKey(
+        { timeRange: '24h' },
+        getUsageRangeBounds({ timeRange: '24h', customRange: null }, later)
+      )
+    );
+    // Calendar-day ranges must still change scope once the day rolls over.
+    const nextDay = NOW_MS + 2 * DAY_MS;
+    expect(
+      getUsagePresentationRangeScopeKey(
+        { timeRange: 'today' },
+        getUsageRangeBounds({ timeRange: 'today', customRange: null }, NOW_MS)
+      )
+    ).not.toBe(
+      getUsagePresentationRangeScopeKey(
+        { timeRange: 'today' },
+        getUsageRangeBounds({ timeRange: 'today', customRange: null }, nextDay)
+      )
+    );
+  });
 
   it('resolves time ranges and default granularity rules', () => {
     expect(USAGE_ANALYTICS_DEFAULT_FILTERS.timeRange).toBe('24h');

@@ -199,7 +199,7 @@ describe('buildEventRows', () => {
     expect(row.searchText).toContain('premium');
   });
 
-  it('keeps shared provider display names available to realtime source cells', () => {
+  it('keeps shared display names while distinguishing known providers in realtime cells', () => {
     const sharedKey = 'sk-shared1234567890abcdef';
     const sourceInfoMap = buildSourceInfoMap({
       codexApiKeys: [
@@ -250,7 +250,7 @@ describe('buildEventRows', () => {
     const display = buildRealtimeSourceDisplay(row, t);
 
     expect(row.source).toBe('Shared Relay');
-    expect(row.sourceKey).toBe('shared:m:sk-s...cdef');
+    expect(row.sourceKey).toBe('codex:0');
     expect(row.provider).toBe('codex');
     expect(display.primary).toBe('Shared Relay');
   });
