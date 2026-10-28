@@ -287,12 +287,3 @@ func TestUpdateReturnsPersistedRecordWithoutRereading(t *testing.T) {
 		t.Fatalf("runtime cache should reflect persisted value after Update, got %#v", runtime)
 	}
 }
-
-func TestStatusExposesAntigravityReverseProxy(t *testing.T) {
-	loader := &stubSettingsStore{ok: false}
-	svc := &Service{cfg: config.Config{}, store: loader}
-	status := mustStatus(t, svc, context.Background())
-	if status.AntigravityReverseProxy.ConfigFileKey != "antigravity.reverse-proxy.enabled" {
-		t.Fatalf("expected ConfigFileKey = antigravity.reverse-proxy.enabled, got %q", status.AntigravityReverseProxy.ConfigFileKey)
-	}
-}

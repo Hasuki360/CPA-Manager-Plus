@@ -3,7 +3,6 @@ import type { AccountPolicyCapability, AccountProcessingPolicy } from '@/service
 export type AccountPolicyCapabilityKey =
   | 'providerQuotaCooldown'
   | 'antigravityQuotaCooldown'
-  | 'antigravityReverseProxy'
   | 'authIssueQueue'
   | 'authIssueAutoDisable'
   | 'charityModelMonitor';
@@ -46,7 +45,6 @@ export interface AccountPolicyViewGroup {
 const capabilityKeys: AccountPolicyCapabilityKey[] = [
   'providerQuotaCooldown',
   'antigravityQuotaCooldown',
-  'antigravityReverseProxy',
   'authIssueQueue',
   'authIssueAutoDisable',
   'charityModelMonitor',
@@ -56,14 +54,12 @@ const capabilitySourceKey: Record<
   AccountPolicyCapabilityKey,
   | 'codexQuotaCooldown'
   | 'antigravityQuotaCooldown'
-  | 'antigravityReverseProxy'
   | 'authIssueQueue'
   | 'authIssueAutoDisable'
   | 'charityModelMonitor'
 > = {
   providerQuotaCooldown: 'codexQuotaCooldown',
   antigravityQuotaCooldown: 'antigravityQuotaCooldown',
-  antigravityReverseProxy: 'antigravityReverseProxy',
   authIssueQueue: 'authIssueQueue',
   authIssueAutoDisable: 'authIssueAutoDisable',
   charityModelMonitor: 'charityModelMonitor',
@@ -90,14 +86,6 @@ const capabilityMetadata: Record<
     behaviorKey: 'accountPolicy.antigravityQuotaCooldown_behavior',
     summaryKey: 'accountPolicy.antigravityQuotaCooldown_summary',
     toggleLabelKey: 'accountPolicy.antigravityQuotaCooldown_toggle',
-    nested: false,
-  },
-  antigravityReverseProxy: {
-    titleKey: 'accountPolicy.antigravityReverseProxy_title',
-    descriptionKey: 'accountPolicy.antigravityReverseProxy_description',
-    behaviorKey: 'accountPolicy.antigravityReverseProxy_behavior',
-    summaryKey: 'accountPolicy.antigravityReverseProxy_summary',
-    toggleLabelKey: 'accountPolicy.antigravityReverseProxy_toggle',
     nested: false,
   },
   authIssueQueue: {
@@ -136,7 +124,7 @@ const groupDefinitions: Array<{
     key: 'quota',
     titleKey: 'accountPolicy.group_quota_title',
     descriptionKey: 'accountPolicy.group_quota_description',
-    itemKeys: ['providerQuotaCooldown', 'antigravityQuotaCooldown', 'antigravityReverseProxy'],
+    itemKeys: ['providerQuotaCooldown', 'antigravityQuotaCooldown'],
   },
   {
     key: 'authIssues',
